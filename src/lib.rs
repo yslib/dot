@@ -6,5 +6,6 @@ pub mod config;
 pub mod dry_run;
 pub mod interpolation;
 pub mod manifest;
+pub mod plan;
 pub mod platform;
 pub mod schema;

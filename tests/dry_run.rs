@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use dot::action::ExecutionEnvironment;
-use dot::dry_run::{DryRunError, DryRunPlanner};
+use dot::dry_run;
 use dot::interpolation::{DotPaths, XdgPaths};
 use dot::manifest::EffectiveManifest;
+use dot::plan::{ExecutionPlanner, PlanningError};
 use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
@@ -82,9 +83,9 @@ fn groups_provider_packages_and_resolves_each_batch_environment() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let plan = planner.plan(&manifest).expect("dry-run should plan");
+    let plan = planner.plan(&manifest).expect("execution should plan");
 
     assert_eq!(plan.providers().len(), 1);
     assert_eq!(plan.providers()[0].id(), "brew");
@@ -143,7 +144,7 @@ fn nonempty_provider_args_require_one_install_list_resolver() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
         .plan(&manifest)
@@ -183,9 +184,9 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let plan = planner.plan(&manifest).expect("dry-run should plan");
+    let plan = planner.plan(&manifest).expect("execution should plan");
 
     assert_eq!(plan.manual_packages().len(), 1);
     assert_eq!(plan.manual_packages()[0].id(), "manual-tool");
@@ -247,12 +248,10 @@ fn renders_a_resolved_human_readable_execution_plan() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let rendered = planner
-        .plan(&manifest)
-        .expect("dry-run should plan")
-        .to_string();
+    let plan = planner.plan(&manifest).expect("execution should plan");
+    let rendered = dry_run::display(&plan).to_string();
 
     assert!(rendered.contains("target: machine"));
     assert!(rendered.contains("profile: <root>"));
@@ -282,7 +281,7 @@ fn rejects_a_package_that_references_an_unknown_effective_provider() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
         .plan(&manifest)
@@ -290,7 +289,7 @@ fn rejects_a_package_that_references_an_unknown_effective_provider() {
 
     assert!(matches!(
         error,
-        DryRunError::UnknownProvider { package, provider }
+        PlanningError::UnknownProvider { package, provider }
             if package == "alpha" && provider == "missing"
     ));
 }
@@ -310,7 +309,7 @@ fn rejects_a_link_target_that_is_not_absolute_after_interpolation() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
-    let planner = DryRunPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
         .plan(&manifest)
@@ -318,7 +317,7 @@ fn rejects_a_link_target_that_is_not_absolute_after_interpolation() {
 
     assert!(matches!(
         error,
-        DryRunError::RelativeLinkTarget { link, target }
+        PlanningError::RelativeLinkTarget { link, target }
             if link == "invalid" && target == Path::new("relative/target")
     ));
 }

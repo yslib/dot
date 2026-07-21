@@ -4,9 +4,10 @@ use std::io::{self, Write};
 
 use super::Selection;
 use crate::config::{ConfigLoadError, LoadedConfig};
-use crate::dry_run::{DryRunError, DryRunPlanner};
+use crate::dry_run::display;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::manifest::{EffectiveManifest, ManifestError};
+use crate::plan::{ExecutionPlanner, PlanningError};
 use crate::platform::PlatformInfo;
 
 pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<(), CommandError> {
@@ -20,10 +21,10 @@ pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<(), 
     )?;
     let xdg_paths = XdgPaths::detect();
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
-    let planner = DryRunPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
+    let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
     let plan = planner.plan(&manifest)?;
 
-    writeln!(output, "{plan}")?;
+    writeln!(output, "{}", display(&plan))?;
     Ok(())
 }
 
@@ -31,7 +32,7 @@ pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<(), 
 pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
-    Planning(DryRunError),
+    Planning(PlanningError),
     Output(io::Error),
 }
 
@@ -69,8 +70,8 @@ impl From<ManifestError> for CommandError {
     }
 }
 
-impl From<DryRunError> for CommandError {
-    fn from(source: DryRunError) -> Self {
+impl From<PlanningError> for CommandError {
+    fn from(source: PlanningError) -> Self {
         Self::Planning(source)
     }
 }
