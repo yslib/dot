@@ -292,8 +292,8 @@ lazygit = { source = "home/.config/lazygit", target = "${env:HOME}/.config/lazyg
 platform = { os = "linux" }
 
 [targets.server-minimal.packages]
-ripgrep = { install = { check = { program = "${env:HOME}/.local/bin/rg", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-ripgrep-static.sh"], cwd = "${dot:config_dir}" } } }
-zoxide  = { install = { check = { program = "${env:HOME}/.local/bin/zoxide", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-zoxide-static.sh"], cwd = "${dot:config_dir}" } } }
+ripgrep = { install = { check = { program = "${xdg:executable}/rg", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-ripgrep-static.sh"], cwd = "${dot:config_dir}" } } }
+zoxide  = { install = { check = { program = "${xdg:executable}/zoxide", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-zoxide-static.sh"], cwd = "${dot:config_dir}" } } }
 
 [targets.server-minimal.links]
 vimrc      = { source = "home/.config/vim/vimrc", target = "${env:HOME}/.vimrc" }

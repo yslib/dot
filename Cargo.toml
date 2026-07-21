@@ -3,6 +3,9 @@ name = "dot"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+dev-platform-override = []
+
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 directories = "6.0"

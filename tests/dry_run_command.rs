@@ -76,3 +76,34 @@ fn dry_run_prints_the_resolved_plan_without_executing_or_inspecting() {
     assert!(stdout.contains("links:\n  missing:"), "{stdout}");
     assert!(!stdout.contains("Dispatch {"), "{stdout}");
 }
+
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn dry_run_selects_against_the_injected_platform() {
+    let manifest = TempManifest::write(
+        r#"
+            [targets.simulated]
+            platform = { os = "windows", arch = "x86_64" }
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args([
+            "--dry-run",
+            "--platform",
+            r#"{ os = "windows", arch = "x86_64" }"#,
+            "--config",
+        ])
+        .arg(manifest.path())
+        .output()
+        .expect("dot should start");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr:\n{stderr}",);
+    assert!(stdout.contains("target: simulated"), "{stdout}");
+    assert!(stdout.contains("platform: windows/x86_64"), "{stdout}");
+    assert!(stderr.contains("warning"), "{stderr}");
+    assert!(stderr.contains("XDG paths"), "{stderr}");
+    assert!(stderr.contains("host"), "{stderr}");
+}

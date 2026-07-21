@@ -33,12 +33,28 @@ struct Cli {
     #[arg(long)]
     dry_run: bool,
 
+    /// Inject PlatformInfo for development-time target selection only; commands, environment,
+    /// XDG paths, and filesystem state remain on the host
+    #[cfg(feature = "dev-platform-override")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "TOML",
+        value_parser = crate::platform::parse_override
+    )]
+    platform: Option<crate::platform::PlatformInfo>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 impl Cli {
     fn into_dispatch(self) -> Result<Dispatch, Error> {
+        #[cfg(feature = "dev-platform-override")]
+        let platform_override = self.platform;
+        #[cfg(not(feature = "dev-platform-override"))]
+        let platform_override = None;
+
         let operation = match self.command {
             None => Operation::Apply {
                 dry_run: self.dry_run,
@@ -57,6 +73,7 @@ impl Cli {
         Ok(Dispatch {
             selection: self.selection.into(),
             operation,
+            platform_override,
         })
     }
 }

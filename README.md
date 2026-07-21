@@ -61,6 +61,34 @@ unique within a target and cannot contain `/`.
 `--dry-run` belongs only to the implicit apply operation and cannot be combined
 with `check providers`. Version 1 defines no other check target.
 
+### Development platform override
+
+The development-only `dev-platform-override` Cargo feature adds a global
+`--platform <TOML>` option. Its value is a TOML inline table containing a
+complete synthetic platform. `os` and `arch` are required; `distro` and
+`distro_family` are optional, and `environment` defaults to `native`.
+
+```text
+cargo run --features dev-platform-override -- \
+  --dry-run \
+  --platform '{ os = "windows", arch = "x86_64" }'
+
+cargo run --features dev-platform-override -- \
+  check providers \
+  --platform '{ os = "linux", arch = "x86_64", distro = "ubuntu", distro_family = "debian" }'
+```
+
+Dry-run and `check providers` use the injected value for target compatibility.
+The real apply operation accepts but ignores it and always uses detected
+platform facts. The override does not emulate another operating system:
+provider probes, environment variables, and standard directories still belong
+to the host running dot. Every invocation that supplies `--platform` prints
+this boundary to stderr; apply prints a separate warning that the option is
+ignored.
+
+Without the feature, `--platform` is not part of the CLI and is rejected as an
+unknown option.
+
 Dry-run loads and merges the selected manifest, resolves its safe built-in
 interpolation, groups provider packages by provider and `provider_args`, and
 prints the resulting providers, install batches, manual packages, actions, and
@@ -68,6 +96,79 @@ links. Provider activation patches are applied only to in-memory child
 environments so their commands can be shown accurately. Dry-run never starts a
 process and never inspects or modifies package, action, or link state. Its
 human-readable output is explanatory and is not a stable serialized IR.
+
+## Built-in resolvers
+
+Interpolated strings use an OmegaConf-like surface:
+
+```text
+${resolver:payload}
+```
+
+The resolver set is closed and built into dot. TOML cannot define new
+resolvers. Version 1 has no resolver defaults, nested interpolation,
+expressions, configuration references, or automatic type conversion.
+
+The scalar resolvers produce one string and may occupy a complete value or be
+embedded in a larger string:
+
+| Resolver | Value |
+| --- | --- |
+| `${env:NAME}` | `NAME` from the current effective child-process environment |
+| `${dot:config}` | Absolute path of the loaded TOML file |
+| `${dot:config_dir}` | Directory containing the loaded TOML file |
+| `${dot:cwd}` | Directory from which dot was invoked |
+| `${xdg:home}` | Current user's home directory |
+| `${xdg:config}` | Standard configuration directory |
+| `${xdg:config_local}` | Local/non-roaming configuration directory |
+| `${xdg:data}` | Standard user data directory |
+| `${xdg:data_local}` | Local/non-roaming user data directory |
+| `${xdg:cache}` | Standard user cache directory |
+| `${xdg:state}` | Standard user state directory, when defined |
+| `${xdg:runtime}` | Standard runtime directory, when defined |
+| `${xdg:executable}` | User-writable executable directory, when defined |
+| `${xdg:documents}` | Current user's Documents directory, when available |
+
+For example:
+
+```toml
+target = "${xdg:config}/nvim"
+program = "${xdg:executable}/rg"
+cwd = "${dot:config_dir}"
+```
+
+An `xdg` path follows the host platform's standard directories. A path that is
+not defined on the host is an error; dot does not invent a fallback. Likewise,
+a missing environment variable is an error rather than an empty string.
+
+The two `package` resolvers produce string lists:
+
+| Resolver | Value |
+| --- | --- |
+| `${package:names}` | Complete package-name batch for one provider install |
+| `${package:provider_args}` | Shared `provider_args` list for that batch |
+
+List resolvers are available only in a provider's `install.args`. Each must
+occupy one complete argument so dot can expand it into zero or more argv
+elements:
+
+```toml
+install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
+```
+
+Resolver availability is intentionally narrow:
+
+- links, global actions, manual-package actions, and provider `activate`,
+  `probe`, and `ensure` may use `env`, `dot`, and `xdg`;
+- provider `install` may additionally use `package:names` and
+  `package:provider_args`;
+- package `provider_args` values are literal and cannot contain resolvers.
+
+To write a literal `${` sequence, escape it as `\${`. In TOML, a literal
+single-quoted string can write this directly as `'\${literal}'`; a basic
+double-quoted string writes it as `"\\${literal}"`. Resolved values are passed
+as data and are never reinterpreted as shell syntax. Shell behavior must still
+be requested explicitly through `bash`, `pwsh`, or another interpreter.
 
 ## Goal
 

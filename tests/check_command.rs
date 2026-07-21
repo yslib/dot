@@ -100,6 +100,40 @@ fn check_providers_reports_an_empty_manifest_as_ready() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "No providers.\n");
 }
 
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn check_providers_selects_against_the_injected_platform() {
+    let manifest = TempManifest::write(
+        r#"
+            [targets.simulated]
+            platform = { os = "windows", arch = "x86_64" }
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args([
+            "check",
+            "providers",
+            "--platform",
+            r#"{ os = "windows", arch = "x86_64" }"#,
+            "--config",
+        ])
+        .arg(manifest.path())
+        .output()
+        .expect("dot should start");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "No providers.\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning"), "{stderr}");
+    assert!(stderr.contains("XDG paths"), "{stderr}");
+    assert!(stderr.contains("host"), "{stderr}");
+}
+
 #[test]
 fn helper_process() {
     let Ok(mode) = env::var("DOT_CHECK_COMMAND_HELPER") else {

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::platform::PlatformInfo;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
     pub config: PathBuf,
@@ -17,4 +19,5 @@ pub enum Operation {
 pub struct Dispatch {
     pub selection: Selection,
     pub operation: Operation,
+    pub platform_override: Option<PlatformInfo>,
 }

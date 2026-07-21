@@ -9,9 +9,15 @@ use crate::interpolation::{DotPaths, XdgPaths};
 use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::platform::PlatformInfo;
 
-pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<bool, CommandError> {
+pub(super) fn run(
+    selection: &Selection,
+    platform_override: Option<&PlatformInfo>,
+    output: &mut impl Write,
+) -> Result<bool, CommandError> {
     let loaded = LoadedConfig::load(&selection.config)?;
-    let platform = PlatformInfo::detect();
+    let platform = platform_override
+        .cloned()
+        .unwrap_or_else(PlatformInfo::detect);
     let manifest = EffectiveManifest::select(
         loaded.config(),
         &platform,

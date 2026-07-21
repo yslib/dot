@@ -3,6 +3,9 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+#[cfg(feature = "dev-platform-override")]
+use serde::Deserialize;
+
 use crate::schema::{Identifier, OneOrMany, PlatformConstraint};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +34,59 @@ impl PlatformInfo {
             distro: distribution.id,
             distro_families: distribution.id_like,
             environments: classify_environments(is_wsl, is_container),
+        }
+    }
+}
+
+#[cfg(feature = "dev-platform-override")]
+pub fn parse_override(input: &str) -> Result<PlatformInfo, String> {
+    let document = format!("platform = {input}");
+    let parsed: InjectedPlatformDocument = toml::from_str(&document)
+        .map_err(|error| format!("invalid platform inline table: {error}"))?;
+    Ok(parsed.platform.into())
+}
+
+#[cfg(feature = "dev-platform-override")]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InjectedPlatformDocument {
+    platform: InjectedPlatform,
+}
+
+#[cfg(feature = "dev-platform-override")]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InjectedPlatform {
+    os: Identifier,
+    arch: Identifier,
+    distro: Option<Identifier>,
+    distro_family: Option<OneOrMany<Identifier>>,
+    environment: Option<OneOrMany<Identifier>>,
+}
+
+#[cfg(feature = "dev-platform-override")]
+impl From<InjectedPlatform> for PlatformInfo {
+    fn from(injected: InjectedPlatform) -> Self {
+        Self {
+            os: injected.os.to_string(),
+            arch: injected.arch.to_string(),
+            distro: injected.distro.map(|value| value.to_string()),
+            distro_families: identifiers(injected.distro_family),
+            environments: injected.environment.map_or_else(
+                || BTreeSet::from(["native".to_owned()]),
+                |values| identifiers(Some(values)),
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "dev-platform-override")]
+fn identifiers(values: Option<OneOrMany<Identifier>>) -> BTreeSet<String> {
+    match values {
+        None => BTreeSet::new(),
+        Some(OneOrMany::One(value)) => BTreeSet::from([value.to_string()]),
+        Some(OneOrMany::Many(values)) => {
+            values.into_iter().map(|value| value.to_string()).collect()
         }
     }
 }
