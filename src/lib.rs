@@ -10,4 +10,5 @@ pub mod link;
 pub mod manifest;
 pub mod plan;
 pub mod platform;
+pub mod provider;
 pub mod schema;
