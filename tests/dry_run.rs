@@ -293,8 +293,14 @@ fn renders_a_resolved_human_readable_execution_plan() {
     assert!(rendered.contains("actions:\n  configure"));
     assert!(rendered.contains("links:\n  gitconfig:"));
     let link = &plan.links()[0];
-    assert!(rendered.contains(&link.source().display().to_string()));
-    assert!(rendered.contains(&link.target().display().to_string()));
+    assert!(
+        rendered.contains(&format!("{:?}", link.source().display().to_string())),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("{:?}", link.target().display().to_string())),
+        "{rendered}"
+    );
 }
 
 #[test]
