@@ -8,6 +8,51 @@ target and profile, and coordinate the external tools needed to establish that
 environment. It exists to replace a collection of platform-specific bootstrap
 scripts with one understandable workflow.
 
+## Usage (draft)
+
+The command-line interface is currently a development facade. The binary
+parses and normalizes these arguments into a dispatch value, then prints it;
+configuration loading and execution are not implemented yet.
+
+```text
+dot [OPTIONS]
+dot [OPTIONS] check providers
+```
+
+With no subcommand, `dot` selects the implicit apply operation:
+
+```text
+dot
+dot --target arch-personal
+dot --target arch-personal --profile laptop
+dot --target arch-personal --profile laptop --dry-run
+```
+
+Provider readiness is an explicit nested check:
+
+```text
+dot check providers
+dot check providers --target arch-personal --profile laptop
+```
+
+Selection options are global and may appear before or after the subcommands:
+
+```text
+-c, --config <PATH>      TOML manifest; defaults to ./dot.toml
+-t, --target <TARGET>    optional when the manifest has exactly one target
+-p, --profile <PROFILE>  one globally unique profile name within the target
+    --dry-run             render the implicit apply plan without executing it
+-h, --help
+-V, --version
+```
+
+`--profile` names one node directly, not a path. The selected node inherits its
+unique ancestor chain from the inline profile tree. Profile names must be
+unique within a target and cannot contain `/`.
+
+`--dry-run` belongs only to the implicit apply operation and cannot be combined
+with `check providers`. Version 1 defines no other check target.
+
 ## Goal
 
 `dot` should make a personal development environment easy to reproduce without
