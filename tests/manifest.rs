@@ -171,9 +171,12 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
     let Package::Provider(replaced) = &manifest.packages()["replace-me"] else {
         panic!("replacement should remain a provider package");
     };
-    assert_eq!(replaced.provider, "desktop");
-    assert_eq!(manifest.links()["shared"].source, "desktop-source");
-    assert_eq!(manifest.actions()["configure"].exec.program, "desktop-exec");
+    assert_eq!(replaced.provider.as_str(), "desktop");
+    assert_eq!(manifest.links()["shared"].source.as_str(), "desktop-source");
+    assert_eq!(
+        manifest.actions()["configure"].exec.program.as_str(),
+        "desktop-exec"
+    );
     assert!(
         manifest.actions()["configure"].check.is_none(),
         "a child action replaces the complete root action"
@@ -191,7 +194,7 @@ fn selecting_no_profile_uses_only_the_target_root() {
     assert!(manifest.packages().contains_key("base"));
     assert!(!manifest.packages().contains_key("desktop"));
     assert!(!manifest.packages().contains_key("laptop"));
-    assert_eq!(manifest.links()["shared"].source, "root-source");
+    assert_eq!(manifest.links()["shared"].source.as_str(), "root-source");
     assert!(manifest.actions()["configure"].check.is_some());
 }
 

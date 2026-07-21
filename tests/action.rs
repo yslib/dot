@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use dot::action::{ExecutionEnvironment, ExecutionError, IoMode, PreparedCommand, ProcessExecutor};
-use dot::schema::{EnvironmentPatch, ExecAction, OneOrMany};
+use dot::schema::{EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, ScalarTemplate};
 
 fn patch(
-    prepend: Option<OneOrMany<String>>,
-    append: Option<OneOrMany<String>>,
+    prepend: Option<OneOrMany<ScalarTemplate>>,
+    append: Option<OneOrMany<ScalarTemplate>>,
     variables: &[(&str, &str)],
 ) -> EnvironmentPatch {
     EnvironmentPatch {
@@ -18,7 +18,12 @@ fn patch(
         path_append: append,
         variables: variables
             .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .map(|(name, value)| {
+                (
+                    EnvironmentName::new(*name).expect("test environment name should be valid"),
+                    ScalarTemplate::from(*value),
+                )
+            })
             .collect::<BTreeMap<_, _>>(),
     }
 }
@@ -30,13 +35,14 @@ fn helper_action(mode: &str, cwd: Option<&Path>) -> ExecAction {
             .expect("test executable should have a path")
             .into_os_string()
             .into_string()
-            .expect("test executable path should be Unicode"),
+            .expect("test executable path should be Unicode")
+            .into(),
         args: vec![
             "--exact".into(),
             "helper_process".into(),
             "--nocapture".into(),
         ],
-        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned().into()),
         env: Some(patch(None, None, &[("DOT_ACTION_TEST_HELPER", mode)])),
     }
 }
@@ -165,7 +171,10 @@ fn capture_uses_the_prepared_environment_and_working_directory() {
         .as_mut()
         .expect("helper has an environment patch")
         .variables
-        .insert("DOT_CONTEXT_VALUE".into(), "from-command".into());
+        .insert(
+            EnvironmentName::new("DOT_CONTEXT_VALUE").expect("test name should be valid"),
+            "from-command".into(),
+        );
     let command = PreparedCommand::from_exec_action(&action, &ExecutionEnvironment::empty())
         .expect("helper command should prepare");
 
@@ -231,7 +240,7 @@ fn reports_a_program_that_cannot_be_started() {
         .expect_err("missing program should fail to start");
 
     assert!(matches!(error, ExecutionError::Spawn { .. }));
-    assert!(error.to_string().contains(&action.program));
+    assert!(error.to_string().contains(action.program.as_str()));
 }
 
 #[test]

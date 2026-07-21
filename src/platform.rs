@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use crate::schema::{OneOrMany, PlatformConstraint};
+use crate::schema::{Identifier, OneOrMany, PlatformConstraint};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatformInfo {
@@ -38,32 +38,35 @@ impl PlatformInfo {
 impl PlatformConstraint {
     pub fn matches(&self, actual: &PlatformInfo) -> bool {
         allowed(&self.os, &actual.os)
-            && optional_scalar_matches(self.arch.as_ref(), Some(&actual.arch))
-            && optional_scalar_matches(self.distro.as_ref(), actual.distro.as_ref())
+            && optional_scalar_matches(self.arch.as_ref(), Some(actual.arch.as_str()))
+            && optional_scalar_matches(self.distro.as_ref(), actual.distro.as_deref())
             && optional_set_matches(self.distro_family.as_ref(), &actual.distro_families)
             && optional_set_matches(self.environment.as_ref(), &actual.environments)
     }
 }
 
-fn allowed(expected: &OneOrMany<String>, actual: &str) -> bool {
+fn allowed(expected: &OneOrMany<Identifier>, actual: &str) -> bool {
     match expected {
-        OneOrMany::One(value) => value == actual,
-        OneOrMany::Many(values) => values.iter().any(|value| value == actual),
+        OneOrMany::One(value) => value.as_str() == actual,
+        OneOrMany::Many(values) => values.iter().any(|value| value.as_str() == actual),
     }
 }
 
-fn optional_scalar_matches(expected: Option<&OneOrMany<String>>, actual: Option<&String>) -> bool {
+fn optional_scalar_matches(expected: Option<&OneOrMany<Identifier>>, actual: Option<&str>) -> bool {
     match expected {
         None => true,
         Some(expected) => actual.is_some_and(|actual| allowed(expected, actual)),
     }
 }
 
-fn optional_set_matches(expected: Option<&OneOrMany<String>>, actual: &BTreeSet<String>) -> bool {
+fn optional_set_matches(
+    expected: Option<&OneOrMany<Identifier>>,
+    actual: &BTreeSet<String>,
+) -> bool {
     match expected {
         None => true,
-        Some(OneOrMany::One(value)) => actual.contains(value),
-        Some(OneOrMany::Many(values)) => values.iter().any(|value| actual.contains(value)),
+        Some(OneOrMany::One(value)) => actual.contains(value.as_str()),
+        Some(OneOrMany::Many(values)) => values.iter().any(|value| actual.contains(value.as_str())),
     }
 }
 
@@ -167,10 +170,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::schema::{OneOrMany, PlatformConstraint};
+    use crate::schema::{Identifier, OneOrMany, PlatformConstraint};
 
     fn strings(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn identifier(value: &str) -> Identifier {
+        Identifier::new(value).expect("test identifier should be valid")
     }
 
     fn linux_platform() -> PlatformInfo {
@@ -186,11 +193,17 @@ mod tests {
     #[test]
     fn matches_allowed_values_across_all_constrained_fields() {
         let constraint = PlatformConstraint {
-            os: OneOrMany::Many(vec!["linux".into(), "macos".into()]),
-            arch: Some(OneOrMany::One("x86_64".into())),
-            distro: Some(OneOrMany::Many(vec!["fedora".into(), "ubuntu".into()])),
-            distro_family: Some(OneOrMany::One("debian".into())),
-            environment: Some(OneOrMany::Many(vec!["native".into(), "wsl".into()])),
+            os: OneOrMany::Many(vec![identifier("linux"), identifier("macos")]),
+            arch: Some(OneOrMany::One(identifier("x86_64"))),
+            distro: Some(OneOrMany::Many(vec![
+                identifier("fedora"),
+                identifier("ubuntu"),
+            ])),
+            distro_family: Some(OneOrMany::One(identifier("debian"))),
+            environment: Some(OneOrMany::Many(vec![
+                identifier("native"),
+                identifier("wsl"),
+            ])),
         };
 
         assert!(constraint.matches(&linux_platform()));
@@ -199,7 +212,7 @@ mod tests {
     #[test]
     fn ignores_optional_constraints_that_are_not_declared() {
         let constraint = PlatformConstraint {
-            os: OneOrMany::One("linux".into()),
+            os: OneOrMany::One(identifier("linux")),
             arch: None,
             distro: None,
             distro_family: None,
@@ -212,8 +225,8 @@ mod tests {
     #[test]
     fn rejects_a_mismatch_in_any_declared_field() {
         let constraint = PlatformConstraint {
-            os: OneOrMany::One("linux".into()),
-            arch: Some(OneOrMany::One("aarch64".into())),
+            os: OneOrMany::One(identifier("linux")),
+            arch: Some(OneOrMany::One(identifier("aarch64"))),
             distro: None,
             distro_family: None,
             environment: None,
@@ -225,9 +238,9 @@ mod tests {
     #[test]
     fn rejects_a_declared_optional_fact_when_detection_has_no_value() {
         let constraint = PlatformConstraint {
-            os: OneOrMany::One("macos".into()),
+            os: OneOrMany::One(identifier("macos")),
             arch: None,
-            distro: Some(OneOrMany::One("ubuntu".into())),
+            distro: Some(OneOrMany::One(identifier("ubuntu"))),
             distro_family: None,
             environment: None,
         };

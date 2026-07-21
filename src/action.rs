@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
-use crate::schema::{EnvironmentPatch, ExecAction, OneOrMany};
+use crate::schema::{EnvironmentPatch, ExecAction, OneOrMany, ScalarTemplate};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExecutionEnvironment {
@@ -38,7 +38,7 @@ impl ExecutionEnvironment {
 
     pub fn apply_patch(&mut self, patch: &EnvironmentPatch) -> Result<(), CommandPreparationError> {
         for (name, value) in &patch.variables {
-            self.insert(name, value);
+            self.insert(name.as_str(), value.as_str());
         }
 
         if patch.path_prepend.is_some() || patch.path_append.is_some() {
@@ -95,12 +95,12 @@ fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
     left == right
 }
 
-fn values(value: &OneOrMany<String>) -> impl Iterator<Item = &str> {
+fn values(value: &OneOrMany<ScalarTemplate>) -> impl Iterator<Item = &str> {
     let values = match value {
         OneOrMany::One(value) => std::slice::from_ref(value),
         OneOrMany::Many(values) => values.as_slice(),
     };
-    values.iter().map(String::as_str)
+    values.iter().map(ScalarTemplate::as_str)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,9 +122,16 @@ impl PreparedCommand {
         }
 
         Ok(Self {
-            program: action.program.clone().into(),
-            args: action.args.iter().map(OsString::from).collect(),
-            cwd: action.cwd.as_ref().map(PathBuf::from),
+            program: OsString::from(action.program.as_str()),
+            args: action
+                .args
+                .iter()
+                .map(|argument| OsString::from(argument.as_str()))
+                .collect(),
+            cwd: action
+                .cwd
+                .as_ref()
+                .map(|directory| PathBuf::from(directory.as_str())),
             environment,
         })
     }

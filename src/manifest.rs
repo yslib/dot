@@ -113,21 +113,21 @@ fn index_profiles<'a>(
         index: &mut BTreeMap<String, IndexedProfile<'a>>,
     ) -> Result<(), ManifestError> {
         for (profile_id, profile) in profiles {
-            path.push(profile_id.clone());
+            path.push(profile_id.to_string());
             chain.push(profile);
             let current_path = path.join("/");
 
-            if let Some(existing) = index.get(profile_id) {
+            if let Some(existing) = index.get(profile_id.as_str()) {
                 return Err(ManifestError::DuplicateProfile {
                     target: target.to_owned(),
-                    profile: profile_id.clone(),
+                    profile: profile_id.to_string(),
                     first_path: existing.path.clone(),
                     second_path: current_path,
                 });
             }
 
             index.insert(
-                profile_id.clone(),
+                profile_id.to_string(),
                 IndexedProfile {
                     path: current_path,
                     chain: chain.clone(),
@@ -157,7 +157,13 @@ fn select_target<'a>(
     config: &'a Config,
     requested: Option<&str>,
 ) -> Result<(&'a str, &'a Target), ManifestError> {
-    let available = || config.targets.keys().cloned().collect::<Vec<_>>();
+    let available = || {
+        config
+            .targets
+            .keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
 
     match requested {
         Some(target) => config
@@ -175,7 +181,7 @@ fn select_target<'a>(
                     .targets
                     .first_key_value()
                     .expect("length checked above");
-                Ok((id, target))
+                Ok((id.as_str(), target))
             }
             _ => Err(ManifestError::TargetRequired {
                 available: available(),

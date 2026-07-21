@@ -1,4 +1,7 @@
-use dot::schema::{Config, ExecActionType, LinkConflict, LinkMissingParent, OneOrMany, Package};
+use dot::schema::{
+    Config, EnvironmentName, ExecAction, ExecActionType, Identifier, LinkConflict,
+    LinkMissingParent, LiteralString, OneOrMany, Package, ProviderInstallArg, ScalarTemplate,
+};
 
 const REPOSITORY_DOT_TOML: &str = include_str!("fixtures/dot.toml");
 
@@ -53,11 +56,20 @@ fn deserializes_the_complete_schema() {
     let config: Config = toml::from_str(input).expect("complete schema should deserialize");
     let target = &config.targets["workstation"];
 
+    let OneOrMany::Many(operating_systems) = &target.platform.os else {
+        panic!("operating systems should preserve their list form");
+    };
     assert_eq!(
-        target.platform.os,
-        OneOrMany::Many(vec!["linux".into(), "macos".into()])
+        operating_systems
+            .iter()
+            .map(Identifier::as_str)
+            .collect::<Vec<_>>(),
+        vec!["linux", "macos"]
     );
-    assert_eq!(target.platform.arch, Some(OneOrMany::One("x86_64".into())));
+    let Some(OneOrMany::One(architecture)) = &target.platform.arch else {
+        panic!("architecture should preserve its scalar form");
+    };
+    assert_eq!(architecture.as_str(), "x86_64");
 
     let provider = &target.providers["brew"];
     let OneOrMany::Many(ensure) = provider.ensure.as_ref().expect("ensure is present") else {
@@ -69,10 +81,15 @@ fn deserializes_the_complete_schema() {
     let Package::Provider(app) = &target.packages["app"] else {
         panic!("app should be a provider package");
     };
-    assert_eq!(app.provider, "brew");
+    assert_eq!(app.provider.as_str(), "brew");
     assert_eq!(
-        app.provider_args.as_deref(),
-        Some(&[String::from("--cask")][..])
+        app.provider_args
+            .as_ref()
+            .expect("provider args exist")
+            .iter()
+            .map(LiteralString::as_str)
+            .collect::<Vec<_>>(),
+        vec!["--cask"]
     );
     assert!(matches!(target.packages["manual-tool"], Package::Manual(_)));
 
@@ -84,6 +101,79 @@ fn deserializes_the_complete_schema() {
     let power = &laptop.links["power"];
     assert_eq!(power.on_conflict, Some(LinkConflict::Error));
     assert_eq!(power.on_missing_parent, Some(LinkMissingParent::Skip));
+}
+
+#[test]
+fn deserializes_strings_into_their_declared_schema_roles() {
+    let config: Config = toml::from_str(
+        r#"
+        [targets.machine]
+        platform = { os = "linux" }
+
+        [targets.machine.providers.brew]
+        activate = { variables = { HOMEBREW_PREFIX = "${env:HOME}/.homebrew" } }
+        probe = { program = "brew", args = ["--version"] }
+        install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
+
+        [targets.machine.packages]
+        application = { provider = "brew", provider_args = ["--cask"] }
+        "#,
+    )
+    .expect("schema roles should deserialize");
+
+    let (target_id, target) = config.targets.first_key_value().expect("target exists");
+    let _: &Identifier = target_id;
+    assert_eq!(target_id.as_str(), "machine");
+
+    let provider = &target.providers["brew"];
+    let _: &ScalarTemplate = &provider.probe.program;
+    let _: &ExecAction<ProviderInstallArg> = &provider.install;
+    let _: &ProviderInstallArg = &provider.install.args[1];
+    assert_eq!(
+        provider.install.args[1].as_str(),
+        "${package:provider_args}"
+    );
+
+    let Package::Provider(package) = &target.packages["application"] else {
+        panic!("application should use a provider");
+    };
+    let provider_arg: &LiteralString = &package.provider_args.as_ref().expect("args exist")[0];
+    assert_eq!(provider_arg.as_str(), "--cask");
+
+    let (name, value) = provider
+        .activate
+        .as_ref()
+        .expect("activation exists")
+        .variables
+        .first_key_value()
+        .expect("variable exists");
+    let _: &EnvironmentName = name;
+    let _: &ScalarTemplate = value;
+    assert_eq!(name.as_str(), "HOMEBREW_PREFIX");
+    assert_eq!(value.as_str(), "${env:HOME}/.homebrew");
+}
+
+#[test]
+fn rejects_invalid_identifiers_while_deserializing() {
+    let input = r#"
+        [targets."${env:TARGET}"]
+        platform = { os = "linux" }
+    "#;
+
+    assert!(toml::from_str::<Config>(input).is_err());
+}
+
+#[test]
+fn rejects_invalid_environment_names_while_deserializing() {
+    let input = r#"
+        [targets.machine]
+        platform = { os = "linux" }
+
+        [targets.machine.actions.example]
+        exec = { program = "true", env = { variables = { "BAD=NAME" = "value" } } }
+    "#;
+
+    assert!(toml::from_str::<Config>(input).is_err());
 }
 
 #[test]

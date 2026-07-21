@@ -65,7 +65,7 @@ tmux            = { source = "home/.tmux.conf", target = "${env:HOME}/.tmux.conf
 tmux-local      = { source = "home/.tmux.conf.local", target = "${env:HOME}/.tmux.conf.local" }
 
 [targets.arch-personal.actions.setup-oh-my-zsh]
-exec = { program = "bash", args = ["${path:config_dir}/scripts/install_oh_my_zsh.sh"], cwd = "${path:config_dir}" }
+exec = { program = "bash", args = ["${dot:config_dir}/scripts/install_oh_my_zsh.sh"], cwd = "${dot:config_dir}" }
 
 # Selecting `arch-personal/desktop` inherits the command-line environment above.
 [targets.arch-personal.profiles.desktop.packages]
@@ -162,7 +162,7 @@ tmux       = { source = "home/.tmux.conf", target = "${env:HOME}/.tmux.conf" }
 tmux-local = { source = "home/.tmux.conf.local", target = "${env:HOME}/.tmux.conf.local" }
 
 [targets.macos.actions.setup-oh-my-zsh]
-exec = { program = "bash", args = ["${path:config_dir}/scripts/install_oh_my_zsh.sh"], cwd = "${path:config_dir}" }
+exec = { program = "bash", args = ["${dot:config_dir}/scripts/install_oh_my_zsh.sh"], cwd = "${dot:config_dir}" }
 
 
 # Windows workstation ---------------------------------------------------------
@@ -208,7 +208,7 @@ lazygit            = { source = "home/.config/lazygit", target = "${env:LOCALAPP
 alacritty          = { source = "home/.config/alacritty", target = "${env:APPDATA}/alacritty" }
 gitconfig          = { source = "home/.gitconfig", target = "${env:USERPROFILE}/.gitconfig" }
 starship           = { source = "home/.config/starship.toml", target = "${env:USERPROFILE}/.config/starship.toml" }
-powershell-profile = { source = "home/.config/powershell/profile.ps1", target = "${path:documents}/PowerShell/profile.ps1" }
+powershell-profile = { source = "home/.config/powershell/profile.ps1", target = "${xdg:documents}/PowerShell/profile.ps1" }
 
 # Only reconcile variants whose application-owned parent exists.
 terminal-local   = { source = "home/.config/windows-terminal/settings.json", target = "${env:LOCALAPPDATA}/Microsoft/Windows Terminal/settings.json", on_missing_parent = "skip" }
@@ -292,8 +292,8 @@ lazygit = { source = "home/.config/lazygit", target = "${env:HOME}/.config/lazyg
 platform = { os = "linux" }
 
 [targets.server-minimal.packages]
-ripgrep = { install = { check = { program = "${env:HOME}/.local/bin/rg", args = ["--version"] }, exec = { program = "bash", args = ["${path:config_dir}/scripts/install-ripgrep-static.sh"], cwd = "${path:config_dir}" } } }
-zoxide  = { install = { check = { program = "${env:HOME}/.local/bin/zoxide", args = ["--version"] }, exec = { program = "bash", args = ["${path:config_dir}/scripts/install-zoxide-static.sh"], cwd = "${path:config_dir}" } } }
+ripgrep = { install = { check = { program = "${env:HOME}/.local/bin/rg", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-ripgrep-static.sh"], cwd = "${dot:config_dir}" } } }
+zoxide  = { install = { check = { program = "${env:HOME}/.local/bin/zoxide", args = ["--version"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-zoxide-static.sh"], cwd = "${dot:config_dir}" } } }
 
 [targets.server-minimal.links]
 vimrc      = { source = "home/.config/vim/vimrc", target = "${env:HOME}/.vimrc" }
