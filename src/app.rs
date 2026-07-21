@@ -1,3 +1,4 @@
+mod apply;
 mod check_providers;
 mod command;
 mod dry_run;
@@ -39,8 +40,15 @@ pub fn run(dispatch: Dispatch) -> ExitCode {
             }
         }
         Operation::Apply { dry_run: false } => {
-            println!("{dispatch:#?}");
-            ExitCode::SUCCESS
+            let stdout = io::stdout();
+            match apply::run(&dispatch.selection, &mut stdout.lock()) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("dot: {error}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Operation::CheckProviders => {
             let stdout = io::stdout();

@@ -10,10 +10,8 @@ scripts with one understandable workflow.
 
 ## Usage (draft)
 
-The command-line interface is still under development. `--dry-run` and
-`check providers` are implemented end to end. The implicit apply operation
-without `--dry-run` remains a development facade that only prints its
-normalized dispatch value.
+The command-line interface is still under development. The implicit apply
+operation, `--dry-run`, and `check providers` are implemented end to end.
 
 ```text
 dot [OPTIONS]
@@ -28,6 +26,16 @@ dot --target arch-personal
 dot --target arch-personal --profile laptop
 dot --target arch-personal --profile laptop --dry-run
 ```
+
+Without `--dry-run`, apply builds the same resolved execution plan shown by
+dry-run, then ensures every provider, runs each available provider package
+batch, applies manual-package and global actions, and finally reconciles
+links. It prints a complete result summary and exits non-zero when any item
+fails. An individual runtime failure does not stop unrelated work, and no
+result is persisted as a receipt.
+
+The current development implementation does not yet refresh the Windows User
+and Machine `PATH` after a provider ensure action.
 
 Provider readiness is an explicit nested check:
 
