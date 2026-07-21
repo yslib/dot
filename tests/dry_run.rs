@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dot::action::ExecutionEnvironment;
 use dot::dry_run;
@@ -10,6 +10,11 @@ use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
 };
+
+#[cfg(not(windows))]
+const TEST_HOME: &str = "/home/tester";
+#[cfg(windows)]
+const TEST_HOME: &str = r"C:\Users\tester";
 
 fn platform() -> PlatformInfo {
     PlatformInfo {
@@ -30,7 +35,7 @@ fn environment() -> ExecutionEnvironment {
             variables: BTreeMap::from([
                 (
                     EnvironmentName::new("HOME").expect("test name should be valid"),
-                    ScalarTemplate::from("/home/tester"),
+                    ScalarTemplate::from(TEST_HOME),
                 ),
                 (
                     EnvironmentName::new("ROOT").expect("test name should be valid"),
@@ -52,6 +57,10 @@ fn dot_paths() -> DotPaths<'static> {
         Path::new("/repo"),
         Path::new("/work"),
     )
+}
+
+fn gitconfig_target() -> PathBuf {
+    PathBuf::from(format!("{TEST_HOME}/.gitconfig"))
 }
 
 fn select(input: &str) -> EffectiveManifest {
@@ -216,7 +225,7 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
     let link = &plan.links()[0];
     assert_eq!(link.id(), "gitconfig");
     assert_eq!(link.source(), Path::new("/repo/home/.gitconfig"));
-    assert_eq!(link.target(), Path::new("/home/tester/.gitconfig"));
+    assert_eq!(link.target(), gitconfig_target());
     assert_eq!(link.on_conflict(), LinkConflict::Error);
     assert_eq!(link.on_missing_parent(), LinkMissingParent::Skip);
 }
@@ -264,7 +273,7 @@ fn renders_a_resolved_human_readable_execution_plan() {
     assert!(rendered.contains("actions:\n  configure"));
     assert!(rendered.contains("links:\n  gitconfig:"));
     assert!(rendered.contains("/repo/home/.gitconfig"));
-    assert!(rendered.contains("/home/tester/.gitconfig"));
+    assert!(rendered.contains(&gitconfig_target().display().to_string()));
 }
 
 #[test]
