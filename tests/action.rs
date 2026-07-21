@@ -182,9 +182,16 @@ fn capture_uses_the_prepared_environment_and_working_directory() {
         .execute(&command, IoMode::Capture)
         .expect("helper should execute");
     let stdout = String::from_utf8_lossy(result.stdout().expect("stdout should be captured"));
+    let actual_directory = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("cwd="))
+        .map(PathBuf::from)
+        .expect("helper should report its working directory")
+        .canonicalize()
+        .expect("reported working directory should be canonicalizable");
 
     assert!(stdout.contains("value=from-command"));
-    assert!(stdout.contains(&format!("cwd={}", canonical_directory.display())));
+    assert_eq!(actual_directory, canonical_directory);
 }
 
 #[test]
