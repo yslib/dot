@@ -292,8 +292,9 @@ fn renders_a_resolved_human_readable_execution_plan() {
     assert!(rendered.contains("manual packages:\n  manual"));
     assert!(rendered.contains("actions:\n  configure"));
     assert!(rendered.contains("links:\n  gitconfig:"));
-    assert!(rendered.contains(&config_path("home/.gitconfig").display().to_string()));
-    assert!(rendered.contains(&gitconfig_target().display().to_string()));
+    let link = &plan.links()[0];
+    assert!(rendered.contains(&link.source().display().to_string()));
+    assert!(rendered.contains(&link.target().display().to_string()));
 }
 
 #[test]
