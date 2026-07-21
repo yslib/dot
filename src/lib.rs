@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod dry_run;
 pub mod interpolation;
+pub mod link;
 pub mod manifest;
 pub mod plan;
 pub mod platform;
