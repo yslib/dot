@@ -4,38 +4,19 @@ use std::path::PathBuf;
 use clap::error::ErrorKind;
 use clap::{Args, Error, Parser, Subcommand};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Selection {
-    pub config: PathBuf,
-    pub target: Option<String>,
-    pub profile: Option<String>,
+use crate::app::{Dispatch, Operation, Selection};
+
+pub fn parse() -> Dispatch {
+    let cli = Cli::parse();
+    cli.into_dispatch().unwrap_or_else(|error| error.exit())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Apply { dry_run: bool },
-    CheckProviders,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Dispatch {
-    pub selection: Selection,
-    pub operation: Operation,
-}
-
-impl Dispatch {
-    pub fn parse() -> Self {
-        let cli = Cli::parse();
-        cli.into_dispatch().unwrap_or_else(|error| error.exit())
-    }
-
-    pub fn try_parse_from<I, T>(args: I) -> Result<Self, Error>
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<OsString> + Clone,
-    {
-        Cli::try_parse_from(args)?.into_dispatch()
-    }
+pub fn try_parse_from<I, T>(args: I) -> Result<Dispatch, Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    Cli::try_parse_from(args)?.into_dispatch()
 }
 
 #[derive(Debug, Parser)]

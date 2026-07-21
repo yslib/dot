@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
-use dot::cli::{Dispatch, Operation, Selection};
+use dot::app::{Dispatch, Operation, Selection};
+use dot::cli;
 
 #[test]
 fn defaults_to_apply_with_the_current_directory_dotfile() {
-    let dispatch = Dispatch::try_parse_from(["dot"]).expect("default invocation should parse");
+    let dispatch = cli::try_parse_from(["dot"]).expect("default invocation should parse");
 
     assert_eq!(
         dispatch,
@@ -22,7 +23,7 @@ fn defaults_to_apply_with_the_current_directory_dotfile() {
 
 #[test]
 fn parses_explicit_apply_selection_and_dry_run() {
-    let dispatch = Dispatch::try_parse_from([
+    let dispatch = cli::try_parse_from([
         "dot",
         "--config",
         "config/dev.toml",
@@ -42,7 +43,7 @@ fn parses_explicit_apply_selection_and_dry_run() {
 
 #[test]
 fn parses_check_providers_with_global_options_after_the_subcommands() {
-    let dispatch = Dispatch::try_parse_from([
+    let dispatch = cli::try_parse_from([
         "dot",
         "check",
         "providers",
@@ -63,8 +64,8 @@ fn parses_check_providers_with_global_options_after_the_subcommands() {
 
 #[test]
 fn requires_the_complete_check_providers_command() {
-    let error = Dispatch::try_parse_from(["dot", "check"])
-        .expect_err("check without providers should fail");
+    let error =
+        cli::try_parse_from(["dot", "check"]).expect_err("check without providers should fail");
 
     assert_eq!(
         error.kind(),
@@ -74,17 +75,17 @@ fn requires_the_complete_check_providers_command() {
 
 #[test]
 fn rejects_dry_run_with_check_providers() {
-    let error = Dispatch::try_parse_from(["dot", "--dry-run", "check", "providers"])
+    let error = cli::try_parse_from(["dot", "--dry-run", "check", "providers"])
         .expect_err("dry-run must not modify check providers");
 
     assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
-    assert!(Dispatch::try_parse_from(["dot", "check", "providers", "--dry-run"]).is_err());
+    assert!(cli::try_parse_from(["dot", "check", "providers", "--dry-run"]).is_err());
 }
 
 #[test]
 fn rejects_profile_paths_and_empty_profile_names() {
     for profile in ["", "/desktop", "desktop/laptop", "desktop/"] {
-        let error = Dispatch::try_parse_from(["dot", "--profile", profile])
+        let error = cli::try_parse_from(["dot", "--profile", profile])
             .expect_err("profile must be one node name");
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
@@ -93,8 +94,8 @@ fn rejects_profile_paths_and_empty_profile_names() {
 
 #[test]
 fn exposes_standard_help_and_version_flags() {
-    let help = Dispatch::try_parse_from(["dot", "--help"]).expect_err("help exits early");
-    let version = Dispatch::try_parse_from(["dot", "--version"]).expect_err("version exits early");
+    let help = cli::try_parse_from(["dot", "--help"]).expect_err("help exits early");
+    let version = cli::try_parse_from(["dot", "--version"]).expect_err("version exits early");
 
     assert_eq!(help.kind(), ErrorKind::DisplayHelp);
     assert_eq!(version.kind(), ErrorKind::DisplayVersion);

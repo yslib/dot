@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use directories::{BaseDirs, UserDirs};
 
 use crate::action::ExecutionEnvironment;
-use crate::schema::{EnvironmentName, ProviderInstallArg, ScalarTemplate};
+use crate::schema::{
+    EnvironmentName, EnvironmentPatch, ExecAction, LiteralString, OneOrMany, ProviderInstallArg,
+    ScalarTemplate,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParsedTemplate {
@@ -54,6 +57,10 @@ impl<'a> DotPaths<'a> {
             config_dir,
             cwd,
         }
+    }
+
+    pub const fn config_dir(&self) -> &'a Path {
+        self.config_dir
     }
 }
 
@@ -364,6 +371,24 @@ pub fn validate_scalar_template(template: &ScalarTemplate) -> Result<(), Interpo
     validate_template(&parsed, TemplateRole::Scalar)
 }
 
+pub fn resolve_literal_string(value: &LiteralString) -> Result<String, InterpolationError> {
+    let parsed = parse_template(value.as_str())?;
+    let mut result = String::new();
+
+    for segment in parsed.segments() {
+        match segment {
+            TemplateSegment::Literal(value) => result.push_str(value),
+            TemplateSegment::Resolver(call) => {
+                return Err(InterpolationError::ResolverInLiteralString {
+                    resolver: call.name.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 pub fn validate_provider_install_arg(
     argument: &ProviderInstallArg,
 ) -> Result<(), InterpolationError> {
@@ -411,6 +436,103 @@ pub fn resolve_scalar_template(
     let parsed = parse_template(template.as_str())?;
     validate_template(&parsed, TemplateRole::Scalar)?;
     resolve_scalar_segments(&parsed, context)
+}
+
+pub fn resolve_environment_patch(
+    patch: &EnvironmentPatch,
+    context: &ResolveContext<'_>,
+) -> Result<EnvironmentPatch, InterpolationError> {
+    Ok(EnvironmentPatch {
+        path_prepend: patch
+            .path_prepend
+            .as_ref()
+            .map(|values| resolve_scalar_values(values, context))
+            .transpose()?,
+        path_append: patch
+            .path_append
+            .as_ref()
+            .map(|values| resolve_scalar_values(values, context))
+            .transpose()?,
+        variables: patch
+            .variables
+            .iter()
+            .map(|(name, value)| {
+                resolve_scalar_template(value, context)
+                    .map(|value| (name.clone(), ScalarTemplate::from(value)))
+            })
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+pub fn resolve_exec_action(
+    action: &ExecAction,
+    context: &ResolveContext<'_>,
+) -> Result<ExecAction, InterpolationError> {
+    Ok(ExecAction {
+        kind: action.kind,
+        program: resolve_scalar_template(&action.program, context)?.into(),
+        args: action
+            .args
+            .iter()
+            .map(|argument| resolve_scalar_template(argument, context).map(ScalarTemplate::from))
+            .collect::<Result<_, _>>()?,
+        cwd: action
+            .cwd
+            .as_ref()
+            .map(|cwd| resolve_scalar_template(cwd, context).map(ScalarTemplate::from))
+            .transpose()?,
+        env: action
+            .env
+            .as_ref()
+            .map(|patch| resolve_environment_patch(patch, context))
+            .transpose()?,
+    })
+}
+
+pub fn resolve_provider_install_action(
+    action: &ExecAction<ProviderInstallArg>,
+    context: &ResolveContext<'_>,
+) -> Result<ExecAction, InterpolationError> {
+    let mut args = Vec::new();
+    for argument in &action.args {
+        args.extend(
+            resolve_provider_install_arg(argument, context)?
+                .into_iter()
+                .map(ScalarTemplate::from),
+        );
+    }
+
+    Ok(ExecAction {
+        kind: action.kind,
+        program: resolve_scalar_template(&action.program, context)?.into(),
+        args,
+        cwd: action
+            .cwd
+            .as_ref()
+            .map(|cwd| resolve_scalar_template(cwd, context).map(ScalarTemplate::from))
+            .transpose()?,
+        env: action
+            .env
+            .as_ref()
+            .map(|patch| resolve_environment_patch(patch, context))
+            .transpose()?,
+    })
+}
+
+fn resolve_scalar_values(
+    values: &OneOrMany<ScalarTemplate>,
+    context: &ResolveContext<'_>,
+) -> Result<OneOrMany<ScalarTemplate>, InterpolationError> {
+    match values {
+        OneOrMany::One(value) => resolve_scalar_template(value, context)
+            .map(ScalarTemplate::from)
+            .map(OneOrMany::One),
+        OneOrMany::Many(values) => values
+            .iter()
+            .map(|value| resolve_scalar_template(value, context).map(ScalarTemplate::from))
+            .collect::<Result<_, _>>()
+            .map(OneOrMany::Many),
+    }
 }
 
 pub fn resolve_provider_install_arg(
@@ -523,6 +645,7 @@ pub enum InterpolationError {
     UnknownResolver { name: String },
     InvalidResolverPayload { resolver: String, payload: String },
     ResolverUnavailable { resolver: String },
+    ResolverInLiteralString { resolver: String },
     ListResolverMustOccupyArgument { resolver: String },
     MissingEnvironmentVariable { name: String },
     NonUnicodeEnvironmentVariable { name: String },
@@ -557,6 +680,10 @@ impl fmt::Display for InterpolationError {
                     "resolver `{resolver}` is unavailable in this context"
                 )
             }
+            Self::ResolverInLiteralString { resolver } => write!(
+                formatter,
+                "resolver `{resolver}` is not allowed in a literal string"
+            ),
             Self::ListResolverMustOccupyArgument { resolver } => write!(
                 formatter,
                 "list resolver `{resolver}` must occupy one complete argument"
@@ -591,12 +718,14 @@ mod tests {
 
     use crate::action::ExecutionEnvironment;
     use crate::schema::{
-        EnvironmentName, EnvironmentPatch, OneOrMany, ProviderInstallArg, ScalarTemplate,
+        EnvironmentName, EnvironmentPatch, ExecAction, LiteralString, OneOrMany,
+        ProviderInstallArg, ScalarTemplate,
     };
 
     use super::{
         DotPaths, InterpolationError, PackageContext, ResolveContext, ResolverCall,
         TemplateSegment, XdgPath, XdgPaths, parse_template, resolve_environment_patch,
+        resolve_exec_action, resolve_literal_string, resolve_provider_install_action,
         resolve_provider_install_arg, resolve_scalar_template, validate_provider_install_arg,
         validate_scalar_template,
     };
@@ -660,6 +789,21 @@ mod tests {
     }
 
     #[test]
+    fn literal_strings_unescape_syntax_but_reject_resolvers() {
+        assert_eq!(
+            resolve_literal_string(&LiteralString::from(r"prefix-\${literal}"))
+                .expect("escaped interpolation syntax should be literal"),
+            "prefix-${literal}"
+        );
+        assert!(
+            resolve_literal_string(&LiteralString::from("${env:HOME}"))
+                .expect_err("literal strings must reject resolvers")
+                .to_string()
+                .contains("literal string")
+        );
+    }
+
+    #[test]
     fn parser_rejects_an_unclosed_resolver_call() {
         let error = parse_template("prefix-${env:HOME")
             .expect_err("an unclosed resolver call should fail parsing");
@@ -716,8 +860,7 @@ mod tests {
             )]),
         };
 
-        let resolved =
-            resolve_environment_patch(&patch, &context).expect("patch should resolve");
+        let resolved = resolve_environment_patch(&patch, &context).expect("patch should resolve");
 
         assert_eq!(
             resolved.path_prepend,
@@ -731,6 +874,44 @@ mod tests {
             Some(OneOrMany::One("/home/tester/.local/bin".into()))
         );
         assert_eq!(resolved.variables["TOOL_HOME"].as_str(), "/opt/tools");
+    }
+
+    #[test]
+    fn exec_action_resolves_all_process_fields_and_its_environment() {
+        let environment = environment(&[("PROBE", "probe-program"), ("ROOT", "/opt/tools")]);
+        let xdg = xdg_paths(&[(XdgPath::Documents, "/home/tester/Documents")]);
+        let context = ResolveContext::new(&environment, dot_paths(), &xdg);
+        let action = ExecAction {
+            kind: None,
+            program: "${env:PROBE}".into(),
+            args: vec!["--config=${dot:config}".into(), "${xdg:documents}".into()],
+            cwd: Some("${dot:cwd}".into()),
+            env: Some(EnvironmentPatch {
+                path_prepend: None,
+                path_append: None,
+                variables: BTreeMap::from([(
+                    EnvironmentName::new("TOOL_HOME").expect("test name should be valid"),
+                    "${env:ROOT}".into(),
+                )]),
+            }),
+        };
+
+        let resolved = resolve_exec_action(&action, &context).expect("action should resolve");
+
+        assert_eq!(resolved.program.as_str(), "probe-program");
+        assert_eq!(
+            resolved
+                .args
+                .iter()
+                .map(ScalarTemplate::as_str)
+                .collect::<Vec<_>>(),
+            vec!["--config=/repo/dot.toml", "/home/tester/Documents"]
+        );
+        assert_eq!(resolved.cwd.as_ref().unwrap().as_str(), "/work");
+        assert_eq!(
+            resolved.env.as_ref().unwrap().variables["TOOL_HOME"].as_str(),
+            "/opt/tools"
+        );
     }
 
     #[test]
@@ -862,6 +1043,49 @@ mod tests {
             .expect("provider args should resolve"),
             vec![String::from("--locked")]
         );
+    }
+
+    #[test]
+    fn provider_install_action_expands_package_lists_into_argv() {
+        let environment = environment(&[("PROVIDER", "brew")]);
+        let xdg = xdg_paths(&[]);
+        let names = ["font-one".into(), "font-two".into()];
+        let provider_args = ["--cask".into(), "--force".into()];
+        let context = ResolveContext::new(&environment, dot_paths(), &xdg)
+            .with_package(PackageContext::new(&names, &provider_args));
+        let action = ExecAction::<ProviderInstallArg> {
+            kind: None,
+            program: "${env:PROVIDER}".into(),
+            args: vec![
+                "install".into(),
+                "${package:provider_args}".into(),
+                "--config=${dot:config}".into(),
+                "${package:names}".into(),
+            ],
+            cwd: Some("${dot:cwd}".into()),
+            env: None,
+        };
+
+        let resolved =
+            resolve_provider_install_action(&action, &context).expect("action should resolve");
+
+        assert_eq!(resolved.program.as_str(), "brew");
+        assert_eq!(
+            resolved
+                .args
+                .iter()
+                .map(ScalarTemplate::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "install",
+                "--cask",
+                "--force",
+                "--config=/repo/dot.toml",
+                "font-one",
+                "font-two",
+            ]
+        );
+        assert_eq!(resolved.cwd.as_ref().unwrap().as_str(), "/work");
     }
 
     #[test]

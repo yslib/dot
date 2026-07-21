@@ -10,9 +10,10 @@ scripts with one understandable workflow.
 
 ## Usage (draft)
 
-The command-line interface is currently a development facade. The binary
-parses and normalizes these arguments into a dispatch value, then prints it;
-configuration loading and execution are not implemented yet.
+The command-line interface is still under development. `--dry-run` and
+`check providers` are implemented end to end. The implicit apply operation
+without `--dry-run` remains a development facade that only prints its
+normalized dispatch value.
 
 ```text
 dot [OPTIONS]
@@ -35,6 +36,13 @@ dot check providers
 dot check providers --target arch-personal --profile laptop
 ```
 
+This command loads and selects the effective manifest, applies each effective
+provider's child-process environment patch, and runs every provider probe once.
+It never runs provider ensure or install, package actions, global actions, or
+link reconciliation. Every provider is checked even after another provider
+fails. The command exits 0 only when all probes are ready; an empty provider
+set is ready.
+
 Selection options are global and may appear before or after the subcommands:
 
 ```text
@@ -52,6 +60,14 @@ unique within a target and cannot contain `/`.
 
 `--dry-run` belongs only to the implicit apply operation and cannot be combined
 with `check providers`. Version 1 defines no other check target.
+
+Dry-run loads and merges the selected manifest, resolves its safe built-in
+interpolation, groups provider packages by provider and `provider_args`, and
+prints the resulting providers, install batches, manual packages, actions, and
+links. Provider activation patches are applied only to in-memory child
+environments so their commands can be shown accurately. Dry-run never starts a
+process and never inspects or modifies package, action, or link state. Its
+human-readable output is explanatory and is not a stable serialized IR.
 
 ## Goal
 

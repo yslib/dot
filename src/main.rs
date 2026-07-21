@@ -1,6 +1,5 @@
-use dot::cli::Dispatch;
+use std::process::ExitCode;
 
-fn main() {
-    let dispatch = Dispatch::parse();
-    println!("{dispatch:#?}");
+fn main() -> ExitCode {
+    dot::app::run(dot::cli::parse())
 }

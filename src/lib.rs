@@ -1,6 +1,9 @@
 pub mod action;
+pub mod app;
+pub mod check;
 pub mod cli;
 pub mod config;
+pub mod dry_run;
 pub mod interpolation;
 pub mod manifest;
 pub mod platform;
