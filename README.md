@@ -1,0 +1,94 @@
+# dot
+
+`dot` is a small, declarative bootstrap runner for personal development
+environments and dotfiles across Windows, macOS, and Linux.
+
+Its job is deliberately narrow: read an explicit TOML manifest, select one
+target and profile, and coordinate the external tools needed to establish that
+environment. It exists to replace a collection of platform-specific bootstrap
+scripts with one understandable workflow.
+
+## Goal
+
+`dot` should make a personal development environment easy to reproduce without
+hiding what will happen.
+
+- Each target describes one concrete environment, such as a personal Arch
+  machine, a work Ubuntu machine, or a minimal server.
+- Each profile is declared explicitly inside its target. Profiles form a small
+  inline inheritance tree, so shared desktop configuration can be inherited by
+  a more specific laptop profile.
+- Selecting a profile follows exactly one path from the target root. Deeper
+  declarations add new records or replace same-named records as a whole.
+- Repetition between independent targets is acceptable. A locally complete
+  declaration is often clearer than an abstraction that tries to erase real
+  platform differences.
+- The configuration should remain readable enough that the manifest itself is
+  an inventory of the intended environment.
+
+## Small domain model
+
+`dot` understands only the minimum concepts needed for bootstrap work:
+
+- **target**: one explicitly selected environment with a platform constraint;
+- **profile**: one node in the target's inline inheritance tree;
+- **provider**: an external installation capability such as `pacman`, `brew`,
+  `scoop`, `npm`, or `cargo`;
+- **package**: one package delegated to one provider, or one explicit manual
+  installation action;
+- **link**: one native symbolic-link intent for a dotfile;
+- **action**: one generic `check`/`exec` operation for work that does not fit a
+  smaller domain block.
+
+The configuration language intentionally has little evaluation logic. Profile
+merging is limited to a single root-to-child path, and a deeper record replaces
+an ancestor record instead of recursively merging its fields. Interpolation is
+limited to a small set of built-in runtime values needed by actions and
+provider package batches.
+
+Complex installation procedures belong in external shell or PowerShell
+scripts invoked by an action. They do not expand the TOML format into a
+programming language.
+
+## Non-goals
+
+### dot is not a package manager
+
+`dot` delegates installation to package managers and other external commands.
+It does not:
+
+- access or index package repositories;
+- search for packages or choose a preferred source;
+- resolve package or provider dependencies;
+- compare, solve, pin, or manage versions;
+- implement downloads, archive extraction, builds, or installers;
+- update or uninstall packages;
+- maintain an installed-package database or persistent receipts.
+
+Package-manager-specific knowledge stays in the user's provider declarations.
+The external provider remains responsible for package semantics and
+idempotency.
+
+### dot is not a universal configuration language
+
+The manifest is not intended to become a general-purpose DSL. It has no
+arbitrary expressions, user-defined functions, embedded control flow, or
+general resolver system. It does not provide conditionals on every item,
+multiple inheritance, cross-target references, dependency graphs, or a
+template language.
+
+`dot` does not try to infer a perfect environment from the current machine.
+The user explicitly chooses the target and profile whose declarations should
+apply.
+
+### dot is not a general system orchestrator
+
+`dot` is for bootstrapping a personal development workflow and linking its
+configuration files. It is not a service manager, provisioning platform,
+configuration-management system, deployment engine, or replacement for shell
+scripts when procedural logic is the clearest solution.
+
+The project intentionally prefers a small, predictable model over universal
+abstraction. If a feature would make `dot` responsible for understanding how
+packages, operating systems, or arbitrary programs work, it is probably
+outside the project's scope.
