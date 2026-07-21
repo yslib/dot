@@ -12,6 +12,18 @@ use dot::schema::{
 };
 
 #[cfg(not(windows))]
+const TEST_CONFIG: &str = "/repo/dot.toml";
+#[cfg(windows)]
+const TEST_CONFIG: &str = r"C:\repo\dot.toml";
+#[cfg(not(windows))]
+const TEST_CONFIG_DIR: &str = "/repo";
+#[cfg(windows)]
+const TEST_CONFIG_DIR: &str = r"C:\repo";
+#[cfg(not(windows))]
+const TEST_CWD: &str = "/work";
+#[cfg(windows)]
+const TEST_CWD: &str = r"C:\work";
+#[cfg(not(windows))]
 const TEST_HOME: &str = "/home/tester";
 #[cfg(windows)]
 const TEST_HOME: &str = r"C:\Users\tester";
@@ -53,10 +65,18 @@ fn environment() -> ExecutionEnvironment {
 
 fn dot_paths() -> DotPaths<'static> {
     DotPaths::new(
-        Path::new("/repo/dot.toml"),
-        Path::new("/repo"),
-        Path::new("/work"),
+        Path::new(TEST_CONFIG),
+        Path::new(TEST_CONFIG_DIR),
+        Path::new(TEST_CWD),
     )
+}
+
+fn config_path(relative: &str) -> PathBuf {
+    Path::new(TEST_CONFIG_DIR).join(relative)
+}
+
+fn config_template_path(relative: &str) -> String {
+    format!("{TEST_CONFIG_DIR}/{relative}")
 }
 
 fn gitconfig_target() -> PathBuf {
@@ -218,13 +238,13 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
     assert_eq!(plan.actions()[0].id(), "configure");
     assert_eq!(
         plan.actions()[0].action().exec.args[0].as_str(),
-        "/repo/scripts/configure.sh"
+        config_template_path("scripts/configure.sh")
     );
 
     assert_eq!(plan.links().len(), 1);
     let link = &plan.links()[0];
     assert_eq!(link.id(), "gitconfig");
-    assert_eq!(link.source(), Path::new("/repo/home/.gitconfig"));
+    assert_eq!(link.source(), config_path("home/.gitconfig"));
     assert_eq!(link.target(), gitconfig_target());
     assert_eq!(link.on_conflict(), LinkConflict::Error);
     assert_eq!(link.on_missing_parent(), LinkMissingParent::Skip);
@@ -272,7 +292,7 @@ fn renders_a_resolved_human_readable_execution_plan() {
     assert!(rendered.contains("manual packages:\n  manual"));
     assert!(rendered.contains("actions:\n  configure"));
     assert!(rendered.contains("links:\n  gitconfig:"));
-    assert!(rendered.contains("/repo/home/.gitconfig"));
+    assert!(rendered.contains(&config_path("home/.gitconfig").display().to_string()));
     assert!(rendered.contains(&gitconfig_target().display().to_string()));
 }
 
