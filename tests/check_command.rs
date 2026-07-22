@@ -63,13 +63,16 @@ fn check_providers_runs_the_selected_manifest_and_sets_the_exit_code() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "stdout:\n{stdout}");
-    assert!(stdout.contains("READY a-ready (exit 0)"), "{stdout}");
     assert!(
-        stdout.contains("NOT_READY b-not-ready (exit 23)"),
+        stdout.contains("dot check providers · target=current"),
         "{stdout}"
     );
-    assert!(stdout.contains("/ready"), "{stdout}");
-    assert!(stdout.contains("/not-ready"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ a-ready"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ b-not-ready"), "{stdout}");
+    assert!(stdout.contains("READY"), "{stdout}");
+    assert!(stdout.contains("NOT_READY"), "{stdout}");
+    assert!(stdout.contains("exit 23"), "{stdout}");
+    assert!(stdout.contains("FAILED · 2 items"), "{stdout}");
 }
 
 #[test]
@@ -85,7 +88,12 @@ fn check_providers_reports_an_empty_manifest_as_ready() {
         .expect("dot should start");
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "No providers.\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("dot check providers · target=current"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("SUCCESS · 0 items"), "{stdout}");
 }
 
 #[cfg(feature = "dev-platform-override")]
@@ -111,7 +119,12 @@ fn check_providers_selects_against_the_injected_platform() {
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "No providers.\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("dot check providers · target=simulated"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("SUCCESS · 0 items"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning"), "{stderr}");
     assert!(stderr.contains("XDG paths"), "{stderr}");

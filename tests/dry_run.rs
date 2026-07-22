@@ -9,6 +9,7 @@ use dot::interpolation::{DotPaths, XdgPaths};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlanner, PlanningError};
 use dot::platform::PlatformInfo;
+use dot::report::{ItemStatus, PackageSource, ReportCommand, ReportStatus, ReportSubject};
 use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
 };
@@ -205,7 +206,7 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
 }
 
 #[test]
-fn renders_a_resolved_human_readable_execution_plan() {
+fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
     let manifest = select_fixture("dry-run/valid-human-readable-plan.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
@@ -213,27 +214,40 @@ fn renders_a_resolved_human_readable_execution_plan() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let plan = planner.plan(&manifest).expect("execution should plan");
-    let rendered = dry_run::display(&plan).to_string();
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
 
-    assert!(rendered.contains("target: machine"));
-    assert!(rendered.contains("profile: <root>"));
-    assert!(rendered.contains("platform: linux/x86_64"));
-    assert!(rendered.contains("providers:\n  system"));
-    assert!(rendered.contains("path_prepend: [\"/opt/bin\"]"));
-    assert!(rendered.contains("provider packages:\n  system"));
-    assert!(rendered.contains("packages: [\"alpha\"]"));
-    assert!(rendered.contains("manual packages:\n  manual"));
-    assert!(rendered.contains("actions:\n  configure"));
-    assert!(rendered.contains("links:\n  gitconfig:"));
-    let link = &plan.links()[0];
+    assert_eq!(report.command, ReportCommand::DryRun);
+    assert_eq!(report.status, ReportStatus::Planned);
+    assert_eq!(report.context.target, "machine");
+    assert_eq!(report.context.profile, None);
+    assert_eq!(report.context.platform, platform);
+    assert_eq!(report.items.len(), 5);
     assert!(
-        rendered.contains(&format!("{:?}", link.source().display().to_string())),
-        "{rendered}"
+        report
+            .items
+            .iter()
+            .all(|item| item.status == ItemStatus::Planned)
     );
-    assert!(
-        rendered.contains(&format!("{:?}", link.target().display().to_string())),
-        "{rendered}"
-    );
+    assert!(matches!(
+        &report.items[0].subject,
+        ReportSubject::Provider(_)
+    ));
+    assert!(matches!(
+        &report.items[1].subject,
+        ReportSubject::Package(package)
+            if matches!(
+                &package.source,
+                PackageSource::Provider { provider, .. } if provider == "system"
+            )
+    ));
+    assert_eq!(report.items[1].id, "alpha");
+    assert!(matches!(
+        &report.items[2].subject,
+        ReportSubject::Package(package)
+            if matches!(&package.source, PackageSource::Manual { .. })
+    ));
+    assert!(matches!(&report.items[3].subject, ReportSubject::Action(_)));
+    assert!(matches!(&report.items[4].subject, ReportSubject::Link(_)));
 }
 
 #[test]

@@ -1,10 +1,10 @@
 use std::error::Error;
 use std::fmt;
-use std::io::{self, Write};
+use std::path::Path;
 
 use super::Selection;
-use crate::action::ExecutionEnvironment;
-use crate::action_runner::{ActionOutcome, ActionRunError, ActionRunner};
+use crate::action::{ExecutionEnvironment, ExecutionResult};
+use crate::action_runner::{ActionOutcome, ActionRunError, ActionRunner, ActionStage};
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::link::{self, LinkOutcome, LinkPhaseError, LinkReport};
@@ -12,11 +12,16 @@ use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::plan::{ExecutionPlan, ExecutionPlanner, PlanningError};
 use crate::platform::PlatformInfo;
 use crate::provider::{
-    ProviderBatchExecution, ProviderBatchOutcome, ProviderOutcome, ProviderReadiness,
-    ProviderRunner,
+    ProviderBatchExecution, ProviderBatchOutcome, ProviderError, ProviderOutcome,
+    ProviderReadiness, ProviderRunner, ProviderStage,
+};
+use crate::report::{
+    ActionInfo, ActionItem, CommandInfo, CommandReport, Diagnostic, DiagnosticLevel, Evidence,
+    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ReportCommand,
+    ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 
-pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<bool, CommandError> {
+pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> {
     let loaded = LoadedConfig::load(&selection.config)?;
     let platform = PlatformInfo::detect();
     let manifest = EffectiveManifest::select(
@@ -31,8 +36,7 @@ pub(super) fn run(selection: &Selection, output: &mut impl Write) -> Result<bool
     let plan = planner.plan(&manifest)?;
     let result = execute(&plan, loaded.environment());
 
-    writeln!(output, "{result}")?;
-    Ok(result.succeeded())
+    Ok(build_report(loaded.path(), &plan, &result))
 }
 
 fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyResult {
@@ -59,8 +63,6 @@ fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyRes
     let links = link::reconcile(plan.links());
 
     ApplyResult {
-        target: plan.target().to_owned(),
-        profile: plan.profile().map(str::to_owned),
         providers,
         provider_batches,
         manual_packages,
@@ -77,8 +79,6 @@ struct NamedActionResult {
 
 #[derive(Debug)]
 struct ApplyResult {
-    target: String,
-    profile: Option<String>,
     providers: ProviderReadiness,
     provider_batches: ProviderBatchExecution,
     manual_packages: Vec<NamedActionResult>,
@@ -102,126 +102,337 @@ impl ApplyResult {
     }
 }
 
-impl fmt::Display for ApplyResult {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(formatter, "target: {}", self.target)?;
-        writeln!(
-            formatter,
-            "profile: {}",
-            self.profile.as_deref().unwrap_or("<root>")
-        )?;
+fn build_report(config: &Path, plan: &ExecutionPlan, result: &ApplyResult) -> CommandReport {
+    let mut items = provider_items(plan, &result.providers);
+    items.extend(provider_package_items(&result.provider_batches));
+    items.extend(action_items(plan, &result.manual_packages, &result.actions));
+    let (links, diagnostics) = link_items(plan, &result.links);
+    items.extend(links);
 
-        writeln!(formatter, "\nproviders:")?;
-        if self.providers.statuses().is_empty() {
-            writeln!(formatter, "  <none>")?;
-        }
-        for provider in self.providers.statuses() {
-            match provider.outcome() {
-                Ok(ProviderOutcome::AlreadyReady { .. }) => {
-                    writeln!(formatter, "  READY {} (already ready)", provider.id())?;
-                }
-                Ok(ProviderOutcome::Ensured { .. }) => {
-                    writeln!(formatter, "  READY {} (ensured)", provider.id())?;
-                }
-                Err(error) => {
-                    writeln!(formatter, "  NOT_READY {}: {error}", provider.id())?;
-                }
-            }
-        }
-
-        writeln!(formatter, "\nprovider packages:")?;
-        if self.provider_batches.statuses().is_empty() {
-            writeln!(formatter, "  <none>")?;
-        }
-        for batch in self.provider_batches.statuses() {
-            match batch.outcome() {
-                Ok(ProviderBatchOutcome::Executed { .. }) => writeln!(
-                    formatter,
-                    "  OK {} {:?} (provider_args: {:?})",
-                    batch.provider(),
-                    batch.packages(),
-                    batch.provider_args()
-                )?,
-                Ok(ProviderBatchOutcome::NotRunProviderUnavailable) => writeln!(
-                    formatter,
-                    "  NOT_RUN {} {:?}: provider unavailable",
-                    batch.provider(),
-                    batch.packages()
-                )?,
-                Err(error) => writeln!(
-                    formatter,
-                    "  FAILED {} {:?}: {error}",
-                    batch.provider(),
-                    batch.packages()
-                )?,
-            }
-        }
-
-        write_action_results(formatter, "manual packages", &self.manual_packages)?;
-        write_action_results(formatter, "actions", &self.actions)?;
-
-        writeln!(formatter, "\nlinks:")?;
-        match &self.links {
-            Ok(report) if report.results().is_empty() => writeln!(formatter, "  <none>")?,
-            Ok(report) => {
-                for link in report.results() {
-                    match link.outcome() {
-                        Ok(LinkOutcome::Satisfied) => {
-                            writeln!(formatter, "  SATISFIED {}", link.id())?;
-                        }
-                        Ok(LinkOutcome::Created) => {
-                            writeln!(formatter, "  CREATED {}", link.id())?;
-                        }
-                        Ok(LinkOutcome::Replaced) => {
-                            writeln!(formatter, "  REPLACED {}", link.id())?;
-                        }
-                        Ok(LinkOutcome::SkippedMissingParent) => {
-                            writeln!(formatter, "  SKIPPED {} (missing parent)", link.id())?;
-                        }
-                        Err(error) => {
-                            writeln!(formatter, "  FAILED {}: {error}", link.id())?;
-                        }
-                    }
-                }
-            }
-            Err(error) => writeln!(formatter, "  FAILED link phase: {error}")?,
-        }
-
-        write!(
-            formatter,
-            "\nresult: {}",
-            if self.succeeded() {
-                "SUCCESS"
-            } else {
-                "FAILED"
-            }
-        )
+    CommandReport {
+        command: ReportCommand::Apply,
+        context: ReportContext {
+            config: config.to_owned(),
+            target: plan.target().to_owned(),
+            profile: plan.profile().map(str::to_owned),
+            platform: plan.platform().clone(),
+        },
+        status: if result.succeeded() {
+            ReportStatus::Succeeded
+        } else {
+            ReportStatus::Failed
+        },
+        items,
+        diagnostics,
     }
 }
 
-fn write_action_results(
-    formatter: &mut fmt::Formatter<'_>,
-    label: &str,
-    results: &[NamedActionResult],
-) -> fmt::Result {
-    writeln!(formatter, "\n{label}:")?;
-    if results.is_empty() {
-        writeln!(formatter, "  <none>")?;
+fn provider_items(plan: &ExecutionPlan, readiness: &ProviderReadiness) -> Vec<ReportItem> {
+    plan.providers()
+        .iter()
+        .map(|provider| {
+            let result = readiness
+                .get(provider.id())
+                .expect("provider results must match the execution plan");
+            let (status, evidence) = match result.outcome() {
+                Ok(ProviderOutcome::AlreadyReady { probe }) => (
+                    ItemStatus::Ready,
+                    vec![execution_evidence(
+                        EvidenceStage::Probe,
+                        probe,
+                        Some("already available"),
+                    )],
+                ),
+                Ok(ProviderOutcome::Ensured { ensure, probe }) => {
+                    let mut evidence = ensure
+                        .iter()
+                        .map(|result| execution_evidence(EvidenceStage::Ensure, result, None))
+                        .collect::<Vec<_>>();
+                    evidence.push(execution_evidence(
+                        EvidenceStage::Probe,
+                        probe,
+                        Some("installed and verified"),
+                    ));
+                    (ItemStatus::Ready, evidence)
+                }
+                Err(error) => (ItemStatus::NotReady, vec![provider_error_evidence(error)]),
+            };
+            ReportItem {
+                id: provider.id().to_owned(),
+                status,
+                subject: ReportSubject::Provider(ProviderItem {
+                    probe: CommandInfo::from(provider.probe()),
+                    ensure: provider.ensure().iter().map(CommandInfo::from).collect(),
+                    has_activation: provider.activate().is_some(),
+                }),
+                evidence,
+            }
+        })
+        .collect()
+}
+
+fn provider_package_items(execution: &ProviderBatchExecution) -> Vec<ReportItem> {
+    execution
+        .statuses()
+        .iter()
+        .flat_map(|batch| {
+            let (status, evidence) = match batch.outcome() {
+                Ok(ProviderBatchOutcome::Executed { install }) => (
+                    ItemStatus::Installed,
+                    vec![execution_evidence(EvidenceStage::Install, install, None)],
+                ),
+                Ok(ProviderBatchOutcome::NotRunProviderUnavailable) => (
+                    ItemStatus::Blocked,
+                    vec![message_evidence(
+                        EvidenceStage::Install,
+                        "provider unavailable",
+                    )],
+                ),
+                Err(error) => (
+                    ItemStatus::Failed,
+                    vec![error_evidence(
+                        EvidenceStage::Install,
+                        error.to_string(),
+                        error.exit_result(),
+                    )],
+                ),
+            };
+            batch.packages().iter().map(move |package| ReportItem {
+                id: package.clone(),
+                status,
+                subject: ReportSubject::Package(PackageItem {
+                    source: PackageSource::Provider {
+                        provider: batch.provider().to_owned(),
+                        provider_args: batch.provider_args().to_owned(),
+                    },
+                }),
+                evidence: evidence.clone(),
+            })
+        })
+        .collect()
+}
+
+fn action_items(
+    plan: &ExecutionPlan,
+    manual_results: &[NamedActionResult],
+    action_results: &[NamedActionResult],
+) -> Vec<ReportItem> {
+    let mut items = plan
+        .manual_packages()
+        .iter()
+        .zip(manual_results)
+        .map(|(package, result)| {
+            debug_assert_eq!(package.id(), result.id);
+            let (status, evidence) = action_result(&result.outcome, ItemStatus::Installed);
+            ReportItem {
+                id: package.id().to_owned(),
+                status,
+                subject: ReportSubject::Package(PackageItem {
+                    source: PackageSource::Manual {
+                        install: ActionInfo::from(package.install()),
+                    },
+                }),
+                evidence,
+            }
+        })
+        .collect::<Vec<_>>();
+    items.extend(
+        plan.actions()
+            .iter()
+            .zip(action_results)
+            .map(|(action, result)| {
+                debug_assert_eq!(action.id(), result.id);
+                let (status, evidence) = action_result(&result.outcome, ItemStatus::Executed);
+                ReportItem {
+                    id: action.id().to_owned(),
+                    status,
+                    subject: ReportSubject::Action(ActionItem {
+                        action: ActionInfo::from(action.action()),
+                    }),
+                    evidence,
+                }
+            }),
+    );
+    items
+}
+
+fn action_result(
+    result: &Result<ActionOutcome, ActionRunError>,
+    executed_status: ItemStatus,
+) -> (ItemStatus, Vec<Evidence>) {
+    match result {
+        Ok(ActionOutcome::AlreadySatisfied { check }) => (
+            ItemStatus::Satisfied,
+            vec![execution_evidence(
+                EvidenceStage::Check,
+                check,
+                Some("check passed; no action needed"),
+            )],
+        ),
+        Ok(ActionOutcome::Executed {
+            initial_check,
+            exec,
+            post_check,
+        }) => {
+            let mut evidence = Vec::new();
+            if let Some(check) = initial_check {
+                evidence.push(execution_evidence(EvidenceStage::Check, check, None));
+            }
+            evidence.push(execution_evidence(EvidenceStage::Execute, exec, None));
+            if let Some(check) = post_check {
+                evidence.push(execution_evidence(EvidenceStage::PostCheck, check, None));
+            }
+            (executed_status, evidence)
+        }
+        Err(error) => (
+            ItemStatus::Failed,
+            vec![error_evidence(
+                action_stage(error.stage()),
+                error.to_string(),
+                error.exit_result(),
+            )],
+        ),
     }
-    for result in results {
-        match &result.outcome {
-            Ok(ActionOutcome::AlreadySatisfied { .. }) => {
-                writeln!(formatter, "  SATISFIED {}", result.id)?;
-            }
-            Ok(ActionOutcome::Executed { .. }) => {
-                writeln!(formatter, "  OK {} (executed)", result.id)?;
-            }
-            Err(error) => {
-                writeln!(formatter, "  FAILED {}: {error}", result.id)?;
-            }
+}
+
+fn link_items(
+    plan: &ExecutionPlan,
+    result: &Result<LinkReport, LinkPhaseError>,
+) -> (Vec<ReportItem>, Vec<Diagnostic>) {
+    match result {
+        Ok(report) => (
+            plan.links()
+                .iter()
+                .zip(report.results())
+                .map(|(link, result)| {
+                    debug_assert_eq!(link.id(), result.id());
+                    let (status, evidence) = match result.outcome() {
+                        Ok(LinkOutcome::Satisfied) => (ItemStatus::Satisfied, Vec::new()),
+                        Ok(LinkOutcome::Created) => (ItemStatus::Created, Vec::new()),
+                        Ok(LinkOutcome::Replaced) => (ItemStatus::Replaced, Vec::new()),
+                        Ok(LinkOutcome::SkippedMissingParent) => (
+                            ItemStatus::Skipped,
+                            vec![message_evidence(
+                                EvidenceStage::Link,
+                                "target parent is missing",
+                            )],
+                        ),
+                        Err(error) => (
+                            ItemStatus::Failed,
+                            vec![message_evidence(EvidenceStage::Link, error.to_string())],
+                        ),
+                    };
+                    report_link_item(link, status, evidence)
+                })
+                .collect(),
+            Vec::new(),
+        ),
+        Err(error) => {
+            let message = error.to_string();
+            (
+                plan.links()
+                    .iter()
+                    .map(|link| {
+                        report_link_item(
+                            link,
+                            ItemStatus::Blocked,
+                            vec![message_evidence(EvidenceStage::Link, message.clone())],
+                        )
+                    })
+                    .collect(),
+                vec![Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    message,
+                }],
+            )
         }
     }
-    Ok(())
+}
+
+fn report_link_item(
+    link: &crate::plan::PlannedLink,
+    status: ItemStatus,
+    evidence: Vec<Evidence>,
+) -> ReportItem {
+    ReportItem {
+        id: link.id().to_owned(),
+        status,
+        subject: ReportSubject::Link(LinkItem {
+            source: link.source().to_owned(),
+            target: link.target().to_owned(),
+            on_conflict: link.on_conflict(),
+            on_missing_parent: link.on_missing_parent(),
+        }),
+        evidence,
+    }
+}
+
+fn provider_error_evidence(error: &ProviderError) -> Evidence {
+    error_evidence(
+        provider_stage(error.stage()),
+        error.to_string(),
+        error.exit_result(),
+    )
+}
+
+const fn provider_stage(stage: ProviderStage) -> EvidenceStage {
+    match stage {
+        ProviderStage::Activate | ProviderStage::Reactivate => EvidenceStage::Activate,
+        ProviderStage::InitialProbe | ProviderStage::FinalProbe => EvidenceStage::Probe,
+        ProviderStage::Ensure(_) => EvidenceStage::Ensure,
+    }
+}
+
+const fn action_stage(stage: ActionStage) -> EvidenceStage {
+    match stage {
+        ActionStage::InitialCheck => EvidenceStage::Check,
+        ActionStage::Exec => EvidenceStage::Execute,
+        ActionStage::PostCheck => EvidenceStage::PostCheck,
+    }
+}
+
+fn execution_evidence(
+    stage: EvidenceStage,
+    result: &ExecutionResult,
+    message: Option<&str>,
+) -> Evidence {
+    Evidence {
+        stage,
+        exit_code: result.code(),
+        message: message.map(str::to_owned),
+        stdout: captured_text(result.stdout()),
+        stderr: captured_text(result.stderr()),
+    }
+}
+
+fn error_evidence(
+    stage: EvidenceStage,
+    message: String,
+    result: Option<&ExecutionResult>,
+) -> Evidence {
+    Evidence {
+        stage,
+        exit_code: result.and_then(ExecutionResult::code),
+        message: Some(message),
+        stdout: result.and_then(|result| captured_text(result.stdout())),
+        stderr: result.and_then(|result| captured_text(result.stderr())),
+    }
+}
+
+fn message_evidence(stage: EvidenceStage, message: impl Into<String>) -> Evidence {
+    Evidence {
+        stage,
+        exit_code: None,
+        message: Some(message.into()),
+        stdout: None,
+        stderr: None,
+    }
+}
+
+fn captured_text(output: Option<&[u8]>) -> Option<String> {
+    output
+        .filter(|output| !output.is_empty())
+        .map(|output| String::from_utf8_lossy(output).into_owned())
 }
 
 #[derive(Debug)]
@@ -229,7 +440,6 @@ pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
     Planning(PlanningError),
-    Output(io::Error),
 }
 
 impl fmt::Display for CommandError {
@@ -238,7 +448,6 @@ impl fmt::Display for CommandError {
             Self::Config(source) => source.fmt(formatter),
             Self::Manifest(source) => source.fmt(formatter),
             Self::Planning(source) => source.fmt(formatter),
-            Self::Output(source) => write!(formatter, "failed to write apply output: {source}"),
         }
     }
 }
@@ -249,7 +458,6 @@ impl Error for CommandError {
             Self::Config(source) => Some(source),
             Self::Manifest(source) => Some(source),
             Self::Planning(source) => Some(source),
-            Self::Output(source) => Some(source),
         }
     }
 }
@@ -269,11 +477,5 @@ impl From<ManifestError> for CommandError {
 impl From<PlanningError> for CommandError {
     fn from(source: PlanningError) -> Self {
         Self::Planning(source)
-    }
-}
-
-impl From<io::Error> for CommandError {
-    fn from(source: io::Error) -> Self {
-        Self::Output(source)
     }
 }

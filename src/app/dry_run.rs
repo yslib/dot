@@ -1,20 +1,19 @@
 use std::error::Error;
 use std::fmt;
-use std::io::{self, Write};
 
 use super::Selection;
 use crate::config::{ConfigLoadError, LoadedConfig};
-use crate::dry_run::display;
+use crate::dry_run::build_report;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::plan::{ExecutionPlanner, PlanningError};
 use crate::platform::PlatformInfo;
+use crate::report::CommandReport;
 
 pub(super) fn run(
     selection: &Selection,
     platform_override: Option<&PlatformInfo>,
-    output: &mut impl Write,
-) -> Result<(), CommandError> {
+) -> Result<CommandReport, CommandError> {
     let loaded = LoadedConfig::load(&selection.config)?;
     let platform = platform_override
         .cloned()
@@ -30,8 +29,7 @@ pub(super) fn run(
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
     let plan = planner.plan(&manifest)?;
 
-    writeln!(output, "{}", display(&plan))?;
-    Ok(())
+    Ok(build_report(loaded.path(), &plan))
 }
 
 #[derive(Debug)]
@@ -39,7 +37,6 @@ pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
     Planning(PlanningError),
-    Output(io::Error),
 }
 
 impl fmt::Display for CommandError {
@@ -48,7 +45,6 @@ impl fmt::Display for CommandError {
             Self::Config(source) => source.fmt(formatter),
             Self::Manifest(source) => source.fmt(formatter),
             Self::Planning(source) => source.fmt(formatter),
-            Self::Output(source) => write!(formatter, "failed to write dry-run output: {source}"),
         }
     }
 }
@@ -59,7 +55,6 @@ impl Error for CommandError {
             Self::Config(source) => Some(source),
             Self::Manifest(source) => Some(source),
             Self::Planning(source) => Some(source),
-            Self::Output(source) => Some(source),
         }
     }
 }
@@ -79,11 +74,5 @@ impl From<ManifestError> for CommandError {
 impl From<PlanningError> for CommandError {
     fn from(source: PlanningError) -> Self {
         Self::Planning(source)
-    }
-}
-
-impl From<io::Error> for CommandError {
-    fn from(source: io::Error) -> Self {
-        Self::Output(source)
     }
 }

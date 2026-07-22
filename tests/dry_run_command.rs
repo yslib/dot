@@ -52,12 +52,13 @@ fn dry_run_prints_the_resolved_plan_without_executing_or_inspecting() {
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("target: current"), "{stdout}");
-    assert!(stdout.contains("providers:\n  system"), "{stdout}");
-    assert!(stdout.contains("packages: [\"alpha\"]"), "{stdout}");
-    assert!(stdout.contains("manual packages:\n  manual"), "{stdout}");
-    assert!(stdout.contains("actions:\n  configure"), "{stdout}");
-    assert!(stdout.contains("links:\n  missing:"), "{stdout}");
+    assert!(stdout.contains("dot dry-run · target=current"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ system"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ alpha"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ manual"), "{stdout}");
+    assert!(stdout.contains("│ action   ┆ configure"), "{stdout}");
+    assert!(stdout.contains("│ link     ┆ missing"), "{stdout}");
+    assert!(stdout.contains("PLANNED · 5 items"), "{stdout}");
     assert!(!stdout.contains("Dispatch {"), "{stdout}");
 }
 
@@ -81,8 +82,11 @@ fn dry_run_selects_against_the_injected_platform() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr:\n{stderr}",);
-    assert!(stdout.contains("target: simulated"), "{stdout}");
-    assert!(stdout.contains("platform: windows/x86_64"), "{stdout}");
+    assert!(
+        stdout.contains("dot dry-run · target=simulated"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("platform=windows/x86_64"), "{stdout}");
     assert!(stderr.contains("warning"), "{stderr}");
     assert!(stderr.contains("XDG paths"), "{stderr}");
     assert!(stderr.contains("host"), "{stderr}");

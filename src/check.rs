@@ -9,21 +9,17 @@ use crate::interpolation::{
     DotPaths, InterpolationError, ResolveContext, XdgPaths, resolve_environment_patch,
     resolve_exec_action,
 };
-use crate::schema::{Entries, Provider};
+use crate::platform::PlatformInfo;
+use crate::report::{
+    CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus, ProviderItem, ReportCommand,
+    ReportContext, ReportItem, ReportStatus, ReportSubject,
+};
+use crate::schema::{Entries, OneOrMany, Provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderReadiness {
     Ready,
     NotReady,
-}
-
-impl fmt::Display for ProviderReadiness {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ready => formatter.write_str("READY"),
-            Self::NotReady => formatter.write_str("NOT_READY"),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -70,49 +66,85 @@ impl ProviderCheckReport {
     }
 }
 
-impl fmt::Display for ProviderCheckReport {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.results.is_empty() {
-            return formatter.write_str("No providers.");
-        }
-
-        for (index, result) in self.results.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("\n")?;
+pub fn build_report(
+    config: &std::path::Path,
+    target: &str,
+    profile: Option<&str>,
+    platform: &PlatformInfo,
+    providers: &Entries<Provider>,
+    checks: &ProviderCheckReport,
+) -> CommandReport {
+    let items = checks
+        .results()
+        .iter()
+        .map(|result| {
+            let provider = providers
+                .get(result.provider())
+                .expect("provider check results must originate from the effective providers");
+            ReportItem {
+                id: result.provider().to_owned(),
+                status: match result.readiness() {
+                    ProviderReadiness::Ready => ItemStatus::Ready,
+                    ProviderReadiness::NotReady => ItemStatus::NotReady,
+                },
+                subject: ReportSubject::Provider(ProviderItem {
+                    probe: CommandInfo::from(&provider.probe),
+                    ensure: provider.ensure.as_ref().map(commands).unwrap_or_default(),
+                    has_activation: provider.activate.is_some(),
+                }),
+                evidence: vec![check_evidence(result)],
             }
+        })
+        .collect();
 
-            write!(formatter, "{} {}", result.readiness(), result.provider())?;
-            match &result.outcome {
-                Ok(output) => {
-                    match output.code() {
-                        Some(code) => write!(formatter, " (exit {code})")?,
-                        None => formatter.write_str(" (no exit code)")?,
-                    }
-                    write_captured_output(formatter, "stdout", output.stdout())?;
-                    write_captured_output(formatter, "stderr", output.stderr())?;
-                }
-                Err(error) => write!(formatter, "\n  error: {error}")?,
-            }
-        }
-
-        Ok(())
+    CommandReport {
+        command: ReportCommand::CheckProviders,
+        context: ReportContext {
+            config: config.to_owned(),
+            target: target.to_owned(),
+            profile: profile.map(str::to_owned),
+            platform: platform.clone(),
+        },
+        status: if checks.all_ready() {
+            ReportStatus::Succeeded
+        } else {
+            ReportStatus::Failed
+        },
+        items,
+        diagnostics: Vec::new(),
     }
 }
 
-fn write_captured_output(
-    formatter: &mut fmt::Formatter<'_>,
-    label: &str,
-    output: Option<&[u8]>,
-) -> fmt::Result {
-    let Some(output) = output.filter(|output| !output.is_empty()) else {
-        return Ok(());
-    };
-
-    write!(formatter, "\n  {label}:")?;
-    for line in String::from_utf8_lossy(output).lines() {
-        write!(formatter, "\n    {line}")?;
+fn commands(actions: &OneOrMany<crate::schema::ExecAction>) -> Vec<CommandInfo> {
+    match actions {
+        OneOrMany::One(action) => vec![CommandInfo::from(action)],
+        OneOrMany::Many(actions) => actions.iter().map(CommandInfo::from).collect(),
     }
-    Ok(())
+}
+
+fn check_evidence(result: &ProviderCheckResult) -> Evidence {
+    match &result.outcome {
+        Ok(output) => Evidence {
+            stage: EvidenceStage::Probe,
+            exit_code: output.code(),
+            message: None,
+            stdout: captured_text(output.stdout()),
+            stderr: captured_text(output.stderr()),
+        },
+        Err(error) => Evidence {
+            stage: EvidenceStage::Probe,
+            exit_code: None,
+            message: Some(error.to_string()),
+            stdout: None,
+            stderr: None,
+        },
+    }
+}
+
+fn captured_text(output: Option<&[u8]>) -> Option<String> {
+    output
+        .filter(|output| !output.is_empty())
+        .map(|output| String::from_utf8_lossy(output).into_owned())
 }
 
 #[derive(Debug)]

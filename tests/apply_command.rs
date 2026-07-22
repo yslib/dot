@@ -111,13 +111,17 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
         fs::canonicalize(workspace.path("linked.txt")).expect("link should resolve"),
         fs::canonicalize(source).expect("source should resolve")
     );
-    assert!(stdout.contains("target: current"), "{stdout}");
-    assert!(stdout.contains("READY ready (already ready)"), "{stdout}");
-    assert!(stdout.contains("OK ready [\"tool\"]"), "{stdout}");
-    assert!(stdout.contains("OK manual-tool (executed)"), "{stdout}");
-    assert!(stdout.contains("OK configure (executed)"), "{stdout}");
-    assert!(stdout.contains("CREATED config"), "{stdout}");
-    assert!(stdout.contains("result: SUCCESS"), "{stdout}");
+    assert!(stdout.contains("dot apply · target=current"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ ready"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ tool"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ manual-tool"), "{stdout}");
+    assert!(stdout.contains("│ action   ┆ configure"), "{stdout}");
+    assert!(stdout.contains("│ link     ┆ config"), "{stdout}");
+    assert!(stdout.contains("READY"), "{stdout}");
+    assert!(stdout.contains("INSTALLED"), "{stdout}");
+    assert!(stdout.contains("EXECUTED"), "{stdout}");
+    assert!(stdout.contains("CREATED"), "{stdout}");
+    assert!(stdout.contains("SUCCESS · 5 items"), "{stdout}");
 }
 
 #[test]
@@ -159,19 +163,22 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
         fs::canonicalize(workspace.path("linked.txt")).expect("working link should resolve"),
         fs::canonicalize(source).expect("source should resolve")
     );
-    assert!(stdout.contains("NOT_READY a-missing:"), "{stdout}");
-    assert!(
-        stdout.contains("NOT_RUN a-missing [\"blocked-tool\"]: provider unavailable"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("OK b-ready [\"working-tool\"]"), "{stdout}");
-    assert!(stdout.contains("FAILED manual-fail:"), "{stdout}");
-    assert!(stdout.contains("OK manual-ok (executed)"), "{stdout}");
-    assert!(stdout.contains("FAILED action-fail:"), "{stdout}");
-    assert!(stdout.contains("OK action-ok (executed)"), "{stdout}");
-    assert!(stdout.contains("FAILED broken:"), "{stdout}");
-    assert!(stdout.contains("CREATED working"), "{stdout}");
-    assert!(stdout.contains("result: FAILED"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ a-missing"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ blocked-tool"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ working-tool"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ manual-fail"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ manual-ok"), "{stdout}");
+    assert!(stdout.contains("│ action   ┆ action-fail"), "{stdout}");
+    assert!(stdout.contains("│ action   ┆ action-ok"), "{stdout}");
+    assert!(stdout.contains("│ link     ┆ broken"), "{stdout}");
+    assert!(stdout.contains("│ link     ┆ working"), "{stdout}");
+    assert!(stdout.contains("NOT_READY"), "{stdout}");
+    assert!(stdout.contains("BLOCKED"), "{stdout}");
+    assert!(stdout.contains("provider unavailable"), "{stdout}");
+    assert!(stdout.contains("INSTALLED"), "{stdout}");
+    assert!(stdout.contains("EXECUTED"), "{stdout}");
+    assert!(stdout.contains("CREATED"), "{stdout}");
+    assert!(stdout.contains("FAILED · 10 items"), "{stdout}");
 }
 
 #[test]

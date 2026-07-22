@@ -1,12 +1,14 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::io::Write;
 use std::path::Path;
 use std::process;
 
 use dot::action::ExecutionEnvironment;
-use dot::check::{ProviderChecker, ProviderReadiness};
+use dot::check::{ProviderChecker, ProviderReadiness, build_report};
 use dot::interpolation::{DotPaths, XdgPaths};
+use dot::platform::PlatformInfo;
+use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
 use dot::schema::{
     Entries, EnvironmentName, EnvironmentPatch, ExecAction, Provider, ProviderInstallArg,
 };
@@ -79,6 +81,16 @@ fn dot_paths() -> DotPaths<'static> {
     )
 }
 
+fn platform() -> PlatformInfo {
+    PlatformInfo {
+        os: env::consts::OS.to_owned(),
+        arch: env::consts::ARCH.to_owned(),
+        distro: None,
+        distro_families: BTreeSet::new(),
+        environments: BTreeSet::from(["native".to_owned()]),
+    }
+}
+
 #[test]
 fn checks_every_provider_with_its_activated_environment() {
     let providers: Entries<Provider> = BTreeMap::from([
@@ -119,7 +131,7 @@ fn checks_every_provider_with_its_activated_environment() {
 }
 
 #[test]
-fn renders_readiness_exit_code_and_captured_output() {
+fn projects_readiness_and_captured_output_to_structured_evidence() {
     let providers: Entries<Provider> = BTreeMap::from([(
         "system".try_into().expect("test id should be valid"),
         provider("not-ready", "${env:BASE_ROOT}/system"),
@@ -128,13 +140,36 @@ fn renders_readiness_exit_code_and_captured_output() {
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
 
-    let rendered = checker.check(&providers).to_string();
+    let checks = checker.check(&providers);
+    let report = build_report(
+        Path::new("/repo/dot.toml"),
+        "machine",
+        None,
+        &platform(),
+        &providers,
+        &checks,
+    );
 
-    assert!(rendered.contains("NOT_READY system (exit 23)"));
-    assert!(rendered.contains("\n  stdout:"));
-    assert!(rendered.contains("\n    value=/base/system"));
-    assert!(rendered.contains("\n  stderr:"));
-    assert!(rendered.contains("\n    provider is not ready"));
+    assert_eq!(report.command, ReportCommand::CheckProviders);
+    assert_eq!(report.status, ReportStatus::Failed);
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].status, ItemStatus::NotReady);
+    assert_eq!(report.items[0].evidence.len(), 1);
+    let evidence = &report.items[0].evidence[0];
+    assert_eq!(evidence.stage, EvidenceStage::Probe);
+    assert_eq!(evidence.exit_code, Some(23));
+    assert!(
+        evidence
+            .stdout
+            .as_deref()
+            .is_some_and(|stdout| stdout.contains("value=/base/system"))
+    );
+    assert!(
+        evidence
+            .stderr
+            .as_deref()
+            .is_some_and(|stderr| stderr.contains("provider is not ready"))
+    );
 }
 
 #[test]
@@ -169,7 +204,6 @@ fn an_unstartable_probe_does_not_stop_later_providers() {
             .contains("dot-provider-probe-that-must-not-exist")
     );
     assert_eq!(report.results()[1].readiness(), ProviderReadiness::Ready);
-    assert!(report.to_string().contains("NOT_READY a-missing\n  error:"));
 }
 
 #[test]
