@@ -1,0 +1,673 @@
+# dot design (v0.0.1)
+
+The structural configuration schema is defined in SCHEMA.txt. This file
+describes runtime semantics and design boundaries.
+
+
+### product model
+
+dot is a declarative bootstrap runner for personal development environments
+and dotfiles. A user selects one globally named target and, optionally, one
+globally unique inline profile node. The target option may be omitted only when
+the configuration contains exactly one target. dot derives one effective
+manifest and either displays it with --dry-run, probes its providers with
+`check providers`, or applies it.
+
+dot deliberately prefers locally complete declarations over cross-environment
+deduplication. Two targets may repeat the same package, provider, link, or
+action. That repetition expresses that the environments are independently
+understood and maintained.
+
+dot understands only a small set of domain concepts:
+
+- target and platform compatibility;
+- an inline profile inheritance tree;
+- provider-backed and manually installed packages;
+- provider lifecycle and package batching;
+- symbolic-link reconciliation;
+- generic idempotent actions;
+- side-effect-free dry-run rendering;
+- explicit provider-readiness diagnostics.
+
+dot coordinates external providers and user actions, but it is not a package
+manager. It does not access package repositories, resolve dependencies,
+compare versions, select downloads, or implement package installation.
+
+
+### target
+
+A target is a complete base environment declaration.
+
+- Target ids are globally unique within one configuration.
+- The user selects a target by id. If the configuration contains exactly one
+  target, omitting --target selects that sole target.
+- dot never chooses among multiple targets from platform or host facts.
+- A target owns its platform constraint, providers, packages, links, actions,
+  and nested profiles.
+- Selecting a target without a profile uses only the target root declarations.
+- Targets do not inherit from, include, reference, or merge with other targets.
+- Duplicate declarations across targets are intentional and have no semantic
+  relationship.
+
+Examples of independent target ids include arch, macos, and windows.
+
+
+### platform compatibility
+
+The target platform field is a compatibility assertion, not a filter.
+
+- os is required. Known values include windows, macos, and linux.
+- arch, distro, distro_family, and environment are optional refinements.
+- Known environment values include native, wsl, and container.
+- Different fields are combined with AND.
+- Multiple values inside one field are combined with OR.
+- Missing optional fields do not constrain compatibility.
+- A mismatch fails before any action or filesystem mutation occurs.
+- A profile cannot change or weaken its target's platform constraint.
+
+Selecting an incompatible target is an error. It never produces a collection
+of skipped declarations.
+
+Runtime PlatformInfo uses Rust's compiled target `os` and `arch`. On Linux, dot
+reads the first available `/etc/os-release` or `/usr/lib/os-release`: `ID`
+provides distro and the whitespace-separated `ID_LIKE` values provide
+distro_family facts. WSL is detected from its environment variables or kernel
+release, and common container markers provide the container fact. Both facts
+may be present; native is present only when neither WSL nor container is
+detected. Non-Linux platforms currently have no distro or distro_family facts
+and are classified as native.
+
+
+### profile tree
+
+Profiles are nested inline under a target. A profile may contain providers,
+packages, links, actions, and more child profiles. It has no parent reference:
+its lexical TOML parent is its only parent.
+
+This makes every target profile structure a finite tree rather than a graph.
+There is no extends field, cross-target reference, multiple inheritance,
+diamond merge, topological sort, or inheritance-cycle detection.
+
+A profile is selected directly by its id, regardless of its depth in the
+target's inline tree. Every profile id must therefore be unique within one
+target, and an id cannot contain slash. dot finds the selected node and derives
+its unique lexical path from the target root. Selecting no profile means the
+target root. Selecting an unknown profile id is an error before side effects.
+Exactly one profile node may be selected per invocation.
+
+Any existing profile node may be selected; it does not need to be a leaf.
+Sibling profiles are alternatives and do not see one another. A child profile
+inherits every ancestor on its unique root path.
+
+
+### profile merge
+
+dot first constructs one effective manifest entirely in memory. Starting at
+the target root, it overlays each selected profile node from parent to child.
+
+providers, packages, links, and actions are four independent maps keyed by
+their declaration ids. Their merge rule is identical:
+
+- a new id adds one record;
+- an existing id is silently and completely replaced by the deeper record;
+- records are atomic and fields are never recursively merged;
+- replacement does not emit a warning;
+- deletion, disabling, tombstones, and remove lists do not exist.
+
+The deepest declaration on the selected path wins. Ancestor declarations that
+were replaced are not interpolated, executed, or displayed by dry-run.
+Unselected siblings and descendants do not participate.
+
+The tree should be organized so a declaration lives at the nearest common
+ancestor of every profile that needs it. If two unrelated branches need the
+same declaration but their common ancestor should not contain it, the user
+duplicates that declaration in the two branches. If a child does not want an
+ancestor declaration, the tree is structured incorrectly; dot provides no
+subtractive inheritance operation.
+
+All TOML records must deserialize according to SCHEMA.txt. Semantic validation
+is performed on the final effective manifest after replacement. In particular,
+only effective provider references and interpolations participate in the
+selected invocation.
+
+The effective manifest is an internal value shared by dry-run, provider check,
+and apply. It is not a persistent receipt, a public serialization format, or a
+separate user-facing IR.
+
+
+### package
+
+A package is one named tool-installation intent within the effective manifest.
+There is no cross-target or cross-profile package identity.
+
+A package has exactly one of two forms:
+
+provider package:
+
+- Declares exactly one provider id.
+- The package table key is the exact package name passed to that provider.
+- Names that are not valid TOML bare keys can use quoted keys.
+- provider_args is an optional ordered list of literal argv elements passed to
+  the provider install action. Its default is an empty list.
+- The referenced provider must exist in the final effective provider map.
+- Provider packages are grouped by provider id and their exact provider_args
+  list. Each group is installed as one batch.
+
+manual package:
+
+- Declares one install action and no provider.
+- The package table key is a diagnostic id for the desired tool.
+- check can make the install idempotent; without check, exec runs on every
+  apply.
+- Complex download, architecture selection, checksum, extraction, and layout
+  logic should normally live in an external shell or PowerShell script invoked
+  by the install action.
+
+dot does not create a manual provider. Manual installation is package-specific
+and has no common batching protocol.
+
+A provider package cannot name multiple providers. There is no all-of,
+fallback, winner, preferred source, provider-specific names map, adoption, or
+inactive assignment. If related content needs two installation mechanisms, it
+is represented by two explicit package records.
+
+dot stores no package receipts or installed-state database. Provider install
+commands must tolerate already installed package names. Manual packages rely
+on their declared check or on an idempotent exec implementation.
+
+
+### provider
+
+A provider is a reusable installation capability inside one target/profile
+tree, such as pacman, paru, apt, brew, scoop, npm, or cargo. Provider ids are
+resolved only from the final effective provider map.
+
+A profile may add or completely replace a provider. This allows a specialized
+profile to introduce a capability without making it part of sibling profiles.
+Every effective provider is eagerly activated, probed, and ensured before any
+provider package batch is installed, even when that provider has no packages.
+Provider install is not called for an empty batch.
+
+
+### provider lifecycle
+
+activate:
+
+- Is a pure environment patch for child processes started by the current dot
+  process.
+- Does not persistently edit the user's shell environment.
+
+probe:
+
+- Takes no package input.
+- Exit code 0 means the provider is ready.
+- A non-zero exit or a failure to start the probe may be repaired by ensure.
+- A failure while preparing the probe or applying activate is a provider error
+  and does not run ensure.
+
+ensure:
+
+- Takes no package input.
+- Runs only when the initial probe fails in an ensureable way.
+- Is optional. A failed probe with no ensure makes the provider unavailable.
+- A list runs in declaration order and stops at the first non-zero exit.
+- If one ensure action or the complete ensure list succeeds, dot reapplies
+  activate and probes once more.
+- The provider is ready only when the second probe succeeds.
+
+install:
+
+- Receives one package-name batch and the provider_args shared by that batch.
+- Runs once for every non-empty `(provider id, provider_args)` group. One
+  provider can therefore execute multiple install batches after being
+  activated, probed, and ensured only once.
+- Exit code 0 succeeds every package in the batch.
+- A non-zero exit fails every package in the batch. dot does not infer partial
+  success or retry individual names.
+- The declared command owns idempotency for packages already installed.
+
+
+### provider dependency boundary
+
+- Providers are top-level bootstrap capabilities within the effective
+  manifest.
+- dot does not build or resolve dependencies between providers.
+- ensure cannot reference another provider as a semantic dependency.
+- An ensure command may invoke arbitrary programs, but their availability is
+  part of that provider's bootstrap contract.
+- dot does not reorder providers to satisfy undeclared dependencies.
+- One provider failure does not prevent unrelated providers from being
+  processed.
+
+
+### provider environment
+
+- Environment paths and values support built-in interpolation.
+- dot does not refresh Windows User or Machine PATH from the registry after
+  ensure. A provider must declare enough activate.path_prepend information for
+  its newly installed program to be found by the current dot process.
+- On Unix, dot does not source .profile, .bashrc, .zshrc, or other shell files.
+- An exec action may declare its own environment patch.
+- The effective child environment is built in this order: current dot process
+  environment, provider activate patch when applicable, then exec-action patch.
+- An action variable overrides a provider variable with the same name.
+- Action path_prepend entries precede provider PATH entries. path_append
+  entries are placed at the end of the effective PATH.
+- Global and manual-package actions have no implicit provider environment.
+
+
+### exec action
+
+Exec is the generic process action. Package-manager-specific and installer-
+specific knowledge remains in TOML or external scripts rather than Rust code.
+
+- program and args are executed directly without an implicit shell.
+- Pipes, redirects, &&, shell expansion, and shell quoting are not interpreted.
+- Shell behavior must be requested explicitly by running bash, pwsh, or another
+  interpreter and supplying its command arguments.
+- Exit code 0 means success unless a containing operation defines a more
+  specific meaning.
+- Probe and check commands use captured stdout and stderr. Provider ensure and
+  install, action exec, and manual-package exec inherit the terminal streams so
+  the user sees interactive output as it happens.
+- Captured output may be stored as report evidence, but the table renderer does
+  not dump it verbatim and it is not a v0.0.1 output contract.
+
+
+### action lifecycle
+
+The same action structure is used by global actions and manual-package install.
+
+- check is optional. Without check, exec runs on every apply.
+- A check exit code of 0 means the desired state is already satisfied, so exec
+  is skipped.
+- A check exit code of 1 means the desired state is not satisfied. dot runs
+  exec and then checks once more.
+- Any other check exit code means check failed.
+- If the post-exec check does not return 0, the action fails even when exec
+  returned 0.
+- dot owns only this control behavior. The user owns check correctness and
+  action idempotency.
+- No action state is persisted.
+
+Global actions run after package installation. They have no dependency graph
+or semantic execution order and must not rely on another global action running
+first. A global-action failure does not stop unrelated actions.
+
+A manual-package action follows the same lifecycle but its result is reported
+as that package's result.
+
+
+### links
+
+Each effective link record is one native symbolic-link intent from source to
+target. Link ids are used for map replacement, diagnostics, and result
+reporting. They are not referenced by other declarations.
+
+- A relative source is resolved against the directory containing the loaded
+  configuration file. An absolute source is used as declared.
+- target must resolve to an absolute path.
+- During apply, source must exist and be a regular file or directory.
+- v0.0.1 creates native symbolic links only. It does not fall back to hard
+  links, directory junctions, copies, or shell commands.
+- The implementation determines whether source is a file or directory and uses
+  the corresponding native Windows link operation.
+
+on_conflict controls an existing target that is not already the desired link:
+
+- The default is replace-link.
+- error fails for an incorrect symbolic link.
+- replace-link replaces an incorrect or broken symbolic link.
+- A regular file or directory always fails. Neither policy replaces ordinary
+  user data.
+
+on_missing_parent controls an absent target parent directory:
+
+- The default is create, which recursively creates the parent.
+- skip treats the link as currently inapplicable and performs no mutation.
+
+The two policies are independent. A link already resolving to the desired
+source is satisfied. After creation or replacement, dot reads the link back and
+verifies the relationship.
+
+Path identity is based on normalized native paths rather than raw strings:
+
+- source is made absolute and canonicalized after existence is verified;
+- target is made absolute, its nearest existing ancestor is canonicalized, and
+  a nonexistent suffix is appended using lexical normalization;
+- the final target component is not followed while inspecting an existing link;
+- a relative destination stored in a link is resolved against the target's
+  parent;
+- Windows separator and case equivalence are respected.
+
+All effective link paths are resolved before link mutation starts. Two links
+that resolve to the same target are a declaration conflict and prevent the
+link phase from starting. Other link failures are isolated but contribute to
+the final non-zero result.
+
+The filesystem is authoritative. dot stores no persistent link state. Removing
+a link declaration does not remove an existing link. v0.0.1 has no unlink,
+garbage collection, or link query operation.
+
+
+### interpolation
+
+Interpolation uses an OmegaConf-like resolver surface:
+
+${resolver:payload}
+
+The parser treats resolver and payload generically. Resolver names are not
+matched ad hoc by schema fields or execution stages. Every built-in resolver is
+declared once in a closed, static registry using the same definition shape:
+
+- a fixed name;
+- its scalar or string-list output kind;
+- the contexts in which it is available;
+- a pure payload-validation function;
+- a resolution function that reads an explicit resolve context.
+
+Parsing produces a generic resolver call. Validation and evaluation both look
+up that call in the same registry, so resolver-name dispatch is not duplicated
+and payload validation stays attached to the resolver definition. Unknown
+names fail lookup. Adding a resolver is an internal Rust change that requires
+one complete static definition and tests.
+
+The registry is an implementation framework, not a configuration extension
+point. Users cannot register resolvers from TOML, scripts, plugins, environment
+variables, or command-line arguments. v0.0.1 does not use a mutable global
+registry, dynamic loading, or trait-object plugins.
+
+v0.0.1 statically defines only these resolver calls:
+
+- ${env:NAME}: read NAME from the current effective environment;
+- ${package:names}: the complete package-name batch for a provider install;
+- ${package:provider_args}: the provider argument list shared by that batch;
+- ${dot:config}: absolute path of the loaded TOML file;
+- ${dot:config_dir}: directory containing the TOML file;
+- ${dot:cwd}: working directory from which dot was started;
+- ${xdg:home}: the current user's home directory;
+- ${xdg:config} and ${xdg:config_local}: the standard configuration directory
+  and its local/non-roaming counterpart;
+- ${xdg:data} and ${xdg:data_local}: the standard data directory and its
+  local/non-roaming counterpart;
+- ${xdg:cache}, ${xdg:state}, ${xdg:runtime}, and ${xdg:executable}: the
+  corresponding standard user directories when the current platform defines
+  them;
+- ${xdg:documents}: the current user's Documents directory when available.
+
+The `dot` resolver describes this invocation of dot. The `xdg` resolver is the
+portable configuration vocabulary for standard user directories: it follows
+XDG base and user directories on Linux and their platform-standard equivalents
+on Windows and macOS. An `xdg` value that the current platform does not define
+is an error when resolved; dot does not invent a fallback path.
+
+Resolver availability is contextual:
+
+- links, global actions, manual-package actions, provider activate, probe, and
+  ensure can use env, dot, and xdg;
+- provider install can use env, dot, xdg, package:names, and
+  package:provider_args.
+
+Resolution receives an explicit context containing the current effective
+child environment, dot invocation paths, a snapshot of standard user
+directories, and an optional provider-package batch.
+Environment patches are resolved against the effective environment that exists
+immediately before that patch is applied. Later stages therefore observe
+successful provider activation changes without introducing implicit global
+environment mutation.
+
+package:names and package:provider_args are string lists. Each resolver must
+occupy one complete args element, and dot expands it to zero or more argv
+elements. package:provider_args preserves declaration order; an omitted field
+expands to zero elements. If any package assigned to a provider has non-empty
+provider_args, that provider's install action must contain exactly one
+${package:provider_args} element. provider_args values are literal: v0.0.1
+does not interpolate their contents, and interpolation syntax in them is an
+error. Scalar interpolation may be a complete string or part of a larger
+string. A list value cannot be embedded inside another string.
+
+Profile merging happens before interpolation. Replaced declarations and nodes
+outside the selected path do not resolve interpolation. Missing environment
+variables, unknown resolvers, unsupported payloads, and resolvers used in an
+invalid context are errors; values never silently become an empty string.
+
+v0.0.1 intentionally omits resolver defaults, nested interpolation,
+configuration-node references, user-defined resolvers, expressions, automatic
+type conversion, and caching. Shell substitution such as $() and backticks has
+no implicit meaning, and resolved values are never reinterpreted by a shell.
+
+
+### execution plan and dry-run
+
+After target and profile selection, dot resolves the effective manifest into
+one internal ExecutionPlan. The plan is the single source of truth shared by
+real execution and dry-run. It contains the resolved providers,
+provider-package batches, manual packages, global actions, and links needed by
+the executor. There is no separate DryRunPlan.
+
+ExecutionPlan is an internal Rust data model, not a serialized configuration
+format or public compatibility boundary. Runtime observations such as probe or
+check results, provider readiness, and filesystem state are execution state and
+are not stored in the plan.
+
+Dry-run projects the ExecutionPlan into a presentation-independent
+CommandReport. This is a report view, not another executable plan: it may omit,
+regroup, or explain plan fields according to dry-run's human-facing purpose.
+Real execution interprets the same plan, records runtime outcomes, and then
+builds an apply CommandReport from the plan and those outcomes.
+
+Dry-run selects and validates exactly the same effective manifest used by real
+execution, constructs the same ExecutionPlan, then renders it without invoking
+the executor. This is a permanent command contract: --dry-run never executes
+an exec_action and never reconciles or inspects runtime resource state.
+
+For an invocation conceptually equivalent to:
+
+dot --target arch-personal --profile work --dry-run
+
+dry-run performs only these operations:
+
+1. Parse the configuration.
+2. Select the globally named target.
+3. Detect the current platform and validate target compatibility.
+4. Resolve the requested inline profile node and its ancestor path.
+5. Overlay target and profile nodes from root to the selected node.
+6. Validate the final effective manifest.
+7. Group provider packages by provider id and provider_args, resolve
+   non-executing interpolation, and construct the internal ExecutionPlan.
+8. Project that plan into one logical report item per provider, package, global
+   action, and link, then render the report.
+
+For each provider, dry-run resolves and applies activate only to an in-memory
+child environment, then uses that environment to resolve the provider's probe,
+ensure, and install batches. This is ordinary data transformation and does not
+start a process or modify the parent process environment. Global and manual
+actions resolve against the captured dot process environment and do not inherit
+an implicit provider environment.
+
+Provider install commands are fully resolved once per non-empty package batch,
+including list-valued package interpolation, even though batching remains an
+internal execution detail. The current report shows one row per package with
+its provider and provider_args rather than one row per batch. Manual and global
+actions retain resolved program/argument data in the report. Relative link
+sources are joined to the configuration directory and link targets must resolve
+to absolute paths, but dry-run does not test path existence, canonicalize paths,
+inspect conflicts, or create links.
+
+Dry-run omits replaced ancestors, unselected siblings, descendants outside the
+path, and any notion of skipped declarations. It does not run provider probe,
+ensure, or install; manual-package checks or installs; global-action checks or
+exec; or link reconciliation. It does not inspect provider availability,
+installed packages, or current link/filesystem state.
+
+The output describes selected intent, not runtime outcome. A listed provider
+may be missing, a package may already be installed, an action check may skip
+exec, and a listed link may already be satisfied or may fail during apply.
+
+Reading the configuration, command-line arguments, platform facts, environment
+variables, and built-in path context is permitted. These observations do not
+modify managed state. The internal ExecutionPlan, CommandReport, and current
+table formatting are not stable machine-readable or serialization contracts.
+
+
+### provider check
+
+Provider check is a separate, explicitly active diagnostic command:
+
+dot check providers --target arch --profile laptop
+
+It is intended for developing and debugging provider declarations against the
+current environment. Unlike --dry-run, it executes external probe commands and
+therefore cannot guarantee freedom from side effects. The configuration author
+owns the observational behavior of every probe.
+
+Provider check performs these operations:
+
+1. Parse the configuration.
+2. Select the globally named target.
+3. Detect the current platform and validate target compatibility.
+4. Resolve the requested inline profile node and its ancestor path.
+5. Overlay target and profile nodes from root to the selected node.
+6. Validate the final effective manifest.
+7. Resolve only the interpolation needed by each effective provider's activate
+   and probe, then build its child environment by applying activate to the
+   current dot process environment.
+8. Execute every effective provider's probe once.
+9. Build one report item per provider and render its readiness. Exit codes and
+   captured stdout/stderr remain structured evidence; the current table shows a
+   compact message or exit code rather than dumping captured streams.
+
+Every effective provider is checked, including a provider with no assigned
+packages. A failed or unstartable probe does not stop unrelated providers from
+being checked.
+
+The result model has two readiness states:
+
+- READY: probe exits with code 0;
+- NOT_READY: probe exits non-zero or cannot be started.
+
+If no effective providers exist, provider check reports an empty result and
+exits 0. Otherwise it exits 0 only when every provider is READY and exits
+non-zero when any provider is NOT_READY. Process-start errors retain their
+diagnostics even though they map to NOT_READY.
+
+Provider check does not run provider ensure or install, refresh environment
+state after an ensure, group or inspect packages, run manual-package or global
+action check/exec, or inspect/reconcile links. v0.0.1 defines no link,
+action, package, or aggregate check command.
+
+
+### command surface
+
+The v0.0.1 command surface is intentionally small:
+
+- `dot` applies the selected target/profile;
+- `dot --dry-run` plans the same selection without executing the plan;
+- `dot check providers` probes the effective providers without ensuring them;
+- `--config PATH` selects the configuration and defaults to `dot.toml` in the
+  invocation directory;
+- `--target TARGET` is optional only for a configuration with exactly one
+  target;
+- `--profile PROFILE` selects one globally unique node name inside the target.
+
+`--dry-run` is an option on the default apply operation, not a check mode, and
+cannot be combined with `check providers`.
+
+Development builds may enable the `dev-platform-override` feature. Its
+`--platform` inline TOML argument overrides PlatformInfo only for target
+selection by dry-run and provider check; commands, environment, XDG paths, and
+filesystem observations still come from the host. Apply ignores the override
+and always detects the host platform. Each case prints a warning so simulated
+platform facts cannot be mistaken for full platform emulation.
+
+
+### command reports and rendering
+
+Every successfully constructed command result is represented in memory by one
+CommandReport before presentation. It contains:
+
+- the command kind: dry-run, apply, or check providers;
+- context: absolute config path, target, optional profile, and PlatformInfo;
+- overall status: PLANNED, SUCCESS, or FAILED;
+- one logical item per effective provider, package, action, or link;
+- per-item typed subject data, status, and zero or more evidence records;
+- command-level diagnostics.
+
+Evidence identifies an execution stage and may carry an exit code, message, or
+captured stdout/stderr. Apply item statuses distinguish READY, INSTALLED,
+SATISFIED, EXECUTED, CREATED, REPLACED, SKIPPED, NOT_READY, BLOCKED, and FAILED.
+Dry-run items are PLANNED. Provider batches remain internal: all packages in a
+batch receive the same batch outcome but are separate report items.
+
+The current renderer writes a human-readable table with TYPE, ITEM, VIA, STATUS,
+and DETAIL columns followed by aggregate counts. It colors status cells only
+when stdout is a terminal. Child commands using inherited I/O may write before
+the final apply table.
+
+Configuration loading, selection, compatibility, and planning failures happen
+before a CommandReport can be constructed. They are written directly to stderr
+and exit non-zero. A constructed report controls the process exit status:
+PLANNED and SUCCESS exit zero, while FAILED exits non-zero.
+
+CommandReport separates result content from presentation so another renderer
+can be added later. Version 0.0.1 provides only the table renderer: it has no
+`--json` option and neither the Rust report shape nor table text is a stable
+public data contract.
+
+
+### apply pipeline
+
+1. Parse all TOML records structurally.
+2. Select one globally named target, using the sole target when --target is
+   omitted and exactly one exists.
+3. Detect the platform and fail if it violates target.platform.
+4. Resolve zero or one globally unique profile node inside that target and
+   derive its ancestor path.
+5. Overlay providers, packages, links, and actions from root to the selected
+   profile, replacing whole records by id.
+6. Validate and interpolate the effective declarations, group provider packages
+   by provider id and exact provider_args, and construct ExecutionPlan.
+7. For each effective provider, apply activate and probe it; when the failure is
+   ensureable, run its ensure list, reapply activate, and probe once more.
+8. Run each ready provider's install once for every non-empty argument group.
+   Packages assigned to an unavailable provider are reported as BLOCKED.
+9. Apply every manual-package install action.
+10. Apply every effective global action.
+11. Preflight and reconcile every effective link.
+12. Build and render a complete CommandReport. Persist no package, action, or
+    link state.
+
+An individual runtime failure does not stop unrelated work. The final process
+exits non-zero when any effective provider cannot be ensured, any provider
+batch fails, any manual package fails, any global action fails, or any link
+fails.
+
+
+### explicit non-goals for v0.0.1
+
+- Automatic target selection from platform facts or environment-quality
+  detection. The sole-target convenience rule is the only implicit selection.
+- Cross-target inheritance, includes, imports, templates, or shared manifests.
+- Profile references, multiple inheritance, graph inheritance, or selecting
+  multiple profile branches in one invocation.
+- Field-level merge, deletion, disabling, tombstones, or removal from inherited
+  declarations.
+- Per-item when predicates or a general-purpose condition language.
+- Cross-target package identity, provider lists, all-of, fallback, priority, or
+  provider-specific package-name maps.
+- Package dependency resolution, repository access, search, versions, updates,
+  uninstall, or installed-state detection.
+- Download, GitHub-release selection, checksum, archive, extraction, or build
+  logic implemented by dot.
+- Persistent receipts or other managed-state databases.
+- Provider dependency resolution.
+- Named provider variants, provider-specific parameter schemas, or parameter
+  transforms. provider_args is only an ordered list of literal argv values.
+- Recovery or per-package retry after partial provider-batch failure.
+- A general-purpose interpolation or expression language.
+- Implicit shell execution.
+- Dry-run simulation of external commands or filesystem mutations.
+- Link, action, package, or aggregate readiness checks.
+- Link removal, garbage collection, hard links, directory junctions, copies,
+  or link fallback strategies.
+- Action dependency DAGs, action ordering, or service management.

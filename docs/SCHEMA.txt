@@ -1,0 +1,221 @@
+# dot configuration schema (v0.0.1)
+
+This file contains structural schema definitions and field-level string
+capabilities. Runtime evaluation semantics remain in DESIGN.txt.
+
+
+### notation
+
+!type                   built-in primitive type
+#type                   custom type defined in this file
+#type<A>                custom type parameterized by A
+field?                  optional field
+A | B                   either A or B
+[A]                     a list of A
+{ <id>: A }             a table keyed by a unique id
+{ <id: K>: A }          a table whose keys have type K
+"literal"               a fixed literal value
+
+
+### primitive types
+
+!string
+
+
+### identifier
+
+!string
+
+An identifier is a non-empty table key or reference value. It does not accept
+interpolation and must not contain `${`. Profile identifiers must be globally
+unique inside one target. The profile name accepted by the CLI additionally
+cannot contain `/`; profile declarations should follow the same restriction so
+that every node remains selectable by name.
+
+
+### environment_name
+
+!string
+
+An environment name is non-empty, does not accept interpolation, and must not
+contain `=` or `${`.
+
+
+### literal_string
+
+!string
+
+A literal string does not accept resolvers. An unescaped `${` is a validation
+error. `\${` represents a literal `${`, following the OmegaConf surface syntax.
+
+
+### scalar_template
+
+!string
+
+A scalar template is a sequence of literal fragments and zero or more scalar
+resolver references. v0.0.1 accepts only:
+
+- `${env:NAME}`;
+- `${dot:config}`;
+- `${dot:config_dir}`;
+- `${dot:cwd}`;
+- `${xdg:home}`;
+- `${xdg:config}`;
+- `${xdg:config_local}`;
+- `${xdg:data}`;
+- `${xdg:data_local}`;
+- `${xdg:cache}`;
+- `${xdg:state}`;
+- `${xdg:runtime}`;
+- `${xdg:executable}`;
+- `${xdg:documents}`.
+
+Scalar resolver references may occupy the complete string or be embedded in
+literal text. `\${` represents a literal `${`. Node references, nested
+interpolation, resolver argument lists, defaults, expressions, and unknown
+resolvers are invalid.
+
+
+### provider_install_arg
+
+#scalar_template | "${package:names}" | "${package:provider_args}"
+
+The two package resolvers are list-valued. Each must occupy one complete args
+element and cannot be embedded in another string. An escaped package resolver
+is a scalar literal rather than a list expansion.
+
+
+### interpolation validation
+
+Identifiers and environment names are validated during TOML deserialization.
+After a target and optional profile are selected and merged, apply and dry-run
+validate and resolve every effective literal/template string while constructing
+the execution plan. `check providers` deliberately consumes only provider
+activate and probe fields, so unrelated package, action, and link strings are
+not validated by that command. Declarations outside the selected profile path
+and declarations replaced by a deeper profile do not participate.
+
+All object shapes reject unknown fields. Omitted provider/package/link/action/
+profile maps, exec args, and environment variables deserialize as empty
+collections. Other fields marked with `?` remain absent and receive any runtime
+default described in DESIGN.txt.
+
+
+### root
+
+{
+targets: { <target_id: #identifier>: #target },
+}
+
+
+### target
+
+{
+platform: #platform_constraint,
+providers?: { <provider_id: #identifier>: #provider },
+packages?: { <package_id: #identifier>: #package },
+links?: { <link_id: #identifier>: #link },
+actions?: { <action_id: #identifier>: #action },
+profiles?: { <profile_id: #identifier>: #profile },
+}
+
+
+### profile
+
+{
+providers?: { <provider_id: #identifier>: #provider },
+packages?: { <package_id: #identifier>: #package },
+links?: { <link_id: #identifier>: #link },
+actions?: { <action_id: #identifier>: #action },
+profiles?: { <profile_id: #identifier>: #profile },
+}
+
+
+### platform_constraint
+
+{
+os: #identifier | [#identifier],
+arch?: #identifier | [#identifier],
+distro?: #identifier | [#identifier],
+distro_family?: #identifier | [#identifier],
+environment?: #identifier | [#identifier],
+}
+
+
+### package
+
+#provider_package | #manual_package
+
+
+### provider_package
+
+{
+provider: #identifier,
+provider_args?: [#literal_string],
+}
+
+
+### manual_package
+
+{
+install: #action,
+}
+
+
+### provider
+
+{
+probe: #exec_action<#scalar_template>,
+activate?: #environment_patch,
+ensure?: #exec_action<#scalar_template> | [#exec_action<#scalar_template>],
+install: #exec_action<#provider_install_arg>,
+}
+
+
+### environment_patch
+
+{
+path_prepend?: #scalar_template | [#scalar_template],
+path_append?: #scalar_template | [#scalar_template],
+variables?: { <name: #environment_name>: #scalar_template },
+}
+
+
+### exec_action<A>
+
+{
+type?: "exec",
+program: #scalar_template,
+args?: [A],
+cwd?: #scalar_template,
+env?: #environment_patch,
+}
+
+
+### link
+
+{
+source: #scalar_template,
+target: #scalar_template,
+on_conflict?: #link_conflict,
+on_missing_parent?: #link_missing_parent,
+}
+
+
+### link_conflict
+
+"error" | "replace-link"
+
+
+### link_missing_parent
+
+"create" | "skip"
+
+
+### action
+
+{
+check?: #exec_action<#scalar_template>,
+exec: #exec_action<#scalar_template>,
+}
