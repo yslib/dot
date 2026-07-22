@@ -1,0 +1,19 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.system]
+activate = { path_prepend = ["${dot:config_dir}/missing-bin"] }
+probe = { program = "program-that-must-not-run", args = ["probe"] }
+ensure = { program = "program-that-must-not-run", args = ["ensure"] }
+install = { program = "program-that-must-not-run", args = ["install", "${package:names}"] }
+
+[targets.current.packages]
+alpha = { provider = "system" }
+manual = { install = { exec = { program = "program-that-must-not-run" } } }
+
+[targets.current.actions.configure]
+exec = { program = "program-that-must-not-run" }
+
+[targets.current.links.missing]
+source = "source-that-does-not-exist"
+target = "${dot:config_dir}/target-that-does-not-exist"

@@ -1,9 +1,13 @@
+mod support;
+
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use support::fixture;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
@@ -80,34 +84,12 @@ fn helper_exec(mode: &str) -> String {
 fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     let workspace = TempWorkspace::new();
     let source = workspace.write_source("source.txt");
-    let manifest = workspace.write_manifest(
-        &r#"
-            [targets.current]
-            platform = { os = "__OS__" }
-
-            [targets.current.providers.ready]
-            activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
-            probe = __PROBE__
-            install = __INSTALL__
-
-            [targets.current.packages.tool]
-            provider = "ready"
-
-            [targets.current.packages.manual-tool.install]
-            exec = __MANUAL__
-
-            [targets.current.actions.configure]
-            exec = __ACTION__
-
-            [targets.current.links.config]
-            source = "source.txt"
-            target = "${dot:config_dir}/linked.txt"
-        "#
+    let contents = fixture::read("apply/valid-complete-plan-template.toml")
         .replace("__PROBE__", &helper_exec("probe-ready"))
         .replace("__INSTALL__", &helper_exec("install-ready"))
         .replace("__MANUAL__", &helper_exec("manual-ok"))
-        .replace("__ACTION__", &helper_exec("action-ok")),
-    );
+        .replace("__ACTION__", &helper_exec("action-ok"));
+    let manifest = workspace.write_manifest(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
         .args(["--config"])
@@ -142,47 +124,7 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
 fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
     let workspace = TempWorkspace::new();
     let source = workspace.write_source("source.txt");
-    let manifest = workspace.write_manifest(
-        &r#"
-            [targets.current]
-            platform = { os = "__OS__" }
-
-            [targets.current.providers.a-missing]
-            activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
-            probe = __MISSING_PROBE__
-            install = __UNEXPECTED_INSTALL__
-
-            [targets.current.providers.b-ready]
-            activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
-            probe = __READY_PROBE__
-            install = __READY_INSTALL__
-
-            [targets.current.packages.blocked-tool]
-            provider = "a-missing"
-
-            [targets.current.packages.working-tool]
-            provider = "b-ready"
-
-            [targets.current.packages.manual-fail.install]
-            exec = __MANUAL_FAIL__
-
-            [targets.current.packages.manual-ok.install]
-            exec = __MANUAL_OK__
-
-            [targets.current.actions.action-fail]
-            exec = __ACTION_FAIL__
-
-            [targets.current.actions.action-ok]
-            exec = __ACTION_OK__
-
-            [targets.current.links.broken]
-            source = "missing.txt"
-            target = "${dot:config_dir}/broken.txt"
-
-            [targets.current.links.working]
-            source = "source.txt"
-            target = "${dot:config_dir}/linked.txt"
-        "#
+    let contents = fixture::read("apply/invalid-runtime-items-template.toml")
         .replace("__MISSING_PROBE__", &helper_exec("probe-missing"))
         .replace("__UNEXPECTED_INSTALL__", &helper_exec("install-unexpected"))
         .replace("__READY_PROBE__", &helper_exec("probe-ready"))
@@ -190,8 +132,8 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
         .replace("__MANUAL_FAIL__", &helper_exec("manual-fail"))
         .replace("__MANUAL_OK__", &helper_exec("manual-ok"))
         .replace("__ACTION_FAIL__", &helper_exec("action-fail"))
-        .replace("__ACTION_OK__", &helper_exec("action-ok")),
-    );
+        .replace("__ACTION_OK__", &helper_exec("action-ok"));
+    let manifest = workspace.write_manifest(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
         .args(["--config"])

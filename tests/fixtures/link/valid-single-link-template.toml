@@ -1,0 +1,7 @@
+[targets.machine]
+platform = { os = "__OS__" }
+
+[targets.machine.links.config]
+source = __SOURCE__
+target = __TARGET__
+__OPTIONS__

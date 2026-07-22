@@ -1,0 +1,6 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.links.invalid]
+source = "source"
+target = "relative/target"

@@ -1,0 +1,20 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.ready]
+activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
+probe = __PROBE__
+install = __INSTALL__
+
+[targets.current.packages.tool]
+provider = "ready"
+
+[targets.current.packages.manual-tool.install]
+exec = __MANUAL__
+
+[targets.current.actions.configure]
+exec = __ACTION__
+
+[targets.current.links.config]
+source = "source.txt"
+target = "${dot:config_dir}/linked.txt"

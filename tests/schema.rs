@@ -1,14 +1,16 @@
+mod support;
+
 use dot::schema::{
     Config, EnvironmentName, ExecAction, ExecActionType, Identifier, LinkConflict,
     LinkMissingParent, LiteralString, OneOrMany, Package, ProviderInstallArg, ScalarTemplate,
 };
 
-const REPOSITORY_DOT_TOML: &str = include_str!("fixtures/dot.toml");
+use support::fixture;
 
 #[test]
 fn deserializes_the_repository_dotfile() {
-    let config: Config =
-        toml::from_str(REPOSITORY_DOT_TOML).expect("repository dot.toml should deserialize");
+    let input = fixture::read("dot.toml");
+    let config: Config = toml::from_str(&input).expect("repository dot.toml should deserialize");
 
     assert_eq!(config.targets.len(), 6);
     assert_eq!(config.targets["macos"].providers.len(), 1);
@@ -21,39 +23,9 @@ fn deserializes_the_repository_dotfile() {
 
 #[test]
 fn deserializes_the_complete_schema() {
-    let input = r#"
-        [targets.workstation]
-        platform = { os = ["linux", "macos"], arch = "x86_64", distro = ["arch", "ubuntu"], distro_family = "unix", environment = ["native", "wsl"] }
+    let input = fixture::read("schema/valid-complete.toml");
 
-        [targets.workstation.providers.brew]
-        activate = { path_prepend = ["/opt/homebrew/bin", "/usr/local/bin"], path_append = "/custom/bin", variables = { HOMEBREW_NO_ANALYTICS = "1" } }
-        probe = { program = "brew", args = ["--version"] }
-        ensure = [
-          { program = "bash", args = ["install-brew.sh"], cwd = "/tmp" },
-          { type = "exec", program = "brew", args = ["tap", "example/tools"], env = { variables = { CI = "1" } } },
-        ]
-        install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
-
-        [targets.workstation.packages]
-        ripgrep = { provider = "brew" }
-        app = { provider = "brew", provider_args = ["--cask"] }
-        manual-tool = { install = { check = { program = "/opt/tools/manual-tool", args = ["--version"] }, exec = { program = "bash", args = ["install-manual-tool.sh"] } } }
-
-        [targets.workstation.links]
-        config = { source = "home/config", target = "${env:HOME}/.config/tool", on_conflict = "replace-link", on_missing_parent = "create" }
-
-        [targets.workstation.actions.setup]
-        check = { program = "test", args = ["-e", "/tmp/ready"] }
-        exec = { type = "exec", program = "touch", args = ["/tmp/ready"] }
-
-        [targets.workstation.profiles.desktop.packages]
-        compositor = { provider = "brew" }
-
-        [targets.workstation.profiles.desktop.profiles.laptop.links]
-        power = { source = "home/power", target = "${env:HOME}/.config/power", on_conflict = "error", on_missing_parent = "skip" }
-    "#;
-
-    let config: Config = toml::from_str(input).expect("complete schema should deserialize");
+    let config: Config = toml::from_str(&input).expect("complete schema should deserialize");
     let target = &config.targets["workstation"];
 
     let OneOrMany::Many(operating_systems) = &target.platform.os else {
@@ -105,21 +77,8 @@ fn deserializes_the_complete_schema() {
 
 #[test]
 fn deserializes_strings_into_their_declared_schema_roles() {
-    let config: Config = toml::from_str(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.providers.brew]
-        activate = { variables = { HOMEBREW_PREFIX = "${env:HOME}/.homebrew" } }
-        probe = { program = "brew", args = ["--version"] }
-        install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
-
-        [targets.machine.packages]
-        application = { provider = "brew", provider_args = ["--cask"] }
-        "#,
-    )
-    .expect("schema roles should deserialize");
+    let input = fixture::read("schema/valid-string-roles.toml");
+    let config: Config = toml::from_str(&input).expect("schema roles should deserialize");
 
     let (target_id, target) = config.targets.first_key_value().expect("target exists");
     let _: &Identifier = target_id;
@@ -155,62 +114,35 @@ fn deserializes_strings_into_their_declared_schema_roles() {
 
 #[test]
 fn rejects_invalid_identifiers_while_deserializing() {
-    let input = r#"
-        [targets."${env:TARGET}"]
-        platform = { os = "linux" }
-    "#;
+    let input = fixture::read("schema/invalid-identifier.toml");
 
-    assert!(toml::from_str::<Config>(input).is_err());
+    assert!(toml::from_str::<Config>(&input).is_err());
 }
 
 #[test]
 fn rejects_invalid_environment_names_while_deserializing() {
-    let input = r#"
-        [targets.machine]
-        platform = { os = "linux" }
+    let input = fixture::read("schema/invalid-environment-name.toml");
 
-        [targets.machine.actions.example]
-        exec = { program = "true", env = { variables = { "BAD=NAME" = "value" } } }
-    "#;
-
-    assert!(toml::from_str::<Config>(input).is_err());
+    assert!(toml::from_str::<Config>(&input).is_err());
 }
 
 #[test]
 fn rejects_unknown_fields() {
-    let input = r#"
-        [targets.server]
-        platform = { os = "linux" }
-        typo = "must not be ignored"
-    "#;
+    let input = fixture::read("schema/invalid-unknown-field.toml");
 
-    assert!(toml::from_str::<Config>(input).is_err());
+    assert!(toml::from_str::<Config>(&input).is_err());
 }
 
 #[test]
 fn rejects_invalid_fixed_literals() {
-    let input = r#"
-        [targets.server]
-        platform = { os = "linux" }
+    let input = fixture::read("schema/invalid-fixed-literal.toml");
 
-        [targets.server.links.config]
-        source = "home/config"
-        target = "/tmp/config"
-        on_conflict = "overwrite-file"
-    "#;
-
-    assert!(toml::from_str::<Config>(input).is_err());
+    assert!(toml::from_str::<Config>(&input).is_err());
 }
 
 #[test]
 fn rejects_a_package_with_both_provider_and_manual_install() {
-    let input = r#"
-        [targets.server]
-        platform = { os = "linux" }
+    let input = fixture::read("schema/invalid-mixed-package-install.toml");
 
-        [targets.server.packages]
-        invalid = { provider = "brew", install = { exec = { program = "true" } } }
-    "#;
-
-    assert!(toml::from_str::<Config>(input).is_err());
+    assert!(toml::from_str::<Config>(&input).is_err());
 }

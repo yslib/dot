@@ -1,0 +1,3 @@
+[targets.server]
+platform = { os = "linux" }
+typo = "must not be ignored"

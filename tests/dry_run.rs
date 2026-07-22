@@ -1,3 +1,5 @@
+mod support;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +12,7 @@ use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
 };
+use support::fixture;
 
 #[cfg(not(windows))]
 const TEST_CONFIG: &str = "/repo/dot.toml";
@@ -83,32 +86,16 @@ fn gitconfig_target() -> PathBuf {
     PathBuf::from(format!("{TEST_HOME}/.gitconfig"))
 }
 
-fn select(input: &str) -> EffectiveManifest {
-    let config: Config = toml::from_str(input).expect("test config should deserialize");
+fn select_fixture(name: &str) -> EffectiveManifest {
+    let input = fixture::read(name);
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
     EffectiveManifest::select(&config, &platform(), Some("machine"), None)
         .expect("test manifest should select")
 }
 
 #[test]
 fn groups_provider_packages_and_resolves_each_batch_environment() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.providers.brew]
-        activate = { variables = { BREW = "${env:ROOT}/homebrew/bin/brew" } }
-        probe = { program = "${env:BREW}", args = ["--version"] }
-        ensure = { program = "bootstrap-brew" }
-        install = { program = "${env:BREW}", args = ["install", "${package:provider_args}", "${package:names}"] }
-
-        [targets.machine.packages]
-        alpha = { provider = "brew" }
-        beta = { provider = "brew" }
-        font-one = { provider = "brew", provider_args = ["--cask"] }
-        font-two = { provider = "brew", provider_args = ["--cask"] }
-        "#,
-    );
+    let manifest = select_fixture("dry-run/valid-provider-batches.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -157,19 +144,7 @@ fn groups_provider_packages_and_resolves_each_batch_environment() {
 
 #[test]
 fn nonempty_provider_args_require_one_install_list_resolver() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.providers.brew]
-        probe = { program = "brew", args = ["--version"] }
-        install = { program = "brew", args = ["install", "${package:names}"] }
-
-        [targets.machine.packages]
-        app = { provider = "brew", provider_args = ["--cask"] }
-        "#,
-    );
+    let manifest = select_fixture("dry-run/invalid-provider-args-resolver.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -188,28 +163,7 @@ fn nonempty_provider_args_require_one_install_list_resolver() {
 
 #[test]
 fn resolves_manual_packages_actions_and_links_without_inspection() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.packages.manual-tool]
-        install = {
-          check = { program = "${env:ROOT}/bin/manual-tool", args = ["--version"] },
-          exec = { program = "${env:RUNNER}", args = ["${dot:config_dir}/scripts/install-tool.sh"], cwd = "${dot:config_dir}" }
-        }
-
-        [targets.machine.actions.configure]
-        check = { program = "${env:ROOT}/bin/config-check" }
-        exec = { program = "${env:RUNNER}", args = ["${dot:config_dir}/scripts/configure.sh"] }
-
-        [targets.machine.links.gitconfig]
-        source = "home/.gitconfig"
-        target = "${env:HOME}/.gitconfig"
-        on_conflict = "error"
-        on_missing_parent = "skip"
-        "#,
-    );
+    let manifest = select_fixture("dry-run/valid-manual-actions-links.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -252,28 +206,7 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
 
 #[test]
 fn renders_a_resolved_human_readable_execution_plan() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.providers.system]
-        activate = { path_prepend = ["${env:ROOT}/bin"] }
-        probe = { program = "tool", args = ["--version"] }
-        install = { program = "tool", args = ["install", "${package:names}"] }
-
-        [targets.machine.packages]
-        alpha = { provider = "system" }
-        manual = { install = { exec = { program = "${env:RUNNER}", args = ["install.sh"] } } }
-
-        [targets.machine.actions.configure]
-        exec = { program = "${env:RUNNER}", args = ["configure.sh"] }
-
-        [targets.machine.links.gitconfig]
-        source = "home/.gitconfig"
-        target = "${env:HOME}/.gitconfig"
-        "#,
-    );
+    let manifest = select_fixture("dry-run/valid-human-readable-plan.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -305,15 +238,7 @@ fn renders_a_resolved_human_readable_execution_plan() {
 
 #[test]
 fn rejects_a_package_that_references_an_unknown_effective_provider() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.packages]
-        alpha = { provider = "missing" }
-        "#,
-    );
+    let manifest = select_fixture("dry-run/invalid-unknown-provider.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -332,16 +257,7 @@ fn rejects_a_package_that_references_an_unknown_effective_provider() {
 
 #[test]
 fn rejects_a_link_target_that_is_not_absolute_after_interpolation() {
-    let manifest = select(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.links.invalid]
-        source = "source"
-        target = "relative/target"
-        "#,
-    );
+    let manifest = select_fixture("dry-run/invalid-relative-link-target.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();

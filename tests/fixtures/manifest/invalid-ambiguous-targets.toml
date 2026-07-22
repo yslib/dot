@@ -1,0 +1,5 @@
+[targets.first]
+platform = { os = "linux" }
+
+[targets.second]
+platform = { os = "linux" }

@@ -1,0 +1,7 @@
+[targets.server]
+platform = { os = "linux" }
+
+[targets.server.links.config]
+source = "home/config"
+target = "/tmp/config"
+on_conflict = "overwrite-file"

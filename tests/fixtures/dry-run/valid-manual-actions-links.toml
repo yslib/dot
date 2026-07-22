@@ -1,0 +1,18 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.packages.manual-tool]
+install = {
+  check = { program = "${env:ROOT}/bin/manual-tool", args = ["--version"] },
+  exec = { program = "${env:RUNNER}", args = ["${dot:config_dir}/scripts/install-tool.sh"], cwd = "${dot:config_dir}" }
+}
+
+[targets.machine.actions.configure]
+check = { program = "${env:ROOT}/bin/config-check" }
+exec = { program = "${env:RUNNER}", args = ["${dot:config_dir}/scripts/configure.sh"] }
+
+[targets.machine.links.gitconfig]
+source = "home/.gitconfig"
+target = "${env:HOME}/.gitconfig"
+on_conflict = "error"
+on_missing_parent = "skip"

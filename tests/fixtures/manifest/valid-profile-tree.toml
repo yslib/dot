@@ -1,0 +1,39 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.system]
+probe = { program = "system-probe" }
+install = { program = "system-install" }
+
+[targets.machine.packages]
+base = { provider = "system" }
+replace-me = { provider = "system" }
+
+[targets.machine.links.shared]
+source = "root-source"
+target = "/root-target"
+
+[targets.machine.actions.configure]
+check = { program = "root-check" }
+exec = { program = "root-exec" }
+
+[targets.machine.profiles.desktop.providers.desktop]
+probe = { program = "desktop-probe" }
+install = { program = "desktop-install" }
+
+[targets.machine.profiles.desktop.packages]
+desktop = { provider = "desktop" }
+replace-me = { provider = "desktop" }
+
+[targets.machine.profiles.desktop.links.shared]
+source = "desktop-source"
+target = "/desktop-target"
+
+[targets.machine.profiles.desktop.actions.configure]
+exec = { program = "desktop-exec" }
+
+[targets.machine.profiles.desktop.profiles.laptop.packages]
+laptop = { provider = "desktop" }
+
+[targets.machine.profiles.server.packages]
+server-only = { provider = "system" }

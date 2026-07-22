@@ -1,0 +1,12 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.a-ready]
+activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/ready" } }
+probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "ready" } } }
+install = { program = "unused-install" }
+
+[targets.current.providers.b-not-ready]
+activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/not-ready" } }
+probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "not-ready" } } }
+install = { program = "unused-install" }

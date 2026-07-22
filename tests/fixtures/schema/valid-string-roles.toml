@@ -1,0 +1,10 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.brew]
+activate = { variables = { HOMEBREW_PREFIX = "${env:HOME}/.homebrew" } }
+probe = { program = "brew", args = ["--version"] }
+install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
+
+[targets.machine.packages]
+application = { provider = "brew", provider_args = ["--cask"] }

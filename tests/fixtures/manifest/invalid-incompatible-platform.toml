@@ -1,0 +1,2 @@
+[targets.macos]
+platform = { os = "macos", arch = "aarch64" }

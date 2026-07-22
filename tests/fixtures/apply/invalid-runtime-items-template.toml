@@ -1,0 +1,38 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.a-missing]
+activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
+probe = __MISSING_PROBE__
+install = __UNEXPECTED_INSTALL__
+
+[targets.current.providers.b-ready]
+activate = { variables = { DOT_APPLY_PROVIDER_ACTIVE = "yes" } }
+probe = __READY_PROBE__
+install = __READY_INSTALL__
+
+[targets.current.packages.blocked-tool]
+provider = "a-missing"
+
+[targets.current.packages.working-tool]
+provider = "b-ready"
+
+[targets.current.packages.manual-fail.install]
+exec = __MANUAL_FAIL__
+
+[targets.current.packages.manual-ok.install]
+exec = __MANUAL_OK__
+
+[targets.current.actions.action-fail]
+exec = __ACTION_FAIL__
+
+[targets.current.actions.action-ok]
+exec = __ACTION_OK__
+
+[targets.current.links.broken]
+source = "missing.txt"
+target = "${dot:config_dir}/broken.txt"
+
+[targets.current.links.working]
+source = "source.txt"
+target = "${dot:config_dir}/linked.txt"

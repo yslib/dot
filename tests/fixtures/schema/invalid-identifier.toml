@@ -1,0 +1,2 @@
+[targets."${env:TARGET}"]
+platform = { os = "linux" }

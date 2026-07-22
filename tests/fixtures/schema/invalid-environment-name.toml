@@ -1,0 +1,5 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.actions.example]
+exec = { program = "true", env = { variables = { "BAD=NAME" = "value" } } }

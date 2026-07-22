@@ -1,0 +1,18 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.system]
+activate = { path_prepend = ["${env:ROOT}/bin"] }
+probe = { program = "tool", args = ["--version"] }
+install = { program = "tool", args = ["install", "${package:names}"] }
+
+[targets.machine.packages]
+alpha = { provider = "system" }
+manual = { install = { exec = { program = "${env:RUNNER}", args = ["install.sh"] } } }
+
+[targets.machine.actions.configure]
+exec = { program = "${env:RUNNER}", args = ["configure.sh"] }
+
+[targets.machine.links.gitconfig]
+source = "home/.gitconfig"
+target = "${env:HOME}/.gitconfig"

@@ -1,0 +1,5 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.profiles.desktop.profiles.shared]
+[targets.machine.profiles.server.profiles.shared]

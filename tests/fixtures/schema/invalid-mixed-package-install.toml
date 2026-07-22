@@ -1,0 +1,5 @@
+[targets.server]
+platform = { os = "linux" }
+
+[targets.server.packages]
+invalid = { provider = "brew", install = { exec = { program = "true" } } }

@@ -1,0 +1,10 @@
+[targets.machine]
+platform = { os = "__OS__" }
+
+[targets.machine.links.first]
+source = __FIRST_SOURCE__
+target = __ALIASED_TARGET__
+
+[targets.machine.links.second]
+source = __SECOND_SOURCE__
+target = __TARGET__

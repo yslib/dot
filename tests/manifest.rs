@@ -1,53 +1,15 @@
+mod support;
+
 use std::collections::BTreeSet;
 
 use dot::manifest::{EffectiveManifest, ManifestError};
 use dot::platform::PlatformInfo;
 use dot::schema::{Config, Package};
+use support::fixture;
 
-const PROFILE_CONFIG: &str = r#"
-    [targets.machine]
-    platform = { os = "linux" }
-
-    [targets.machine.providers.system]
-    probe = { program = "system-probe" }
-    install = { program = "system-install" }
-
-    [targets.machine.packages]
-    base = { provider = "system" }
-    replace-me = { provider = "system" }
-
-    [targets.machine.links.shared]
-    source = "root-source"
-    target = "/root-target"
-
-    [targets.machine.actions.configure]
-    check = { program = "root-check" }
-    exec = { program = "root-exec" }
-
-    [targets.machine.profiles.desktop.providers.desktop]
-    probe = { program = "desktop-probe" }
-    install = { program = "desktop-install" }
-
-    [targets.machine.profiles.desktop.packages]
-    desktop = { provider = "desktop" }
-    replace-me = { provider = "desktop" }
-
-    [targets.machine.profiles.desktop.links.shared]
-    source = "desktop-source"
-    target = "/desktop-target"
-
-    [targets.machine.profiles.desktop.actions.configure]
-    exec = { program = "desktop-exec" }
-
-    [targets.machine.profiles.desktop.profiles.laptop.packages]
-    laptop = { provider = "desktop" }
-
-    [targets.machine.profiles.server.packages]
-    server-only = { provider = "system" }
-"#;
-
-fn parse_config(input: &str) -> Config {
-    toml::from_str(input).expect("test config should deserialize")
+fn parse_fixture(name: &str) -> Config {
+    let input = fixture::read(name);
+    toml::from_str(&input).expect("test config should deserialize")
 }
 
 fn platform(os: &str) -> PlatformInfo {
@@ -62,15 +24,7 @@ fn platform(os: &str) -> PlatformInfo {
 
 #[test]
 fn selects_the_only_target_when_no_target_is_requested() {
-    let config = parse_config(
-        r#"
-        [targets.only]
-        platform = { os = "linux" }
-
-        [targets.only.packages]
-        git = { provider = "system" }
-        "#,
-    );
+    let config = parse_fixture("manifest/valid-single-target.toml");
 
     let manifest = EffectiveManifest::select(&config, &platform("linux"), None, None)
         .expect("the only compatible target should be selected");
@@ -82,15 +36,7 @@ fn selects_the_only_target_when_no_target_is_requested() {
 
 #[test]
 fn requires_a_target_when_the_config_contains_multiple_targets() {
-    let config = parse_config(
-        r#"
-        [targets.first]
-        platform = { os = "linux" }
-
-        [targets.second]
-        platform = { os = "linux" }
-        "#,
-    );
+    let config = parse_fixture("manifest/invalid-ambiguous-targets.toml");
 
     let error = EffectiveManifest::select(&config, &platform("linux"), None, None)
         .expect_err("ambiguous target selection should fail");
@@ -105,12 +51,7 @@ fn requires_a_target_when_the_config_contains_multiple_targets() {
 
 #[test]
 fn reports_an_unknown_explicit_target() {
-    let config = parse_config(
-        r#"
-        [targets.known]
-        platform = { os = "linux" }
-        "#,
-    );
+    let config = parse_fixture("manifest/invalid-unknown-target.toml");
 
     let error = EffectiveManifest::select(&config, &platform("linux"), Some("missing"), None)
         .expect_err("unknown target should fail");
@@ -126,12 +67,7 @@ fn reports_an_unknown_explicit_target() {
 
 #[test]
 fn rejects_a_target_that_does_not_match_the_current_platform() {
-    let config = parse_config(
-        r#"
-        [targets.macos]
-        platform = { os = "macos", arch = "aarch64" }
-        "#,
-    );
+    let config = parse_fixture("manifest/invalid-incompatible-platform.toml");
     let actual = platform("linux");
 
     let error = EffectiveManifest::select(&config, &actual, Some("macos"), None)
@@ -153,7 +89,7 @@ fn rejects_a_target_that_does_not_match_the_current_platform() {
 
 #[test]
 fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
-    let config = parse_config(PROFILE_CONFIG);
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
 
     let manifest =
         EffectiveManifest::select(&config, &platform("linux"), Some("machine"), Some("laptop"))
@@ -185,7 +121,7 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
 
 #[test]
 fn selecting_no_profile_uses_only_the_target_root() {
-    let config = parse_config(PROFILE_CONFIG);
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
 
     let manifest = EffectiveManifest::select(&config, &platform("linux"), Some("machine"), None)
         .expect("target root should be a complete selection");
@@ -200,15 +136,7 @@ fn selecting_no_profile_uses_only_the_target_root() {
 
 #[test]
 fn rejects_duplicate_profile_names_anywhere_in_a_target_tree() {
-    let config = parse_config(
-        r#"
-        [targets.machine]
-        platform = { os = "linux" }
-
-        [targets.machine.profiles.desktop.profiles.shared]
-        [targets.machine.profiles.server.profiles.shared]
-        "#,
-    );
+    let config = parse_fixture("manifest/invalid-duplicate-profile-name.toml");
 
     let error =
         EffectiveManifest::select(&config, &platform("linux"), Some("machine"), Some("shared"))
@@ -227,7 +155,7 @@ fn rejects_duplicate_profile_names_anywhere_in_a_target_tree() {
 
 #[test]
 fn reports_an_unknown_profile_with_available_node_names() {
-    let config = parse_config(PROFILE_CONFIG);
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
 
     let error = EffectiveManifest::select(
         &config,

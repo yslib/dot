@@ -1,0 +1,5 @@
+[targets.only]
+platform = { os = "linux" }
+
+[targets.only.packages]
+git = { provider = "system" }

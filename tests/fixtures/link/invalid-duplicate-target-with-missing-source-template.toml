@@ -1,0 +1,10 @@
+[targets.machine]
+platform = { os = "__OS__" }
+
+[targets.machine.links.missing]
+source = __MISSING_SOURCE__
+target = __TARGET__
+
+[targets.machine.links.valid]
+source = __VALID_SOURCE__
+target = __TARGET__

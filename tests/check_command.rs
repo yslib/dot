@@ -1,9 +1,13 @@
+mod support;
+
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use support::fixture;
 
 static NEXT_MANIFEST: AtomicU64 = AtomicU64::new(0);
 
@@ -41,22 +45,9 @@ fn helper_program_toml() -> String {
 }
 
 fn provider_manifest() -> TempManifest {
-    let contents = r#"
-        [targets.current]
-        platform = { os = "__OS__" }
-
-        [targets.current.providers.a-ready]
-        activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/ready" } }
-        probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "ready" } } }
-        install = { program = "unused-install" }
-
-        [targets.current.providers.b-not-ready]
-        activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/not-ready" } }
-        probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "not-ready" } } }
-        install = { program = "unused-install" }
-    "#
-    .replace("__OS__", env::consts::OS)
-    .replace("__PROGRAM__", &helper_program_toml());
+    let contents = fixture::read("check/valid-provider-readiness-template.toml")
+        .replace("__OS__", env::consts::OS)
+        .replace("__PROGRAM__", &helper_program_toml());
     TempManifest::write(&contents)
 }
 
@@ -83,11 +74,8 @@ fn check_providers_runs_the_selected_manifest_and_sets_the_exit_code() {
 
 #[test]
 fn check_providers_reports_an_empty_manifest_as_ready() {
-    let contents = r#"
-        [targets.current]
-        platform = { os = "__OS__" }
-    "#
-    .replace("__OS__", env::consts::OS);
+    let contents =
+        fixture::read("check/valid-no-providers-template.toml").replace("__OS__", env::consts::OS);
     let manifest = TempManifest::write(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
@@ -103,12 +91,8 @@ fn check_providers_reports_an_empty_manifest_as_ready() {
 #[cfg(feature = "dev-platform-override")]
 #[test]
 fn check_providers_selects_against_the_injected_platform() {
-    let manifest = TempManifest::write(
-        r#"
-            [targets.simulated]
-            platform = { os = "windows", arch = "x86_64" }
-        "#,
-    );
+    let contents = fixture::read("check/valid-injected-platform.toml");
+    let manifest = TempManifest::write(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
         .args([

@@ -1,3 +1,5 @@
+mod support;
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +13,7 @@ use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner};
 use dot::platform::PlatformInfo;
 use dot::schema::Config;
+use support::fixture;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
@@ -45,31 +48,28 @@ fn plan_with_link(
     target: &Path,
     options: &str,
 ) -> ExecutionPlan {
-    let declarations = format!(
-        r#"
-        [targets.machine.links.config]
-        source = {}
-        target = {}
-        {}
-        "#,
-        toml_path(source),
-        toml_path(target),
-        options,
-    );
-    plan_with_links(workspace, &declarations)
+    let source = toml_path(source);
+    let target = toml_path(target);
+    plan_fixture(
+        workspace,
+        "link/valid-single-link-template.toml",
+        &[
+            ("__SOURCE__", source.as_str()),
+            ("__TARGET__", target.as_str()),
+            ("__OPTIONS__", options),
+        ],
+    )
 }
 
-fn plan_with_links(workspace: &TempWorkspace, declarations: &str) -> ExecutionPlan {
-    let input = format!(
-        r#"
-        [targets.machine]
-        platform = {{ os = {:?} }}
-
-        {}
-        "#,
-        env::consts::OS,
-        declarations,
-    );
+fn plan_fixture(
+    workspace: &TempWorkspace,
+    name: &str,
+    replacements: &[(&str, &str)],
+) -> ExecutionPlan {
+    let mut input = fixture::read(name).replace("__OS__", env::consts::OS);
+    for (token, value) in replacements {
+        input = input.replace(token, value);
+    }
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = PlatformInfo::detect();
     let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
@@ -314,22 +314,20 @@ fn rejects_duplicate_targets_before_creating_any_link() {
     fs::write(&first_source, "first").expect("first source should be written");
     fs::write(&second_source, "second").expect("second source should be written");
     let aliased_target = workspace.path().join("future/../target.txt");
-    let declarations = format!(
-        r#"
-        [targets.machine.links.first]
-        source = {}
-        target = {}
-
-        [targets.machine.links.second]
-        source = {}
-        target = {}
-        "#,
-        toml_path(&first_source),
-        toml_path(&aliased_target),
-        toml_path(&second_source),
-        toml_path(&target),
+    let first_source_value = toml_path(&first_source);
+    let aliased_target_value = toml_path(&aliased_target);
+    let second_source_value = toml_path(&second_source);
+    let target_value = toml_path(&target);
+    let plan = plan_fixture(
+        &workspace,
+        "link/invalid-duplicate-target-template.toml",
+        &[
+            ("__FIRST_SOURCE__", first_source_value.as_str()),
+            ("__ALIASED_TARGET__", aliased_target_value.as_str()),
+            ("__SECOND_SOURCE__", second_source_value.as_str()),
+            ("__TARGET__", target_value.as_str()),
+        ],
     );
-    let plan = plan_with_links(&workspace, &declarations);
 
     let error = link::reconcile(plan.links()).expect_err("duplicate targets must fail preflight");
 
@@ -348,22 +346,18 @@ fn duplicate_target_preflight_does_not_depend_on_source_validity() {
     let valid_source = workspace.path().join("valid.txt");
     let target = workspace.path().join("target.txt");
     fs::write(&valid_source, "valid").expect("valid source should be written");
-    let declarations = format!(
-        r#"
-        [targets.machine.links.missing]
-        source = {}
-        target = {}
-
-        [targets.machine.links.valid]
-        source = {}
-        target = {}
-        "#,
-        toml_path(&missing_source),
-        toml_path(&target),
-        toml_path(&valid_source),
-        toml_path(&target),
+    let missing_source_value = toml_path(&missing_source);
+    let valid_source_value = toml_path(&valid_source);
+    let target_value = toml_path(&target);
+    let plan = plan_fixture(
+        &workspace,
+        "link/invalid-duplicate-target-with-missing-source-template.toml",
+        &[
+            ("__MISSING_SOURCE__", missing_source_value.as_str()),
+            ("__VALID_SOURCE__", valid_source_value.as_str()),
+            ("__TARGET__", target_value.as_str()),
+        ],
     );
-    let plan = plan_with_links(&workspace, &declarations);
 
     let error = link::reconcile(plan.links()).expect_err("duplicate targets must fail preflight");
 
@@ -379,22 +373,20 @@ fn one_link_failure_does_not_stop_an_unrelated_link() {
     let missing_target = workspace.path().join("missing-target.txt");
     let valid_target = workspace.path().join("valid-target.txt");
     fs::write(&valid_source, "valid").expect("valid source should be written");
-    let declarations = format!(
-        r#"
-        [targets.machine.links.missing]
-        source = {}
-        target = {}
-
-        [targets.machine.links.valid]
-        source = {}
-        target = {}
-        "#,
-        toml_path(&missing_source),
-        toml_path(&missing_target),
-        toml_path(&valid_source),
-        toml_path(&valid_target),
+    let missing_source_value = toml_path(&missing_source);
+    let missing_target_value = toml_path(&missing_target);
+    let valid_source_value = toml_path(&valid_source);
+    let valid_target_value = toml_path(&valid_target);
+    let plan = plan_fixture(
+        &workspace,
+        "link/valid-independent-failure-template.toml",
+        &[
+            ("__MISSING_SOURCE__", missing_source_value.as_str()),
+            ("__MISSING_TARGET__", missing_target_value.as_str()),
+            ("__VALID_SOURCE__", valid_source_value.as_str()),
+            ("__VALID_TARGET__", valid_target_value.as_str()),
+        ],
     );
-    let plan = plan_with_links(&workspace, &declarations);
 
     let report = link::reconcile(plan.links()).expect("link phase should start");
 
