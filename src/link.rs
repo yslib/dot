@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use crate::diagnostic::Operation;
 use crate::plan::PlannedLink;
 use crate::schema::{LinkConflict, LinkMissingParent};
 
@@ -157,7 +158,14 @@ fn reconcile_one(link: PreparedLink<'_>) -> Result<LinkOutcome, LinkError> {
             remove_native_symlink(&link.target, &metadata.file_type())
                 .map_err(|error| LinkError::io("remove symbolic link", &link.target, error))?;
             create_native_symlink(&link.source, &link.target, link.kind)
-                .map_err(|error| LinkError::io("create replacement link", &link.target, error))?;
+                .map_err(|error| {
+                    LinkError::io_with_diagnostic(
+                        "create replacement link",
+                        &link.target,
+                        Operation::CreateSymbolicLink,
+                        error,
+                    )
+                })?;
             verify_link(&link)?;
             return Ok(LinkOutcome::Replaced);
         }
@@ -169,7 +177,14 @@ fn reconcile_one(link: PreparedLink<'_>) -> Result<LinkOutcome, LinkError> {
     }
 
     create_native_symlink(&link.source, &link.target, link.kind)
-        .map_err(|error| LinkError::io("create symbolic link", &link.target, error))?;
+        .map_err(|error| {
+            LinkError::io_with_diagnostic(
+                "create symbolic link",
+                &link.target,
+                Operation::CreateSymbolicLink,
+                error,
+            )
+        })?;
     verify_link(&link)?;
     Ok(LinkOutcome::Created)
 }
@@ -328,6 +343,7 @@ pub enum LinkError {
         operation: &'static str,
         path: PathBuf,
         source: io::Error,
+        diagnostic_operation: Option<Operation>,
     },
     UnsupportedSourceType {
         source: PathBuf,
@@ -358,6 +374,32 @@ impl LinkError {
             operation,
             path: path.to_owned(),
             source,
+            diagnostic_operation: None,
+        }
+    }
+
+    pub(crate) fn io_with_diagnostic(
+        operation: &'static str,
+        path: &Path,
+        diagnostic_operation: Operation,
+        source: io::Error,
+    ) -> Self {
+        Self::Io {
+            operation,
+            path: path.to_owned(),
+            source,
+            diagnostic_operation: Some(diagnostic_operation),
+        }
+    }
+
+    pub(crate) const fn diagnostic_context(&self) -> Option<(Operation, &io::Error)> {
+        match self {
+            Self::Io {
+                source,
+                diagnostic_operation: Some(operation),
+                ..
+            } => Some((*operation, source)),
+            _ => None,
         }
     }
 }
@@ -369,6 +411,7 @@ impl fmt::Display for LinkError {
                 operation,
                 path,
                 source,
+                ..
             } => write!(
                 formatter,
                 "failed to {operation} `{}`: {source}",
@@ -456,3 +499,27 @@ impl fmt::Display for LinkPhaseError {
 }
 
 impl Error for LinkPhaseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Operation;
+
+    #[test]
+    fn link_io_error_retains_typed_diagnostic_context() {
+        let error = LinkError::io_with_diagnostic(
+            "create symbolic link",
+            Path::new("target"),
+            Operation::CreateSymbolicLink,
+            io::Error::from_raw_os_error(1314),
+        );
+
+        let (operation, source) = error
+            .diagnostic_context()
+            .expect("a diagnosed I/O error should expose its context");
+
+        assert_eq!(operation, Operation::CreateSymbolicLink);
+        assert_eq!(source.raw_os_error(), Some(1314));
+        assert!(error.to_string().contains("os error 1314"));
+    }
+}

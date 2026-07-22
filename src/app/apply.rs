@@ -6,6 +6,7 @@ use super::Selection;
 use crate::action::{ExecutionEnvironment, ExecutionResult};
 use crate::action_runner::{ActionOutcome, ActionRunError, ActionRunner, ActionStage};
 use crate::config::{ConfigLoadError, LoadedConfig};
+use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::link::{self, LinkOutcome, LinkPhaseError, LinkReport};
 use crate::manifest::{EffectiveManifest, ManifestError};
@@ -319,7 +320,7 @@ fn link_items(
                         ),
                         Err(error) => (
                             ItemStatus::Failed,
-                            vec![message_evidence(EvidenceStage::Link, error.to_string())],
+                            vec![link_error_evidence(error, &plan.platform().os)],
                         ),
                     };
                     report_link_item(link, status, evidence)
@@ -402,6 +403,7 @@ fn execution_evidence(
         message: message.map(str::to_owned),
         stdout: captured_text(result.stdout()),
         stderr: captured_text(result.stderr()),
+        hints: Vec::new(),
     }
 }
 
@@ -416,6 +418,7 @@ fn error_evidence(
         message: Some(message),
         stdout: result.and_then(|result| captured_text(result.stdout())),
         stderr: result.and_then(|result| captured_text(result.stderr())),
+        hints: Vec::new(),
     }
 }
 
@@ -426,6 +429,24 @@ fn message_evidence(stage: EvidenceStage, message: impl Into<String>) -> Evidenc
         message: Some(message.into()),
         stdout: None,
         stderr: None,
+        hints: Vec::new(),
+    }
+}
+
+fn link_error_evidence(error: &crate::link::LinkError, os: &str) -> Evidence {
+    let hints = error
+        .diagnostic_context()
+        .and_then(|(operation, source)| lookup(os, operation, source))
+        .into_iter()
+        .collect();
+
+    Evidence {
+        stage: EvidenceStage::Link,
+        exit_code: None,
+        message: Some(error.to_string()),
+        stdout: None,
+        stderr: None,
+        hints,
     }
 }
 
@@ -477,5 +498,39 @@ impl From<ManifestError> for CommandError {
 impl From<PlanningError> for CommandError {
     fn from(source: PlanningError) -> Self {
         Self::Planning(source)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::path::Path;
+
+    use super::*;
+    use crate::diagnostic::Operation;
+    use crate::link::LinkError;
+
+    #[test]
+    fn link_evidence_keeps_the_native_error_and_structured_hint() {
+        let error = LinkError::io_with_diagnostic(
+            "create symbolic link",
+            Path::new("target"),
+            Operation::CreateSymbolicLink,
+            io::Error::from_raw_os_error(1314),
+        );
+
+        let evidence = link_error_evidence(&error, "windows");
+
+        assert!(
+            evidence
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("os error 1314"))
+        );
+        assert_eq!(evidence.hints.len(), 1);
+        assert_eq!(
+            evidence.hints[0].code,
+            "windows.symlink.privilege-required"
+        );
     }
 }

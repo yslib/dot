@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use dot::diagnostic::ErrorHint;
 use dot::platform::PlatformInfo;
 use dot::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
@@ -104,9 +105,15 @@ fn evidence_keeps_process_results_structured() {
         message: Some("provider probe returned a non-zero status".to_owned()),
         stdout: Some(String::new()),
         stderr: Some("not found".to_owned()),
+        hints: vec![ErrorHint {
+            code: "test.provider.not-found".to_owned(),
+            summary: "provider program is unavailable".to_owned(),
+            suggestion: "install the provider before retrying".to_owned(),
+        }],
     };
 
     assert_eq!(evidence.stage, EvidenceStage::Probe);
     assert_eq!(evidence.exit_code, Some(1));
     assert_eq!(evidence.stderr.as_deref(), Some("not found"));
+    assert_eq!(evidence.hints[0].code, "test.provider.not-found");
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::diagnostic::ErrorHint;
 use crate::platform::PlatformInfo;
 use crate::schema::{Action, ExecAction, LinkConflict, LinkMissingParent};
 
@@ -150,6 +151,7 @@ pub struct Evidence {
     pub message: Option<String>,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
+    pub hints: Vec<ErrorHint>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

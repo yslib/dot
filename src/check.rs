@@ -130,6 +130,7 @@ fn check_evidence(result: &ProviderCheckResult) -> Evidence {
             message: None,
             stdout: captured_text(output.stdout()),
             stderr: captured_text(output.stderr()),
+            hints: Vec::new(),
         },
         Err(error) => Evidence {
             stage: EvidenceStage::Probe,
@@ -137,6 +138,7 @@ fn check_evidence(result: &ProviderCheckResult) -> Evidence {
             message: Some(error.to_string()),
             stdout: None,
             stderr: None,
+            hints: Vec::new(),
         },
     }
 }
