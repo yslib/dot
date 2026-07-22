@@ -150,10 +150,30 @@ environment?: #identifier | [#identifier],
 
 ### provider_package
 
+#single_provider_package | #batch_provider_package
+
+
+### single_provider_package
+
 {
 provider: #identifier,
 provider_args?: [#literal_string],
 }
+
+
+### batch_provider_package
+
+{
+provider: #identifier,
+names: [#identifier],
+provider_args?: [#literal_string],
+}
+
+`names` is required and must contain at least one value. The single and batch
+forms deserialize into distinct enum variants; runtime code does not infer the
+variant from an optional or empty `names` field. The surrounding package table
+key is the provider package name for the single form and a stable logical batch
+id for the batch form.
 
 
 ### manual_package

@@ -23,7 +23,7 @@ dot understands only a small set of domain concepts:
 - target and platform compatibility;
 - an inline profile inheritance tree;
 - provider-backed and manually installed packages;
-- provider lifecycle and package batching;
+- provider lifecycle and explicit package install units;
 - symbolic-link reconciliation;
 - generic idempotent actions;
 - side-effect-free dry-run rendering;
@@ -137,21 +137,50 @@ separate user-facing IR.
 
 ### package
 
-A package is one named tool-installation intent within the effective manifest.
+A package is one named installation intent within the effective manifest.
 There is no cross-target or cross-profile package identity.
 
 A package has exactly one of two forms:
 
 provider package:
 
-- Declares exactly one provider id.
-- The package table key is the exact package name passed to that provider.
-- Names that are not valid TOML bare keys can use quoted keys.
+- Declares exactly one provider id and is strongly typed as either single or
+  batch. The Rust schema represents these as distinct enum variants rather than
+  one structure with an optional names field.
+- A single provider package has no names field. Its package table key is both
+  its stable logical id and the exact package name passed to the provider.
+- A batch provider package has a required non-empty names list. Its package
+  table key is a stable logical batch id used by profile replacement and
+  reporting; names contains the exact package names passed to the provider.
+  Duplicate names within one batch are invalid.
+- The two TOML forms remain untagged: no `type` discriminator is required.
+  Structural deserialization produces the strong Rust enum before planning,
+  and runtime code never determines the variant by testing whether names is
+  absent or empty.
+- Names that are not valid TOML bare keys can use quoted keys. Batch names are
+  identifier values and may likewise be quoted as TOML strings.
 - provider_args is an optional ordered list of literal argv elements passed to
-  the provider install action. Its default is an empty list.
+  the provider install action. Its default is an empty list and one value
+  applies to every name in that install unit.
 - The referenced provider must exist in the final effective provider map.
-- Provider packages are grouped by provider id and their exact provider_args
-  list. Each group is installed as one batch.
+- Each provider package declaration is exactly one execution and report unit.
+  Single declarations invoke provider install with one name. Batch
+  declarations invoke it once with the complete names list. dot does not
+  implicitly regroup separate declarations by provider or provider_args.
+- Profile inheritance replaces the complete single or batch record by its
+  stable table key. Batch names are replaced as one list, never merged or
+  appended across profile levels.
+
+For example:
+
+```
+ripgrep   = { provider = "scoop" }
+cli-tools = { provider = "scoop", names = ["bat", "fd", "fzf"] }
+```
+
+The first declaration installs and reports `ripgrep`. The second installs the
+three names together and reports one logical item named `cli-tools`, with its
+names shown as detail.
 
 manual package:
 
@@ -166,10 +195,10 @@ manual package:
 dot does not create a manual provider. Manual installation is package-specific
 and has no common batching protocol.
 
-A provider package cannot name multiple providers. There is no all-of,
-fallback, winner, preferred source, provider-specific names map, adoption, or
-inactive assignment. If related content needs two installation mechanisms, it
-is represented by two explicit package records.
+A provider package install unit cannot name multiple providers. There is no
+all-of, fallback, winner, preferred source, provider-specific names map,
+adoption, or inactive assignment. If related content needs two installation
+mechanisms, it is represented by two explicit package records.
 
 dot stores no package receipts or installed-state database. Provider install
 commands must tolerate already installed package names. Manual packages rely
@@ -185,8 +214,8 @@ resolved only from the final effective provider map.
 A profile may add or completely replace a provider. This allows a specialized
 profile to introduce a capability without making it part of sibling profiles.
 Every effective provider is eagerly activated, probed, and ensured before any
-provider package batch is installed, even when that provider has no packages.
-Provider install is not called for an empty batch.
+provider package install unit is executed, even when that provider has no
+packages. Provider install is never called with an empty names list.
 
 
 ### provider lifecycle
@@ -217,13 +246,15 @@ ensure:
 
 install:
 
-- Receives one package-name batch and the provider_args shared by that batch.
-- Runs once for every non-empty `(provider id, provider_args)` group. One
-  provider can therefore execute multiple install batches after being
-  activated, probed, and ensured only once.
-- Exit code 0 succeeds every package in the batch.
-- A non-zero exit fails every package in the batch. dot does not infer partial
-  success or retry individual names.
+- Receives the names and provider_args of one declared provider-package install
+  unit.
+- Runs once for each single or batch declaration assigned to that provider.
+  One provider can therefore execute multiple installs after being activated,
+  probed, and ensured only once.
+- Exit code 0 succeeds the install unit.
+- A non-zero exit fails only that install unit. For a batch, dot does not infer
+  partial success or retry individual names. Later unrelated install units
+  still run.
 - The declared command owns idempotency for packages already installed.
 
 
@@ -380,8 +411,9 @@ registry, dynamic loading, or trait-object plugins.
 v0.0.1 statically defines only these resolver calls:
 
 - ${env:NAME}: read NAME from the current effective environment;
-- ${package:names}: the complete package-name batch for a provider install;
-- ${package:provider_args}: the provider argument list shared by that batch;
+- ${package:names}: the complete package-name list for the current provider
+  install unit;
+- ${package:provider_args}: the provider argument list for that install unit;
 - ${dot:config}: absolute path of the loaded TOML file;
 - ${dot:config_dir}: directory containing the TOML file;
 - ${dot:cwd}: working directory from which dot was started;
@@ -410,20 +442,22 @@ Resolver availability is contextual:
 
 Resolution receives an explicit context containing the current effective
 child environment, dot invocation paths, a snapshot of standard user
-directories, and an optional provider-package batch.
+directories, and an optional provider-package install unit.
 Environment patches are resolved against the effective environment that exists
 immediately before that patch is applied. Later stages therefore observe
 successful provider activation changes without introducing implicit global
 environment mutation.
 
 package:names and package:provider_args are string lists. Each resolver must
-occupy one complete args element, and dot expands it to zero or more argv
-elements. package:provider_args preserves declaration order; an omitted field
-expands to zero elements. If any package assigned to a provider has non-empty
-provider_args, that provider's install action must contain exactly one
-${package:provider_args} element. provider_args values are literal: v0.0.1
-does not interpolate their contents, and interpolation syntax in them is an
-error. Scalar interpolation may be a complete string or part of a larger
+occupy one complete args element, and dot expands it to one or more package-name
+argv elements or zero or more provider-argument elements. For a single install
+unit package:names contains the table key; for a batch it contains the declared
+non-empty names list. package:provider_args preserves declaration order; an
+omitted field expands to zero elements. If any package assigned to a provider
+has non-empty provider_args, that provider's install action must contain
+exactly one ${package:provider_args} element. provider_args values are literal:
+v0.0.1 does not interpolate their contents, and interpolation syntax in them
+is an error. Scalar interpolation may be a complete string or part of a larger
 string. A list value cannot be embedded inside another string.
 
 Profile merging happens before interpolation. Replaced declarations and nodes
@@ -442,8 +476,10 @@ no implicit meaning, and resolved values are never reinterpreted by a shell.
 After target and profile selection, dot resolves the effective manifest into
 one internal ExecutionPlan. The plan is the single source of truth shared by
 real execution and dry-run. It contains the resolved providers,
-provider-package batches, manual packages, global actions, and links needed by
-the executor. There is no separate DryRunPlan.
+strongly typed provider-package install units, manual packages, global actions,
+and links needed by the executor. There is no separate DryRunPlan. The plan
+preserves the single-versus-batch distinction instead of immediately reducing
+both forms to an untyped name list.
 
 ExecutionPlan is an internal Rust data model, not a serialized configuration
 format or public compatibility boundary. Runtime observations such as probe or
@@ -473,26 +509,27 @@ dry-run performs only these operations:
 4. Resolve the requested inline profile node and its ancestor path.
 5. Overlay target and profile nodes from root to the selected node.
 6. Validate the final effective manifest.
-7. Group provider packages by provider id and provider_args, resolve
-   non-executing interpolation, and construct the internal ExecutionPlan.
-8. Project that plan into one logical report item per provider, package, global
-   action, and link, then render the report.
+7. Resolve each provider package declaration as one install unit without
+   regrouping separate declarations, resolve non-executing interpolation, and
+   construct the internal ExecutionPlan.
+8. Project that plan into one logical report item per provider, provider-package
+   install unit, manual package, global action, and link, then render the report.
 
 For each provider, dry-run resolves and applies activate only to an in-memory
 child environment, then uses that environment to resolve the provider's probe,
-ensure, and install batches. This is ordinary data transformation and does not
-start a process or modify the parent process environment. Global and manual
-actions resolve against the captured dot process environment and do not inherit
-an implicit provider environment.
+ensure, and declared install units. This is ordinary data transformation and
+does not start a process or modify the parent process environment. Global and
+manual actions resolve against the captured dot process environment and do not
+inherit an implicit provider environment.
 
-Provider install commands are fully resolved once per non-empty package batch,
-including list-valued package interpolation, even though batching remains an
-internal execution detail. The current report shows one row per package with
-its provider and provider_args rather than one row per batch. Manual and global
-actions retain resolved program/argument data in the report. Relative link
-sources are joined to the configuration directory and link targets must resolve
-to absolute paths, but dry-run does not test path existence, canonicalize paths,
-inspect conflicts, or create links.
+Provider install commands are fully resolved once per declared single or batch
+install unit, including list-valued package interpolation. The report shows one
+row per install unit. A single row uses the package key as its item name; a
+batch row uses its stable logical key and shows names as detail. Manual and
+global actions retain resolved program/argument data in the report. Relative
+link sources are joined to the configuration directory and link targets must
+resolve to absolute paths, but dry-run does not test path existence,
+canonicalize paths, inspect conflicts, or create links.
 
 Dry-run omits replaced ancestors, unselected siblings, descendants outside the
 path, and any notion of skipped declarations. It does not run provider probe,
@@ -552,9 +589,9 @@ non-zero when any provider is NOT_READY. Process-start errors retain their
 diagnostics even though they map to NOT_READY.
 
 Provider check does not run provider ensure or install, refresh environment
-state after an ensure, group or inspect packages, run manual-package or global
-action check/exec, or inspect/reconcile links. v0.0.1 defines no link,
-action, package, or aggregate check command.
+state after an ensure, resolve or inspect package install units, run
+manual-package or global action check/exec, or inspect/reconcile links. v0.0.1
+defines no link, action, package, or aggregate check command.
 
 
 ### command surface
@@ -589,15 +626,21 @@ CommandReport before presentation. It contains:
 - the command kind: dry-run, apply, or check providers;
 - context: absolute config path, target, optional profile, and PlatformInfo;
 - overall status: PLANNED, SUCCESS, or FAILED;
-- one logical item per effective provider, package, action, or link;
+- one logical item per effective provider, provider-package install unit,
+  manual package, action, or link;
 - per-item typed subject data, status, and zero or more evidence records;
 - command-level diagnostics.
 
 Evidence identifies an execution stage and may carry an exit code, message, or
 captured stdout/stderr. Apply item statuses distinguish READY, INSTALLED,
 SATISFIED, EXECUTED, CREATED, REPLACED, SKIPPED, NOT_READY, BLOCKED, and FAILED.
-Dry-run items are PLANNED. Provider batches remain internal: all packages in a
-batch receive the same batch outcome but are separate report items.
+Dry-run items are PLANNED. A provider single is one report item whose id is its
+package key. A provider batch is one report item whose id is its stable logical
+key and whose detail contains its names. A batch outcome is intentionally not
+projected onto synthetic per-name rows because dot cannot observe partial
+success inside one provider invocation. Aggregate package counts count declared
+install units, so one named batch counts as one package item regardless of how
+many names it contains.
 
 The current renderer writes a human-readable table with TYPE, ITEM, VIA, STATUS,
 and DETAIL columns followed by aggregate counts. It colors status cells only
@@ -625,12 +668,14 @@ public data contract.
    derive its ancestor path.
 5. Overlay providers, packages, links, and actions from root to the selected
    profile, replacing whole records by id.
-6. Validate and interpolate the effective declarations, group provider packages
-   by provider id and exact provider_args, and construct ExecutionPlan.
+6. Validate and interpolate each effective provider package as one strongly
+   typed single or batch install unit, without regrouping declarations, and
+   construct ExecutionPlan.
 7. For each effective provider, apply activate and probe it; when the failure is
    ensureable, run its ensure list, reapply activate, and probe once more.
-8. Run each ready provider's install once for every non-empty argument group.
-   Packages assigned to an unavailable provider are reported as BLOCKED.
+8. Run each ready provider's install once for every declared provider-package
+   install unit. Units assigned to an unavailable provider are reported as
+   BLOCKED.
 9. Apply every manual-package install action.
 10. Apply every effective global action.
 11. Preflight and reconcile every effective link.
@@ -639,8 +684,8 @@ public data contract.
 
 An individual runtime failure does not stop unrelated work. The final process
 exits non-zero when any effective provider cannot be ensured, any provider
-batch fails, any manual package fails, any global action fails, or any link
-fails.
+install unit fails, any manual package fails, any global action fails, or any
+link fails.
 
 
 ### explicit non-goals for v0.0.1
@@ -663,7 +708,7 @@ fails.
 - Provider dependency resolution.
 - Named provider variants, provider-specific parameter schemas, or parameter
   transforms. provider_args is only an ordered list of literal argv values.
-- Recovery or per-package retry after partial provider-batch failure.
+- Recovery or per-name retry after partial provider-batch failure.
 - A general-purpose interpolation or expression language.
 - Implicit shell execution.
 - Dry-run simulation of external commands or filesystem mutations.
