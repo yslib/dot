@@ -1,111 +1,390 @@
 # dot
 
 `dot` is a small, declarative bootstrap runner for personal development
-environments and dotfiles across Windows, macOS, and Linux.
+environments and dotfiles across Linux, macOS, and Windows.
 
-Its job is deliberately narrow: read an explicit TOML manifest, select one
-target and profile, and coordinate the external tools needed to establish that
-environment. It exists to replace a collection of platform-specific bootstrap
-scripts with one understandable workflow.
+It reads a TOML manifest, selects one explicit target and optional profile,
+then coordinates external package providers, manual installation actions,
+generic actions, and symbolic links. The manifest stays readable as an
+inventory of the environment it describes.
 
-## Usage (draft)
+> [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete application
+> example used to develop `dot`. It describes an Arch Linux base/desktop/laptop
+> profile tree plus independent macOS and Windows environments.
 
-The command-line interface is still under development. The implicit apply
-operation, `--dry-run`, and `check providers` are implemented end to end.
+`dot` is intentionally not a package manager. It does not search repositories,
+resolve dependencies, compare versions, implement installers, or keep an
+installed-state database. Those responsibilities remain with commands such as
+`pacman`, `brew`, `scoop`, `npm`, and `cargo`.
+
+## Installation
+
+Prebuilt binaries are published on the
+[GitHub Releases](https://github.com/yslib/dot/releases) page for:
+
+- Linux x86-64, statically linked with musl;
+- macOS Apple Silicon;
+- Windows x86-64.
+
+Rename the downloaded asset to `dot` (`dot.exe` on Windows), make it executable
+where necessary, and place it on `PATH`.
+
+To build from source with stable Rust:
+
+```console
+git clone https://github.com/yslib/dot.git
+cd dot
+cargo build --release
+```
+
+The binary is written to `target/release/dot` (`dot.exe` on Windows).
+
+## Quick start
+
+Create `dot.toml` in the directory containing the files you want to manage:
+
+```toml
+[targets.workstation]
+platform = { os = "linux", distro = ["debian", "ubuntu"] }
+
+[targets.workstation.providers.apt]
+probe   = { program = "apt-get", args = ["--version"] }
+install = { program = "sudo", args = ["apt-get", "install", "-y", "${package:names}"] }
+
+[targets.workstation.packages]
+git     = { provider = "apt" }
+ripgrep = { provider = "apt" }
+
+[targets.workstation.links]
+nvim = { source = "config/nvim", target = "${xdg:config}/nvim" }
+```
+
+Inspect the selected intent without running commands or touching links:
+
+```console
+dot --target workstation --dry-run
+```
+
+Check whether the selected providers are currently available:
+
+```console
+dot --target workstation check providers
+```
+
+Apply the environment:
+
+```console
+dot --target workstation
+```
+
+`dot.toml` is the default configuration path. `--target` may be omitted when
+the file declares exactly one target.
+
+## Command line
 
 ```text
 dot [OPTIONS]
 dot [OPTIONS] check providers
 ```
 
-With no subcommand, `dot` selects the implicit apply operation:
+With no subcommand, `dot` applies the selected environment. Selection options
+are global and may appear before or after `check providers`.
+
+| Option | Meaning |
+| --- | --- |
+| `-c, --config <PATH>` | TOML manifest; defaults to `./dot.toml` |
+| `-t, --target <TARGET>` | Target id; optional only when exactly one target exists |
+| `-p, --profile <PROFILE>` | One unique profile node name inside the target |
+| `--dry-run` | Render the resolved apply plan without executing it |
+| `-h, --help` | Print command help |
+| `-V, --version` | Print the `dot` version |
+
+`--dry-run` performs configuration loading, target/profile selection, platform
+validation, profile merging, interpolation, and planning. It does not execute
+provider, package, or action commands and does not inspect or modify link state.
+Its output describes intent, not whether the current machine can satisfy it.
+
+`check providers` applies each provider's in-memory environment patch and runs
+its probe once. It does not run ensure or install, process packages or actions,
+or inspect links. All effective providers are checked even if one is not ready.
+
+Apply uses the same resolved execution plan as dry-run. It ensures providers,
+runs provider package batches, applies manual packages and global actions, then
+reconciles links. Unrelated work continues after an individual runtime failure.
+The final report exits non-zero if any item failed or was blocked.
+
+## Configuration model
+
+A manifest is deliberately small:
 
 ```text
-dot
-dot --target arch-personal
-dot --target arch-personal --profile laptop
-dot --target arch-personal --profile laptop --dry-run
+targets
+└── target
+    ├── platform
+    ├── providers
+    ├── packages
+    ├── links
+    ├── actions
+    └── profiles
+        └── profile
+            └── profiles ...
 ```
 
-Without `--dry-run`, apply builds the same resolved execution plan shown by
-dry-run, then ensures every provider, runs each available provider package
-batch, applies manual-package and global actions, and finally reconciles
-links. It prints a complete result summary and exits non-zero when any item
-fails. An individual runtime failure does not stop unrelated work, and no
-result is persisted as a receipt.
+Targets are independent, complete environment declarations. Profiles are
+nested inline and form a tree. Selecting a profile by its unique name merges
+only the path from the target root to that node. For `providers`, `packages`,
+`links`, and `actions`, a deeper record with the same id replaces the complete
+ancestor record; fields are not merged individually.
 
-The current development implementation does not yet refresh the Windows User
-and Machine `PATH` after a provider ensure action.
+Unknown fields are rejected. Identifiers must be non-empty and cannot contain
+interpolation. Profile names must be unique within a target and should not
+contain `/`, because the CLI accepts a node name rather than a path.
 
-Provider readiness is an explicit nested check:
+### Root
 
-```text
-dot check providers
-dot check providers --target arch-personal --profile laptop
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `targets` | yes | Table mapping globally unique target ids to target records |
+
+```toml
+[targets.linux]
+platform = { os = "linux" }
+
+[targets.macos]
+platform = { os = "macos" }
 ```
 
-This command loads and selects the effective manifest, applies each effective
-provider's child-process environment patch, and runs every provider probe once.
-It never runs provider ensure or install, package actions, global actions, or
-link reconciliation. Every provider is checked even after another provider
-fails. The command exits 0 only when all probes are ready; an empty provider
-set is ready.
+### Target
 
-Selection options are global and may appear before or after the subcommands:
+| Field | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `platform` | yes | Compatibility constraint checked against the current machine | none |
+| `providers` | no | Provider records keyed by provider id | empty |
+| `packages` | no | Provider-backed or manual packages keyed by package id | empty |
+| `links` | no | Native symbolic-link intents keyed by link id | empty |
+| `actions` | no | Generic idempotent actions keyed by action id | empty |
+| `profiles` | no | Nested profile nodes keyed by profile name | empty |
 
-```text
--c, --config <PATH>      TOML manifest; defaults to ./dot.toml
--t, --target <TARGET>    optional when the manifest has exactly one target
--p, --profile <PROFILE>  one globally unique profile name within the target
-    --dry-run             render the implicit apply plan without executing it
--h, --help
--V, --version
+A target is never inferred from platform facts. When multiple targets exist,
+the user must select one with `--target`.
+
+### Platform constraint
+
+Each field accepts either one string or a list of strings. Declared fields are
+combined with AND; values inside one field are combined with OR.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `os` | yes | Operating system, normally `linux`, `macos`, or `windows` |
+| `arch` | no | Rust target architecture such as `x86_64` or `aarch64` |
+| `distro` | no | Linux `ID` from `os-release`, such as `arch` or `ubuntu` |
+| `distro_family` | no | Linux `ID_LIKE` family, such as `debian` |
+| `environment` | no | Runtime class: `native`, `wsl`, or `container` |
+
+```toml
+[targets.server]
+platform = { os = "linux", arch = ["x86_64", "aarch64"], distro_family = ["debian", "rhel"], environment = ["native", "container"] }
 ```
 
-`--profile` names one node directly, not a path. The selected node inherits its
-unique ancestor chain from the inline profile tree. Profile names must be
-unique within a target and cannot contain `/`.
+A selected target must match every declared field. A mismatch is an error,
+not a reason to silently skip declarations.
 
-`--dry-run` belongs only to the implicit apply operation and cannot be combined
-with `check providers`. Version 1 defines no other check target.
+### Profile
 
-### Development platform override
+A profile supports the same optional `providers`, `packages`, `links`,
+`actions`, and child `profiles` fields as a target. It cannot redefine
+`platform`.
 
-The development-only `dev-platform-override` Cargo feature adds a global
-`--platform <TOML>` option. Its value is a TOML inline table containing a
-complete synthetic platform. `os` and `arch` are required; `distro` and
-`distro_family` are optional, and `environment` defaults to `native`.
+```toml
+[targets.arch]
+platform = { os = "linux", distro = "arch" }
 
-```text
-cargo run --features dev-platform-override -- \
-  --dry-run \
-  --platform '{ os = "windows", arch = "x86_64" }'
+[targets.arch.providers.pacman]
+probe   = { program = "pacman", args = ["--version"] }
+install = { program = "sudo", args = ["pacman", "-S", "--needed", "${package:names}"] }
 
-cargo run --features dev-platform-override -- \
-  check providers \
-  --platform '{ os = "linux", arch = "x86_64", distro = "ubuntu", distro_family = "debian" }'
+[targets.arch.packages]
+git = { provider = "pacman" }
+
+[targets.arch.profiles.desktop.packages]
+waybar = { provider = "pacman" }
+
+[targets.arch.profiles.desktop.profiles.laptop.packages]
+tlp = { provider = "pacman" }
 ```
 
-Dry-run and `check providers` use the injected value for target compatibility.
-The real apply operation accepts but ignores it and always uses detected
-platform facts. The override does not emulate another operating system:
-provider probes, environment variables, and standard directories still belong
-to the host running dot. Every invocation that supplies `--platform` prints
-this boundary to stderr; apply prints a separate warning that the option is
-ignored.
+`--profile laptop` selects `arch -> desktop -> laptop`, so the effective package
+set contains `git`, `waybar`, and `tlp`. Sibling profiles are alternatives.
+There is no `extends`, multiple inheritance, deletion, or cross-target reuse.
 
-Without the feature, `--platform` is not part of the CLI and is rejected as an
-unknown option.
+### Provider
 
-Dry-run loads and merges the selected manifest, resolves its safe built-in
-interpolation, groups provider packages by provider and `provider_args`, and
-prints the resulting providers, install batches, manual packages, actions, and
-links. Provider activation patches are applied only to in-memory child
-environments so their commands can be shown accurately. Dry-run never starts a
-process and never inspects or modifies package, action, or link state. Its
-human-readable output is explanatory and is not a stable serialized IR.
+A provider is an external package-installation capability. Every effective
+provider is probed and, when necessary and possible, ensured before any package
+batch is installed.
 
-## Built-in resolvers
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `probe` | yes | Exec action with no package input; exit 0 means ready |
+| `activate` | no | Environment patch applied to this provider's child processes |
+| `ensure` | no | One exec action or an ordered list used when the initial probe is not ready |
+| `install` | yes | Exec action used once for each non-empty package batch |
+
+```toml
+[targets.macos]
+platform = { os = "macos" }
+
+[targets.macos.providers.brew]
+activate = { path_prepend = ["/opt/homebrew/bin", "/usr/local/bin"] }
+probe    = { program = "brew", args = ["--version"] }
+ensure   = { program = "bash", args = ["${dot:config_dir}/scripts/install-homebrew.sh"] }
+install  = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
+```
+
+If the first probe is ready, ensure is skipped. Otherwise ensure actions run in
+declaration order and stop at the first failure. `dot` then reapplies activate
+and probes once more. A provider is usable only when that final probe succeeds.
+
+`dot` does not resolve dependencies between providers. An ensure command may
+invoke other programs, but their availability is part of that provider's own
+bootstrap contract.
+
+On Windows, `dot` does not reload User or Machine `PATH` from the registry after
+ensure. Use `activate.path_prepend` to make the provider executable visible to
+the current `dot` process.
+
+### Package
+
+A package has exactly one of two forms.
+
+#### Provider package
+
+| Field | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `provider` | yes | Id of one effective provider | none |
+| `provider_args` | no | Ordered literal argv values used to form a separate batch | empty |
+
+The package table key is the exact package name passed to the provider. This
+makes platform-specific names explicit in each target.
+
+```toml
+[targets.macos.packages]
+ripgrep             = { provider = "brew" }
+font-hack-nerd-font = { provider = "brew", provider_args = ["--cask"] }
+```
+
+Packages are grouped by provider id and their exact `provider_args` list. If
+any package for a provider has non-empty `provider_args`, that provider's
+`install.args` must contain `${package:provider_args}` exactly once.
+
+#### Manual package
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `install` | yes | A generic action that installs this one package |
+
+```toml
+[targets.server]
+platform = { os = "linux" }
+
+[targets.server.packages.ripgrep]
+install = { check = { program = "bash", args = ["-c", "command -v rg >/dev/null 2>&1"] }, exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-ripgrep.sh"] } }
+```
+
+Manual packages are not batched. Download selection, checksums, extraction, or
+other procedural work normally belongs in the external script.
+
+### Environment patch
+
+Environment patches are used by `provider.activate` and `exec.env`.
+
+| Field | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `path_prepend` | no | One path or a list inserted before effective `PATH` | none |
+| `path_append` | no | One path or a list appended after effective `PATH` | none |
+| `variables` | no | Environment variables added or replaced by name | empty |
+
+```toml
+activate = { path_prepend = "${xdg:executable}", variables = { CARGO_HOME = "${xdg:data}/cargo" } }
+```
+
+Provider activation is applied after the environment captured when `dot`
+starts. An exec action's own patch is applied after provider activation, so its
+variables override provider variables and its prepended paths appear first.
+Global and manual-package actions do not inherit a provider environment.
+
+### Exec action
+
+An exec action describes one process invocation.
+
+| Field | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `type` | no | Reserved action kind; the only accepted value is `"exec"` | exec |
+| `program` | yes | Executable path or name | none |
+| `args` | no | Ordered argv elements | empty |
+| `cwd` | no | Child-process working directory | inherited |
+| `env` | no | Environment patch applied to this command | none |
+
+```toml
+exec = { program = "git", args = ["status", "--short"], cwd = "${dot:config_dir}", env = { variables = { NO_COLOR = "1" } } }
+```
+
+Commands are started directly without an implicit shell. Pipes, redirects,
+`&&`, shell expansion, and shell quoting have no special meaning. Request shell
+behavior explicitly:
+
+```toml
+exec = { program = "bash", args = ["-c", 'printf "%s\n" hello'] }
+```
+
+### Action
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `check` | no | Exec action that tests whether the desired state already exists |
+| `exec` | yes | Exec action that establishes the desired state |
+
+```toml
+[targets.linux]
+platform = { os = "linux" }
+
+[targets.linux.actions.install-shell-config]
+check = { program = "test", args = ["-d", "${xdg:home}/.oh-my-zsh"] }
+exec  = { program = "bash", args = ["${dot:config_dir}/scripts/install-oh-my-zsh.sh"] }
+```
+
+Check exit codes have a fixed contract:
+
+- 0: already satisfied; skip exec;
+- 1: not satisfied; run exec, then run the same check once more;
+- any other result: fail the action.
+
+Without check, exec runs on every apply. `dot` persists no action state, so the
+configuration author owns check correctness and command idempotency.
+
+### Link
+
+| Field | Required | Meaning | Default |
+| --- | --- | --- | --- |
+| `source` | yes | Existing file or directory; relative paths use the manifest directory | none |
+| `target` | yes | Link target path; must be absolute after interpolation | none |
+| `on_conflict` | no | `error` or `replace-link` for an incorrect existing symlink | `replace-link` |
+| `on_missing_parent` | no | `create` or `skip` when the target parent is absent | `create` |
+
+```toml
+[targets.windows]
+platform = { os = "windows" }
+
+[targets.windows.links]
+terminal = { source = "config/windows-terminal/settings.json", target = "${env:LOCALAPPDATA}/Packages/Terminal/LocalState/settings.json", on_conflict = "replace-link", on_missing_parent = "skip" }
+```
+
+`dot` creates native symbolic links. It never replaces an existing regular file
+or directory, even with `replace-link`. It verifies newly created links and
+rejects duplicate effective target paths before link mutation begins. Removing
+a declaration does not remove a previously created link.
+
+## Built-in interpolation
 
 Interpolated strings use an OmegaConf-like surface:
 
@@ -113,19 +392,21 @@ Interpolated strings use an OmegaConf-like surface:
 ${resolver:payload}
 ```
 
-The resolver set is closed and built into dot. TOML cannot define new
-resolvers. Version 1 has no resolver defaults, nested interpolation,
-expressions, configuration references, or automatic type conversion.
+The resolver registry is closed: TOML cannot define new resolvers. Missing
+environment variables, unavailable standard paths, unknown resolvers, and
+invalid resolver contexts are errors rather than empty strings.
 
-The scalar resolvers produce one string and may occupy a complete value or be
-embedded in a larger string:
+### Scalar resolvers
+
+Scalar resolvers produce one string and may be a complete value or part of a
+larger string.
 
 | Resolver | Value |
 | --- | --- |
-| `${env:NAME}` | `NAME` from the current effective child-process environment |
+| `${env:NAME}` | `NAME` from the current effective child environment |
 | `${dot:config}` | Absolute path of the loaded TOML file |
-| `${dot:config_dir}` | Directory containing the loaded TOML file |
-| `${dot:cwd}` | Directory from which dot was invoked |
+| `${dot:config_dir}` | Directory containing the TOML file |
+| `${dot:cwd}` | Directory from which `dot` was invoked |
 | `${xdg:home}` | Current user's home directory |
 | `${xdg:config}` | Standard configuration directory |
 | `${xdg:config_local}` | Local/non-roaming configuration directory |
@@ -137,128 +418,88 @@ embedded in a larger string:
 | `${xdg:executable}` | User-writable executable directory, when defined |
 | `${xdg:documents}` | Current user's Documents directory, when available |
 
-For example:
+`xdg` names are portable vocabulary backed by the host platform's standard
+directories; they are not Linux-only paths.
 
-```toml
-target = "${xdg:config}/nvim"
-program = "${xdg:executable}/rg"
-cwd = "${dot:config_dir}"
-```
+### Provider package resolvers
 
-An `xdg` path follows the host platform's standard directories. A path that is
-not defined on the host is an error; dot does not invent a fallback. Likewise,
-a missing environment variable is an error rather than an empty string.
-
-The two `package` resolvers produce string lists:
+These resolvers produce lists and are available only as complete elements of
+`provider.install.args`:
 
 | Resolver | Value |
 | --- | --- |
-| `${package:names}` | Complete package-name batch for one provider install |
+| `${package:names}` | Complete package-name batch |
 | `${package:provider_args}` | Shared `provider_args` list for that batch |
 
-List resolvers are available only in a provider's `install.args`. Each must
-occupy one complete argument so dot can expand it into zero or more argv
-elements:
+`provider_args` values themselves are literal and cannot contain resolvers.
+To write a literal `${`, escape it as `\${`. Resolved values are passed as data
+and are never reinterpreted as shell syntax.
 
-```toml
-install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
-```
+## Reports and side-effect boundaries
 
-Resolver availability is intentionally narrow:
+Dry-run, apply, and provider check produce the same presentation-independent
+report model and render it as a table with one row per logical provider,
+package, action, or link. Provider batching remains an internal execution
+detail.
 
-- links, global actions, manual-package actions, and provider `activate`,
-  `probe`, and `ensure` may use `env`, `dot`, and `xdg`;
-- provider `install` may additionally use `package:names` and
-  `package:provider_args`;
-- package `provider_args` values are literal and cannot contain resolvers.
+Dry-run is side-effect-free with respect to managed state, but provider probes
+are arbitrary external commands: `check providers` is diagnostic, not a
+side-effect-free simulation. Apply streams interactive child output and prints
+its final report afterward.
 
-To write a literal `${` sequence, escape it as `\${`. In TOML, a literal
-single-quoted string can write this directly as `'\${literal}'`; a basic
-double-quoted string writes it as `"\\${literal}"`. Resolved values are passed
-as data and are never reinterpreted as shell syntax. Shell behavior must still
-be requested explicitly through `bash`, `pwsh`, or another interpreter.
+The current table output is intended for people and is not a stable serialized
+interface. v0.0.1 does not provide `--json`.
 
-## Goal
+## Goals
 
-`dot` should make a personal development environment easy to reproduce without
-hiding what will happen.
-
-- Each target describes one concrete environment, such as a personal Arch
-  machine, a work Ubuntu machine, or a minimal server.
-- Each profile is declared explicitly inside its target. Profiles form a small
-  inline inheritance tree, so shared desktop configuration can be inherited by
-  a more specific laptop profile.
-- Selecting a profile follows exactly one path from the target root. Deeper
-  declarations add new records or replace same-named records as a whole.
-- Repetition between independent targets is acceptable. A locally complete
-  declaration is often clearer than an abstraction that tries to erase real
-  platform differences.
-- The configuration should remain readable enough that the manifest itself is
-  an inventory of the intended environment.
-
-## Small domain model
-
-`dot` understands only the minimum concepts needed for bootstrap work:
-
-- **target**: one explicitly selected environment with a platform constraint;
-- **profile**: one node in the target's inline inheritance tree;
-- **provider**: an external installation capability such as `pacman`, `brew`,
-  `scoop`, `npm`, or `cargo`;
-- **package**: one package delegated to one provider, or one explicit manual
-  installation action;
-- **link**: one native symbolic-link intent for a dotfile;
-- **action**: one generic `check`/`exec` operation for work that does not fit a
-  smaller domain block.
-
-The configuration language intentionally has little evaluation logic. Profile
-merging is limited to a single root-to-child path, and a deeper record replaces
-an ancestor record instead of recursively merging its fields. Interpolation is
-limited to a small set of built-in runtime values needed by actions and
-provider package batches.
-
-Complex installation procedures belong in external shell or PowerShell
-scripts invoked by an action. They do not expand the TOML format into a
-programming language.
+- Make a personal development environment reproducible without hiding the
+  commands that establish it.
+- Keep each target locally complete, even when independent targets repeat data.
+- Model only the small amount of domain knowledge needed for cross-platform
+  bootstrap work.
+- Keep the manifest readable as an explicit inventory.
+- Let procedural edge cases remain ordinary shell or PowerShell scripts.
 
 ## Non-goals
 
-### dot is not a package manager
+`dot` is not a package manager, a general-purpose configuration language, or a
+system orchestration platform. It deliberately omits:
 
-`dot` delegates installation to package managers and other external commands.
-It does not:
+- repository search, dependency solving, versions, updates, and uninstall;
+- package or link receipts and other persistent managed-state databases;
+- automatic target selection from platform facts;
+- per-item condition expressions and arbitrary evaluation;
+- cross-target inheritance, profile references, and multiple inheritance;
+- action dependency graphs and provider dependency resolution;
+- built-in download, archive, checksum, build, or service-management logic;
+- implicit shell execution;
+- link removal, garbage collection, copies, and fallback link strategies.
 
-- access or index package repositories;
-- search for packages or choose a preferred source;
-- resolve package or provider dependencies;
-- compare, solve, pin, or manage versions;
-- implement downloads, archive extraction, builds, or installers;
-- update or uninstall packages;
-- maintain an installed-package database or persistent receipts.
+If installation logic is inherently procedural, invoke a script. If a feature
+would require `dot` to understand how a particular package manager or arbitrary
+program works, it probably belongs outside `dot`.
 
-Package-manager-specific knowledge stays in the user's provider declarations.
-The external provider remains responsible for package semantics and
-idempotency.
+## Development platform override
 
-### dot is not a universal configuration language
+The development-only `dev-platform-override` Cargo feature adds
+`--platform <TOML>` for testing target selection:
 
-The manifest is not intended to become a general-purpose DSL. It has no
-arbitrary expressions, user-defined functions, embedded control flow, or
-general resolver system. It does not provide conditionals on every item,
-multiple inheritance, cross-target references, dependency graphs, or a
-template language.
+```console
+cargo run --features dev-platform-override -- \
+  --dry-run \
+  --platform '{ os = "windows", arch = "x86_64" }'
+```
 
-`dot` does not try to infer a perfect environment from the current machine.
-The user explicitly chooses the target and profile whose declarations should
-apply.
+Dry-run and `check providers` use the injected PlatformInfo only for target
+selection. Commands, environment variables, XDG paths, and filesystem state
+still belong to the host. Apply accepts but ignores the override and always
+uses detected host facts. `dot` prints a warning whenever this option is used.
+Without the feature, `--platform` is not part of the CLI.
 
-### dot is not a general system orchestrator
+## Further reading
 
-`dot` is for bootstrapping a personal development workflow and linking its
-configuration files. It is not a service manager, provisioning platform,
-configuration-management system, deployment engine, or replacement for shell
-scripts when procedural logic is the clearest solution.
-
-The project intentionally prefers a small, predictable model over universal
-abstraction. If a feature would make `dot` responsible for understanding how
-packages, operating systems, or arbitrary programs work, it is probably
-outside the project's scope.
+- [Configuration schema](docs/SCHEMA.txt) — exact field shapes and string roles.
+- [Design](docs/DESIGN.txt) — runtime semantics, execution boundaries, and
+  explicit design decisions.
+- [yslib/dotfiles](https://github.com/yslib/dotfiles) — complete real-world
+  configuration for Linux, macOS, and Windows.
