@@ -105,7 +105,13 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     );
     assert_eq!(
         workspace.recorded_events(),
-        ["probe-ready", "install-ready", "manual-ok", "action-ok"]
+        [
+            "probe-ready",
+            "install-ready",
+            "install-ready",
+            "manual-ok",
+            "action-ok"
+        ]
     );
     assert_eq!(
         fs::canonicalize(workspace.path("linked.txt")).expect("link should resolve"),
@@ -113,6 +119,8 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     );
     assert!(stdout.contains("dot apply · target=current"), "{stdout}");
     assert!(stdout.contains("│ provider ┆ ready"), "{stdout}");
+    assert!(stdout.contains("│ package  ┆ cli-tools"), "{stdout}");
+    assert!(stdout.contains("names: [bat, fd, fzf]"), "{stdout}");
     assert!(stdout.contains("│ package  ┆ tool"), "{stdout}");
     assert!(stdout.contains("│ package  ┆ manual-tool"), "{stdout}");
     assert!(stdout.contains("│ action   ┆ configure"), "{stdout}");
@@ -121,7 +129,7 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     assert!(stdout.contains("INSTALLED"), "{stdout}");
     assert!(stdout.contains("EXECUTED"), "{stdout}");
     assert!(stdout.contains("CREATED"), "{stdout}");
-    assert!(stdout.contains("SUCCESS · 5 items"), "{stdout}");
+    assert!(stdout.contains("SUCCESS · 6 items"), "{stdout}");
 }
 
 #[test]

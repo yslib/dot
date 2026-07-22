@@ -9,7 +9,9 @@ use dot::interpolation::{DotPaths, XdgPaths};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
-use dot::report::{ItemStatus, PackageSource, ReportCommand, ReportStatus, ReportSubject};
+use dot::report::{
+    ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus, ReportSubject,
+};
 use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
 };
@@ -163,6 +165,41 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
 }
 
 #[test]
+fn projects_one_dry_run_item_per_provider_install_unit() {
+    let manifest = select_fixture("dry-run/valid-provider-install-units.toml");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+    let plan = planner.plan(&manifest).expect("execution should plan");
+
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+
+    assert_eq!(report.items.len(), 4);
+    assert_eq!(report.items[1].id, "alpha");
+    assert_eq!(report.items[2].id, "beta");
+    assert_eq!(report.items[3].id, "fonts");
+    assert!(matches!(
+        &report.items[1].subject,
+        ReportSubject::Package(package)
+            if matches!(
+                &package.source,
+                PackageSource::Provider(ProviderPackageSource::Single { provider, .. })
+                    if provider == "brew"
+            )
+    ));
+    assert!(matches!(
+        &report.items[3].subject,
+        ReportSubject::Package(package)
+            if matches!(
+                &package.source,
+                PackageSource::Provider(ProviderPackageSource::Batch { names, .. })
+                    if names == &["font-one", "font-two"]
+            )
+    ));
+}
+
+#[test]
 fn rejects_an_empty_provider_package_batch() {
     let manifest = select_fixture("dry-run/invalid-empty-package-batch.toml");
     let environment = environment();
@@ -293,7 +330,8 @@ fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
         ReportSubject::Package(package)
             if matches!(
                 &package.source,
-                PackageSource::Provider { provider, .. } if provider == "system"
+                PackageSource::Provider(ProviderPackageSource::Single { provider, .. })
+                    if provider == "system"
             )
     ));
     assert_eq!(report.items[1].id, "alpha");

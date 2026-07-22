@@ -6,8 +6,8 @@ use dot::output::TableRenderer;
 use dot::platform::PlatformInfo;
 use dot::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
-    LinkItem, PackageItem, PackageSource, ProviderItem, ReportCommand, ReportContext, ReportItem,
-    ReportStatus, ReportSubject,
+    LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
+    ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{LinkConflict, LinkMissingParent};
 
@@ -50,10 +50,22 @@ fn report() -> CommandReport {
                 id: "ripgrep".to_owned(),
                 status: ItemStatus::Installed,
                 subject: ReportSubject::Package(PackageItem {
-                    source: PackageSource::Provider {
+                    source: PackageSource::Provider(ProviderPackageSource::Single {
                         provider: "pacman".to_owned(),
                         provider_args: vec!["--needed".to_owned()],
-                    },
+                    }),
+                }),
+                evidence: Vec::new(),
+            },
+            ReportItem {
+                id: "cli-tools".to_owned(),
+                status: ItemStatus::Installed,
+                subject: ReportSubject::Package(PackageItem {
+                    source: PackageSource::Provider(ProviderPackageSource::Batch {
+                        provider: "pacman".to_owned(),
+                        names: vec!["bat".to_owned(), "fd".to_owned(), "fzf".to_owned()],
+                        provider_args: vec!["--needed".to_owned()],
+                    }),
                 }),
                 evidence: Vec::new(),
             },
@@ -112,6 +124,12 @@ fn renders_every_subject_through_one_dense_table() {
         "package row missing:\n{output}"
     );
     assert!(
+        output.contains("│ package  ┆ cli-tools"),
+        "package batch row missing:\n{output}"
+    );
+    assert!(output.contains("names: [bat, fd, fzf]"), "{output}");
+    assert!(output.contains("args: --needed"), "{output}");
+    assert!(
         output.contains("│ action   ┆ setup-shell"),
         "action row missing:\n{output}"
     );
@@ -120,7 +138,7 @@ fn renders_every_subject_through_one_dense_table() {
         "link row missing:\n{output}"
     );
     assert!(
-        output.contains("SUCCESS · 4 items · 1 provider · 1 package · 1 action · 1 link"),
+        output.contains("SUCCESS · 5 items · 1 provider · 2 packages · 1 action · 1 link"),
         "{output}"
     );
     assert!(
@@ -136,8 +154,8 @@ fn renders_every_subject_through_one_dense_table() {
 #[test]
 fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     let mut report = report();
-    let ReportSubject::Action(action) = &mut report.items[2].subject else {
-        panic!("third fixture item should be an action");
+    let ReportSubject::Action(action) = &mut report.items[3].subject else {
+        panic!("fourth fixture item should be an action");
     };
     action.action.exec.args = vec!["x".repeat(240)];
 
@@ -161,7 +179,7 @@ fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
 #[test]
 fn renders_structured_hints_after_the_original_error() {
     let mut report = report();
-    let link = &mut report.items[3];
+    let link = &mut report.items[4];
     link.status = ItemStatus::Failed;
     link.evidence = vec![Evidence {
         stage: EvidenceStage::Link,

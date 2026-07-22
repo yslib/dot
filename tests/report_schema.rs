@@ -5,8 +5,8 @@ use dot::diagnostic::ErrorHint;
 use dot::platform::PlatformInfo;
 use dot::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
-    LinkItem, PackageItem, PackageSource, ProviderItem, ReportCommand, ReportContext, ReportItem,
-    ReportStatus, ReportSubject,
+    LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
+    ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{LinkConflict, LinkMissingParent};
 
@@ -50,10 +50,22 @@ fn report_represents_each_logical_item_as_one_entry() {
             id: "ripgrep".to_owned(),
             status: ItemStatus::Installed,
             subject: ReportSubject::Package(PackageItem {
-                source: PackageSource::Provider {
+                source: PackageSource::Provider(ProviderPackageSource::Single {
                     provider: "pacman".to_owned(),
                     provider_args: vec!["--needed".to_owned()],
-                },
+                }),
+            }),
+            evidence: Vec::new(),
+        },
+        ReportItem {
+            id: "cli-tools".to_owned(),
+            status: ItemStatus::Installed,
+            subject: ReportSubject::Package(PackageItem {
+                source: PackageSource::Provider(ProviderPackageSource::Batch {
+                    provider: "pacman".to_owned(),
+                    names: vec!["bat".to_owned(), "fd".to_owned(), "fzf".to_owned()],
+                    provider_args: Vec::new(),
+                }),
             }),
             evidence: Vec::new(),
         },
@@ -88,12 +100,18 @@ fn report_represents_each_logical_item_as_one_entry() {
         diagnostics: Vec::new(),
     };
 
-    assert_eq!(report.items.len(), 4);
+    assert_eq!(report.items.len(), 5);
     assert!(matches!(
         &report.items[1].subject,
         ReportSubject::Package(PackageItem {
-            source: PackageSource::Provider { provider, .. },
+            source: PackageSource::Provider(ProviderPackageSource::Single { provider, .. }),
         }) if provider == "pacman"
+    ));
+    assert!(matches!(
+        &report.items[2].subject,
+        ReportSubject::Package(PackageItem {
+            source: PackageSource::Provider(ProviderPackageSource::Batch { names, .. }),
+        }) if names == &["bat", "fd", "fzf"]
     ));
 }
 

@@ -10,11 +10,11 @@ use dot::interpolation::{DotPaths, XdgPaths};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner};
 use dot::platform::PlatformInfo;
-use dot::provider::{ProviderBatchError, ProviderBatchOutcome, ProviderRunner};
+use dot::provider::{ProviderInstallError, ProviderInstallOutcome, ProviderRunner};
 use dot::schema::{
-    Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, Identifier, OneOrMany, Package,
-    PlatformConstraint, Provider, ProviderInstallArg, ProviderPackage, ScalarTemplate,
-    SingleProviderPackage, Target,
+    BatchProviderPackage, Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction,
+    Identifier, OneOrMany, Package, PlatformConstraint, Provider, ProviderInstallArg,
+    ProviderPackage, ScalarTemplate, SingleProviderPackage, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -111,21 +111,45 @@ fn provider(state: &TempState, probe_mode: &str, install_mode: &str) -> Provider
     }
 }
 
-fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<(&str, &str)>) -> ExecutionPlan {
+enum TestPackage<'a> {
+    Single {
+        id: &'a str,
+        provider: &'a str,
+    },
+    Batch {
+        id: &'a str,
+        provider: &'a str,
+        names: &'a [&'a str],
+    },
+}
+
+fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) -> ExecutionPlan {
     let providers = providers
         .into_iter()
         .map(|(id, provider)| (identifier(id), provider))
         .collect::<Entries<_>>();
     let packages = packages
         .into_iter()
-        .map(|(package, provider)| {
-            (
-                identifier(package),
+        .map(|package| match package {
+            TestPackage::Single { id, provider } => (
+                identifier(id),
                 Package::Provider(ProviderPackage::Single(SingleProviderPackage {
                     provider: identifier(provider),
                     provider_args: None,
                 })),
-            )
+            ),
+            TestPackage::Batch {
+                id,
+                provider,
+                names,
+            } => (
+                identifier(id),
+                Package::Provider(ProviderPackage::Batch(BatchProviderPackage {
+                    provider: identifier(provider),
+                    names: names.iter().map(|name| identifier(name)).collect(),
+                    provider_args: None,
+                })),
+            ),
         })
         .collect::<Entries<_>>();
     let config = Config {
@@ -164,60 +188,105 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<(&str, &str)>) -> Ex
         &platform,
     )
     .plan(&manifest)
-    .expect("provider batch plan should build")
+    .expect("provider install plan should build")
 }
 
 #[test]
-fn executes_a_ready_provider_batch_with_its_activated_environment() {
+fn executes_single_packages_independently_with_the_activated_environment() {
     let state = TempState::new();
     let plan = plan_for(
         vec![("ready", provider(&state, "probe-ready", "install-ready"))],
-        vec![("tool", "ready")],
+        vec![
+            TestPackage::Single {
+                id: "alpha",
+                provider: "ready",
+            },
+            TestPackage::Single {
+                id: "beta",
+                provider: "ready",
+            },
+        ],
     );
     let environment = ExecutionEnvironment::empty();
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_installs(), &readiness);
-    let status = &execution.statuses()[0];
+    let execution = runner.install_all(plan.provider_installs(), &readiness);
 
     assert!(execution.all_succeeded());
-    assert_eq!(status.provider(), "ready");
-    assert!(status.provider_args().is_empty());
-    assert_eq!(status.packages(), ["tool"]);
+    assert_eq!(execution.statuses().len(), 2);
+    assert_eq!(execution.statuses()[0].id(), "alpha");
+    assert_eq!(execution.statuses()[1].id(), "beta");
     assert!(matches!(
-        status.outcome(),
-        Ok(ProviderBatchOutcome::Executed { install }) if install.code() == Some(0)
+        execution.statuses()[0].outcome(),
+        Ok(ProviderInstallOutcome::Executed { install }) if install.code() == Some(0)
     ));
+    assert_eq!(
+        state.recorded_events(),
+        ["probe", "install-ready", "install-ready"]
+    );
+}
+
+#[test]
+fn executes_one_named_batch_as_one_install_unit() {
+    let state = TempState::new();
+    let plan = plan_for(
+        vec![("ready", provider(&state, "probe-ready", "install-ready"))],
+        vec![TestPackage::Batch {
+            id: "cli-tools",
+            provider: "ready",
+            names: &["bat", "fd", "fzf"],
+        }],
+    );
+    let environment = ExecutionEnvironment::empty();
+    let runner = ProviderRunner::new(&environment);
+    let readiness = runner.ensure_all(plan.providers());
+
+    let execution = runner.install_all(plan.provider_installs(), &readiness);
+
+    assert!(execution.all_succeeded());
+    assert_eq!(execution.statuses().len(), 1);
+    assert_eq!(execution.statuses()[0].id(), "cli-tools");
     assert_eq!(state.recorded_events(), ["probe", "install-ready"]);
 }
 
 #[test]
-fn does_not_run_a_batch_for_an_unavailable_provider() {
+fn blocks_each_install_unit_for_an_unavailable_provider() {
     let state = TempState::new();
     let plan = plan_for(
         vec![(
             "missing",
             provider(&state, "probe-missing", "install-unexpected"),
         )],
-        vec![("tool", "missing")],
+        vec![
+            TestPackage::Single {
+                id: "tool",
+                provider: "missing",
+            },
+            TestPackage::Batch {
+                id: "cli-tools",
+                provider: "missing",
+                names: &["bat", "fd"],
+            },
+        ],
     );
     let environment = ExecutionEnvironment::empty();
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_installs(), &readiness);
+    let execution = runner.install_all(plan.provider_installs(), &readiness);
 
     assert!(!execution.all_succeeded());
-    assert!(matches!(
-        execution.statuses()[0].outcome(),
-        Ok(ProviderBatchOutcome::NotRunProviderUnavailable)
-    ));
+    assert_eq!(execution.statuses().len(), 2);
+    assert!(execution.statuses().iter().all(|status| matches!(
+        status.outcome(),
+        Ok(ProviderInstallOutcome::NotRunProviderUnavailable)
+    )));
     assert_eq!(state.recorded_events(), ["probe-missing"]);
 }
 
 #[test]
-fn a_failed_batch_does_not_stop_an_unrelated_batch() {
+fn a_failed_install_unit_does_not_stop_an_unrelated_unit() {
     let failed = TempState::new();
     let succeeded = TempState::new();
     let plan = plan_for(
@@ -228,22 +297,31 @@ fn a_failed_batch_does_not_stop_an_unrelated_batch() {
                 provider(&succeeded, "probe-ready", "install-ready"),
             ),
         ],
-        vec![("first", "a-failed"), ("second", "b-succeeded")],
+        vec![
+            TestPackage::Single {
+                id: "first",
+                provider: "a-failed",
+            },
+            TestPackage::Single {
+                id: "second",
+                provider: "b-succeeded",
+            },
+        ],
     );
     let environment = ExecutionEnvironment::empty();
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_installs(), &readiness);
+    let execution = runner.install_all(plan.provider_installs(), &readiness);
 
     assert_eq!(execution.statuses().len(), 2);
     assert!(matches!(
         execution.statuses()[0].error(),
-        Some(ProviderBatchError::UnsuccessfulExit { result }) if result.code() == Some(23)
+        Some(ProviderInstallError::UnsuccessfulExit { result }) if result.code() == Some(23)
     ));
     assert!(matches!(
         execution.statuses()[1].outcome(),
-        Ok(ProviderBatchOutcome::Executed { install }) if install.code() == Some(0)
+        Ok(ProviderInstallOutcome::Executed { install }) if install.code() == Some(0)
     ));
     assert_eq!(failed.recorded_events(), ["probe", "install-fail"]);
     assert_eq!(succeeded.recorded_events(), ["probe", "install-ready"]);
@@ -274,8 +352,8 @@ fn helper_process() {
             record(&events, "install-fail");
             process::exit(23);
         }
-        "install-unexpected" => panic!("unavailable provider batch must not execute"),
-        unknown => panic!("unknown provider batch helper mode: {unknown}"),
+        "install-unexpected" => panic!("unavailable provider install must not execute"),
+        unknown => panic!("unknown provider install helper mode: {unknown}"),
     }
 }
 

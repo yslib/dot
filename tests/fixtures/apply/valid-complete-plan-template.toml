@@ -9,6 +9,10 @@ install = __INSTALL__
 [targets.current.packages.tool]
 provider = "ready"
 
+[targets.current.packages.cli-tools]
+provider = "ready"
+names = ["bat", "fd", "fzf"]
+
 [targets.current.packages.manual-tool.install]
 exec = __MANUAL__
 

@@ -7,7 +7,7 @@ use comfy_table::{
 
 use crate::report::{
     CommandInfo, CommandReport, DiagnosticLevel, EvidenceStage, ItemStatus, PackageSource,
-    ReportCommand, ReportItem, ReportStatus, ReportSubject,
+    ProviderPackageSource, ReportCommand, ReportItem, ReportStatus, ReportSubject,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -160,16 +160,24 @@ fn subject_columns(item: &ReportItem) -> (&'static str, String, String) {
             ("provider", via.to_owned(), details.join("; "))
         }
         ReportSubject::Package(package) => match &package.source {
-            PackageSource::Provider {
+            PackageSource::Provider(ProviderPackageSource::Single {
                 provider,
                 provider_args,
-            } => {
-                let detail = if provider_args.is_empty() {
-                    String::new()
-                } else {
-                    format!("args: {}", provider_args.join(" "))
-                };
-                ("package", provider.clone(), detail)
+            }) => (
+                "package",
+                provider.clone(),
+                provider_args_detail(provider_args),
+            ),
+            PackageSource::Provider(ProviderPackageSource::Batch {
+                provider,
+                names,
+                provider_args,
+            }) => {
+                let mut details = vec![format!("names: [{}]", names.join(", "))];
+                if !provider_args.is_empty() {
+                    details.push(provider_args_detail(provider_args));
+                }
+                ("package", provider.clone(), details.join("; "))
             }
             PackageSource::Manual { install } => (
                 "package",
@@ -187,6 +195,14 @@ fn subject_columns(item: &ReportItem) -> (&'static str, String, String) {
             "builtin".to_owned(),
             format!("{} → {}", link.source.display(), link.target.display()),
         ),
+    }
+}
+
+fn provider_args_detail(provider_args: &[String]) -> String {
+    if provider_args.is_empty() {
+        String::new()
+    } else {
+        format!("args: {}", provider_args.join(" "))
     }
 }
 

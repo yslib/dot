@@ -84,12 +84,20 @@ pub struct PackageItem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PackageSource {
-    Provider {
+    Provider(ProviderPackageSource),
+    Manual { install: ActionInfo },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderPackageSource {
+    Single {
         provider: String,
         provider_args: Vec<String>,
     },
-    Manual {
-        install: ActionInfo,
+    Batch {
+        provider: String,
+        names: Vec<String>,
+        provider_args: Vec<String>,
     },
 }
 

@@ -89,57 +89,49 @@ impl ProviderReadiness {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProviderBatchOutcome {
+pub enum ProviderInstallOutcome {
     Executed { install: ExecutionResult },
     NotRunProviderUnavailable,
 }
 
 #[derive(Debug)]
-pub struct ProviderBatchStatus {
-    provider: String,
-    provider_args: Vec<String>,
-    packages: Vec<String>,
-    outcome: Result<ProviderBatchOutcome, ProviderBatchError>,
+pub struct ProviderInstallStatus {
+    id: String,
+    outcome: Result<ProviderInstallOutcome, ProviderInstallError>,
 }
 
-impl ProviderBatchStatus {
-    pub fn provider(&self) -> &str {
-        &self.provider
+impl ProviderInstallStatus {
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
-    pub fn provider_args(&self) -> &[String] {
-        &self.provider_args
-    }
-
-    pub fn packages(&self) -> &[String] {
-        &self.packages
-    }
-
-    pub fn outcome(&self) -> Result<&ProviderBatchOutcome, &ProviderBatchError> {
+    pub fn outcome(&self) -> Result<&ProviderInstallOutcome, &ProviderInstallError> {
         self.outcome.as_ref()
     }
 
-    pub fn error(&self) -> Option<&ProviderBatchError> {
+    pub fn error(&self) -> Option<&ProviderInstallError> {
         self.outcome.as_ref().err()
     }
 
     pub fn is_succeeded(&self) -> bool {
-        matches!(self.outcome, Ok(ProviderBatchOutcome::Executed { .. }))
+        matches!(self.outcome, Ok(ProviderInstallOutcome::Executed { .. }))
     }
 }
 
 #[derive(Debug, Default)]
-pub struct ProviderBatchExecution {
-    statuses: Vec<ProviderBatchStatus>,
+pub struct ProviderInstallExecution {
+    statuses: Vec<ProviderInstallStatus>,
 }
 
-impl ProviderBatchExecution {
-    pub fn statuses(&self) -> &[ProviderBatchStatus] {
+impl ProviderInstallExecution {
+    pub fn statuses(&self) -> &[ProviderInstallStatus] {
         &self.statuses
     }
 
     pub fn all_succeeded(&self) -> bool {
-        self.statuses.iter().all(ProviderBatchStatus::is_succeeded)
+        self.statuses
+            .iter()
+            .all(ProviderInstallStatus::is_succeeded)
     }
 }
 
@@ -171,46 +163,44 @@ impl<'a> ProviderRunner<'a> {
         ProviderReadiness { statuses }
     }
 
-    pub fn install_batches(
+    pub fn install_all(
         &self,
-        batches: &[PlannedProviderInstall],
+        installs: &[PlannedProviderInstall],
         readiness: &ProviderReadiness,
-    ) -> ProviderBatchExecution {
-        let statuses = batches
+    ) -> ProviderInstallExecution {
+        let statuses = installs
             .iter()
-            .map(|batch| {
+            .map(|install| {
                 let outcome = match readiness
-                    .get(batch.provider())
+                    .get(install.provider())
                     .and_then(ProviderStatus::environment)
                 {
-                    Some(environment) => self.install_batch(batch, environment),
-                    None => Ok(ProviderBatchOutcome::NotRunProviderUnavailable),
+                    Some(environment) => self.install_one(install, environment),
+                    None => Ok(ProviderInstallOutcome::NotRunProviderUnavailable),
                 };
-                ProviderBatchStatus {
-                    provider: batch.provider().to_owned(),
-                    provider_args: batch.provider_args().to_owned(),
-                    packages: batch.names().to_owned(),
+                ProviderInstallStatus {
+                    id: install.id().to_owned(),
                     outcome,
                 }
             })
             .collect();
-        ProviderBatchExecution { statuses }
+        ProviderInstallExecution { statuses }
     }
 
-    fn install_batch(
+    fn install_one(
         &self,
-        batch: &PlannedProviderInstall,
+        install: &PlannedProviderInstall,
         environment: &ExecutionEnvironment,
-    ) -> Result<ProviderBatchOutcome, ProviderBatchError> {
-        let command = PreparedCommand::from_exec_action(batch.install(), environment)
-            .map_err(|source| ProviderBatchError::Preparation { source })?;
-        let install = ProcessExecutor::new()
+    ) -> Result<ProviderInstallOutcome, ProviderInstallError> {
+        let command = PreparedCommand::from_exec_action(install.install(), environment)
+            .map_err(|source| ProviderInstallError::Preparation { source })?;
+        let result = ProcessExecutor::new()
             .execute(&command, IoMode::Inherit)
-            .map_err(|source| ProviderBatchError::Execution { source })?;
-        if !install.success() {
-            return Err(ProviderBatchError::UnsuccessfulExit { result: install });
+            .map_err(|source| ProviderInstallError::Execution { source })?;
+        if !result.success() {
+            return Err(ProviderInstallError::UnsuccessfulExit { result });
         }
-        Ok(ProviderBatchOutcome::Executed { install })
+        Ok(ProviderInstallOutcome::Executed { install: result })
     }
 
     fn ensure_one(
@@ -374,13 +364,13 @@ impl Error for ProviderError {
 }
 
 #[derive(Debug)]
-pub enum ProviderBatchError {
+pub enum ProviderInstallError {
     Preparation { source: CommandPreparationError },
     Execution { source: ExecutionError },
     UnsuccessfulExit { result: ExecutionResult },
 }
 
-impl ProviderBatchError {
+impl ProviderInstallError {
     pub const fn exit_result(&self) -> Option<&ExecutionResult> {
         match self {
             Self::UnsuccessfulExit { result } => Some(result),
@@ -389,7 +379,7 @@ impl ProviderBatchError {
     }
 }
 
-impl fmt::Display for ProviderBatchError {
+impl fmt::Display for ProviderInstallError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Preparation { source } => {
@@ -405,7 +395,7 @@ impl fmt::Display for ProviderBatchError {
     }
 }
 
-impl Error for ProviderBatchError {
+impl Error for ProviderInstallError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Preparation { source } => Some(source),

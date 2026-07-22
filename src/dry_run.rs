@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use crate::plan::ExecutionPlan;
+use crate::plan::{ExecutionPlan, PlannedProviderInstall};
 use crate::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, ItemStatus, LinkItem, PackageItem,
-    PackageSource, ProviderItem, ReportCommand, ReportContext, ReportItem, ReportStatus,
-    ReportSubject,
+    PackageSource, ProviderItem, ProviderPackageSource, ReportCommand, ReportContext, ReportItem,
+    ReportStatus, ReportSubject,
 };
 
 pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
@@ -21,19 +21,27 @@ pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
         evidence: Vec::new(),
     }));
 
-    for batch in plan.provider_installs() {
-        items.extend(batch.names().iter().map(|package| ReportItem {
-            id: package.clone(),
+    items.extend(plan.provider_installs().iter().map(|install| {
+        let source = match install {
+            PlannedProviderInstall::Single(_) => ProviderPackageSource::Single {
+                provider: install.provider().to_owned(),
+                provider_args: install.provider_args().to_owned(),
+            },
+            PlannedProviderInstall::Batch(_) => ProviderPackageSource::Batch {
+                provider: install.provider().to_owned(),
+                names: install.names().to_owned(),
+                provider_args: install.provider_args().to_owned(),
+            },
+        };
+        ReportItem {
+            id: install.id().to_owned(),
             status: ItemStatus::Planned,
             subject: ReportSubject::Package(PackageItem {
-                source: PackageSource::Provider {
-                    provider: batch.provider().to_owned(),
-                    provider_args: batch.provider_args().to_owned(),
-                },
+                source: PackageSource::Provider(source),
             }),
             evidence: Vec::new(),
-        }));
-    }
+        }
+    }));
 
     items.extend(plan.manual_packages().iter().map(|package| ReportItem {
         id: package.id().to_owned(),

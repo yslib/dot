@@ -10,16 +10,16 @@ use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::link::{self, LinkOutcome, LinkPhaseError, LinkReport};
 use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlan, ExecutionPlanner, PlanningError};
+use crate::plan::{ExecutionPlan, ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use crate::platform::PlatformInfo;
 use crate::provider::{
-    ProviderBatchExecution, ProviderBatchOutcome, ProviderError, ProviderOutcome,
+    ProviderError, ProviderInstallExecution, ProviderInstallOutcome, ProviderOutcome,
     ProviderReadiness, ProviderRunner, ProviderStage,
 };
 use crate::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Diagnostic, DiagnosticLevel, Evidence,
-    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ReportCommand,
-    ReportContext, ReportItem, ReportStatus, ReportSubject,
+    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem,
+    ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 
 pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> {
@@ -43,7 +43,7 @@ pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> 
 fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyResult {
     let provider_runner = ProviderRunner::new(environment);
     let providers = provider_runner.ensure_all(plan.providers());
-    let provider_batches = provider_runner.install_batches(plan.provider_installs(), &providers);
+    let provider_installs = provider_runner.install_all(plan.provider_installs(), &providers);
     let action_runner = ActionRunner::new(environment);
     let manual_packages = plan
         .manual_packages()
@@ -65,7 +65,7 @@ fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyRes
 
     ApplyResult {
         providers,
-        provider_batches,
+        provider_installs,
         manual_packages,
         actions,
         links,
@@ -81,7 +81,7 @@ struct NamedActionResult {
 #[derive(Debug)]
 struct ApplyResult {
     providers: ProviderReadiness,
-    provider_batches: ProviderBatchExecution,
+    provider_installs: ProviderInstallExecution,
     manual_packages: Vec<NamedActionResult>,
     actions: Vec<NamedActionResult>,
     links: Result<LinkReport, LinkPhaseError>,
@@ -90,7 +90,7 @@ struct ApplyResult {
 impl ApplyResult {
     fn succeeded(&self) -> bool {
         self.providers.all_ready()
-            && self.provider_batches.all_succeeded()
+            && self.provider_installs.all_succeeded()
             && self
                 .manual_packages
                 .iter()
@@ -105,7 +105,7 @@ impl ApplyResult {
 
 fn build_report(config: &Path, plan: &ExecutionPlan, result: &ApplyResult) -> CommandReport {
     let mut items = provider_items(plan, &result.providers);
-    items.extend(provider_package_items(&result.provider_batches));
+    items.extend(provider_package_items(plan, &result.provider_installs));
     items.extend(action_items(plan, &result.manual_packages, &result.actions));
     let (links, diagnostics) = link_items(plan, &result.links);
     items.extend(links);
@@ -172,17 +172,21 @@ fn provider_items(plan: &ExecutionPlan, readiness: &ProviderReadiness) -> Vec<Re
         .collect()
 }
 
-fn provider_package_items(execution: &ProviderBatchExecution) -> Vec<ReportItem> {
-    execution
-        .statuses()
+fn provider_package_items(
+    plan: &ExecutionPlan,
+    execution: &ProviderInstallExecution,
+) -> Vec<ReportItem> {
+    plan.provider_installs()
         .iter()
-        .flat_map(|batch| {
-            let (status, evidence) = match batch.outcome() {
-                Ok(ProviderBatchOutcome::Executed { install }) => (
+        .zip(execution.statuses())
+        .map(|(install, result)| {
+            debug_assert_eq!(install.id(), result.id());
+            let (status, evidence) = match result.outcome() {
+                Ok(ProviderInstallOutcome::Executed { install }) => (
                     ItemStatus::Installed,
                     vec![execution_evidence(EvidenceStage::Install, install, None)],
                 ),
-                Ok(ProviderBatchOutcome::NotRunProviderUnavailable) => (
+                Ok(ProviderInstallOutcome::NotRunProviderUnavailable) => (
                     ItemStatus::Blocked,
                     vec![message_evidence(
                         EvidenceStage::Install,
@@ -198,17 +202,25 @@ fn provider_package_items(execution: &ProviderBatchExecution) -> Vec<ReportItem>
                     )],
                 ),
             };
-            batch.packages().iter().map(move |package| ReportItem {
-                id: package.clone(),
+            let source = match install {
+                PlannedProviderInstall::Single(_) => ProviderPackageSource::Single {
+                    provider: install.provider().to_owned(),
+                    provider_args: install.provider_args().to_owned(),
+                },
+                PlannedProviderInstall::Batch(_) => ProviderPackageSource::Batch {
+                    provider: install.provider().to_owned(),
+                    names: install.names().to_owned(),
+                    provider_args: install.provider_args().to_owned(),
+                },
+            };
+            ReportItem {
+                id: install.id().to_owned(),
                 status,
                 subject: ReportSubject::Package(PackageItem {
-                    source: PackageSource::Provider {
-                        provider: batch.provider().to_owned(),
-                        provider_args: batch.provider_args().to_owned(),
-                    },
+                    source: PackageSource::Provider(source),
                 }),
-                evidence: evidence.clone(),
-            })
+                evidence,
+            }
         })
         .collect()
 }
