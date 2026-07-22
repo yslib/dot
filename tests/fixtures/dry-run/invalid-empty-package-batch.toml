@@ -1,0 +1,9 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.system]
+probe = { program = "system", args = ["--version"] }
+install = { program = "system", args = ["install", "${package:names}"] }
+
+[targets.machine.packages]
+empty-tools = { provider = "system", names = [] }

@@ -178,7 +178,7 @@ fn executes_a_ready_provider_batch_with_its_activated_environment() {
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_batches(), &readiness);
+    let execution = runner.install_batches(plan.provider_installs(), &readiness);
     let status = &execution.statuses()[0];
 
     assert!(execution.all_succeeded());
@@ -206,7 +206,7 @@ fn does_not_run_a_batch_for_an_unavailable_provider() {
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_batches(), &readiness);
+    let execution = runner.install_batches(plan.provider_installs(), &readiness);
 
     assert!(!execution.all_succeeded());
     assert!(matches!(
@@ -234,7 +234,7 @@ fn a_failed_batch_does_not_stop_an_unrelated_batch() {
     let runner = ProviderRunner::new(&environment);
     let readiness = runner.ensure_all(plan.providers());
 
-    let execution = runner.install_batches(plan.provider_batches(), &readiness);
+    let execution = runner.install_batches(plan.provider_installs(), &readiness);
 
     assert_eq!(execution.statuses().len(), 2);
     assert!(matches!(

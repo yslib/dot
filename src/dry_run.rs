@@ -21,8 +21,8 @@ pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
         evidence: Vec::new(),
     }));
 
-    for batch in plan.provider_batches() {
-        items.extend(batch.packages().iter().map(|package| ReportItem {
+    for batch in plan.provider_installs() {
+        items.extend(batch.names().iter().map(|package| ReportItem {
             id: package.clone(),
             status: ItemStatus::Planned,
             subject: ReportSubject::Package(PackageItem {

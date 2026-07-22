@@ -7,7 +7,7 @@ use dot::action::ExecutionEnvironment;
 use dot::dry_run;
 use dot::interpolation::{DotPaths, XdgPaths};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlanner, PlanningError};
+use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
 use dot::report::{ItemStatus, PackageSource, ReportCommand, ReportStatus, ReportSubject};
 use dot::schema::{
@@ -95,8 +95,8 @@ fn select_fixture(name: &str) -> EffectiveManifest {
 }
 
 #[test]
-fn groups_provider_packages_and_resolves_each_batch_environment() {
-    let manifest = select_fixture("dry-run/valid-provider-batches.toml");
+fn plans_provider_install_units_independently_and_resolves_their_environment() {
+    let manifest = select_fixture("dry-run/valid-provider-install-units.toml");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let platform = platform();
@@ -112,35 +112,91 @@ fn groups_provider_packages_and_resolves_each_batch_environment() {
     );
     assert_eq!(plan.providers()[0].ensure().len(), 1);
 
-    assert_eq!(plan.provider_batches().len(), 2);
-    let default = &plan.provider_batches()[0];
-    assert_eq!(default.provider(), "brew");
-    assert_eq!(default.provider_args(), &[] as &[String]);
-    assert_eq!(default.packages(), &[String::from("alpha"), "beta".into()]);
+    assert_eq!(plan.provider_installs().len(), 3);
+
+    let alpha = &plan.provider_installs()[0];
+    assert!(matches!(alpha, PlannedProviderInstall::Single(_)));
+    assert_eq!(alpha.id(), "alpha");
+    assert_eq!(alpha.provider(), "brew");
+    assert_eq!(alpha.provider_args(), &[] as &[String]);
+    assert_eq!(alpha.names(), &[String::from("alpha")]);
     assert_eq!(
-        default
+        alpha
             .install()
             .args
             .iter()
             .map(ScalarTemplate::as_str)
             .collect::<Vec<_>>(),
-        vec!["install", "alpha", "beta"]
+        vec!["install", "alpha"]
     );
 
-    let cask = &plan.provider_batches()[1];
-    assert_eq!(cask.provider_args(), &[String::from("--cask")]);
+    let beta = &plan.provider_installs()[1];
+    assert!(matches!(beta, PlannedProviderInstall::Single(_)));
+    assert_eq!(beta.id(), "beta");
+    assert_eq!(beta.names(), &[String::from("beta")]);
     assert_eq!(
-        cask.packages(),
+        beta.install()
+            .args
+            .iter()
+            .map(ScalarTemplate::as_str)
+            .collect::<Vec<_>>(),
+        vec!["install", "beta"]
+    );
+
+    let fonts = &plan.provider_installs()[2];
+    assert!(matches!(fonts, PlannedProviderInstall::Batch(_)));
+    assert_eq!(fonts.id(), "fonts");
+    assert_eq!(fonts.provider_args(), &[String::from("--cask")]);
+    assert_eq!(
+        fonts.names(),
         &[String::from("font-one"), "font-two".into()]
     );
     assert_eq!(
-        cask.install()
+        fonts
+            .install()
             .args
             .iter()
             .map(ScalarTemplate::as_str)
             .collect::<Vec<_>>(),
         vec!["install", "--cask", "font-one", "font-two"]
     );
+}
+
+#[test]
+fn rejects_an_empty_provider_package_batch() {
+    let manifest = select_fixture("dry-run/invalid-empty-package-batch.toml");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let error = planner
+        .plan(&manifest)
+        .expect_err("an empty batch must fail");
+
+    assert!(matches!(
+        error,
+        PlanningError::EmptyPackageBatch { package } if package == "empty-tools"
+    ));
+}
+
+#[test]
+fn rejects_a_duplicate_name_inside_one_provider_package_batch() {
+    let manifest = select_fixture("dry-run/invalid-duplicate-package-batch-name.toml");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let error = planner
+        .plan(&manifest)
+        .expect_err("a duplicate batch name must fail");
+
+    assert!(matches!(
+        error,
+        PlanningError::DuplicatePackageBatchName { package, name }
+            if package == "duplicate-tools" && name == "ripgrep"
+    ));
 }
 
 #[test]

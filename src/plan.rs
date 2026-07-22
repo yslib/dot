@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,10 +13,8 @@ use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
     Action, EnvironmentPatch, ExecAction, LinkConflict, LinkMissingParent, OneOrMany, Package,
-    Provider,
+    Provider, ProviderPackage,
 };
-
-type ProviderGroups = BTreeMap<(String, Vec<String>), Vec<String>>;
 
 #[derive(Debug)]
 pub struct ExecutionPlan {
@@ -24,7 +22,7 @@ pub struct ExecutionPlan {
     profile: Option<String>,
     platform: PlatformInfo,
     providers: Vec<PlannedProvider>,
-    provider_batches: Vec<PlannedProviderBatch>,
+    provider_installs: Vec<PlannedProviderInstall>,
     manual_packages: Vec<PlannedManualPackage>,
     actions: Vec<PlannedAction>,
     links: Vec<PlannedLink>,
@@ -47,8 +45,8 @@ impl ExecutionPlan {
         &self.providers
     }
 
-    pub fn provider_batches(&self) -> &[PlannedProviderBatch] {
-        &self.provider_batches
+    pub fn provider_installs(&self) -> &[PlannedProviderInstall] {
+        &self.provider_installs
     }
 
     pub fn manual_packages(&self) -> &[PlannedManualPackage] {
@@ -91,29 +89,63 @@ impl PlannedProvider {
 }
 
 #[derive(Debug)]
-pub struct PlannedProviderBatch {
-    provider: String,
-    provider_args: Vec<String>,
-    packages: Vec<String>,
-    install: ExecAction,
+pub enum PlannedProviderInstall {
+    Single(PlannedSingleProviderPackage),
+    Batch(PlannedProviderPackageBatch),
 }
 
-impl PlannedProviderBatch {
+impl PlannedProviderInstall {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Single(package) => &package.id,
+            Self::Batch(package) => &package.id,
+        }
+    }
+
     pub fn provider(&self) -> &str {
-        &self.provider
+        match self {
+            Self::Single(package) => &package.provider,
+            Self::Batch(package) => &package.provider,
+        }
     }
 
     pub fn provider_args(&self) -> &[String] {
-        &self.provider_args
+        match self {
+            Self::Single(package) => &package.provider_args,
+            Self::Batch(package) => &package.provider_args,
+        }
     }
 
-    pub fn packages(&self) -> &[String] {
-        &self.packages
+    pub fn names(&self) -> &[String] {
+        match self {
+            Self::Single(package) => std::slice::from_ref(&package.id),
+            Self::Batch(package) => &package.names,
+        }
     }
 
     pub fn install(&self) -> &ExecAction {
-        &self.install
+        match self {
+            Self::Single(package) => &package.install,
+            Self::Batch(package) => &package.install,
+        }
     }
+}
+
+#[derive(Debug)]
+pub struct PlannedSingleProviderPackage {
+    id: String,
+    provider: String,
+    provider_args: Vec<String>,
+    install: ExecAction,
+}
+
+#[derive(Debug)]
+pub struct PlannedProviderPackageBatch {
+    id: String,
+    provider: String,
+    provider_args: Vec<String>,
+    names: Vec<String>,
+    install: ExecAction,
 }
 
 #[derive(Debug)]
@@ -203,10 +235,8 @@ impl<'a> ExecutionPlanner<'a> {
     }
 
     pub fn plan(&self, manifest: &EffectiveManifest) -> Result<ExecutionPlan, PlanningError> {
-        let groups = self.group_provider_packages(manifest)?;
         let (providers, provider_environments) = self.plan_providers(manifest)?;
-        let provider_batches =
-            self.plan_provider_batches(manifest, groups, &provider_environments)?;
+        let provider_installs = self.plan_provider_installs(manifest, &provider_environments)?;
         let manual_packages = self.plan_manual_packages(manifest)?;
         let actions = self.plan_actions(manifest)?;
         let links = self.plan_links(manifest)?;
@@ -216,48 +246,11 @@ impl<'a> ExecutionPlanner<'a> {
             profile: manifest.profile().map(str::to_owned),
             platform: self.platform.clone(),
             providers,
-            provider_batches,
+            provider_installs,
             manual_packages,
             actions,
             links,
         })
-    }
-
-    fn group_provider_packages(
-        &self,
-        manifest: &EffectiveManifest,
-    ) -> Result<ProviderGroups, PlanningError> {
-        let mut groups = BTreeMap::new();
-
-        for (package_id, package) in manifest.packages() {
-            let Package::Provider(package) = package else {
-                continue;
-            };
-            let provider = package.provider().as_str();
-            if !manifest.providers().contains_key(provider) {
-                return Err(PlanningError::UnknownProvider {
-                    package: package_id.to_string(),
-                    provider: provider.to_owned(),
-                });
-            }
-
-            let provider_args = package
-                .provider_args()
-                .unwrap_or_default()
-                .iter()
-                .map(resolve_literal_string)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|source| PlanningError::Interpolation {
-                    context: format!("package `{package_id}` provider_args"),
-                    source,
-                })?;
-            groups
-                .entry((provider.to_owned(), provider_args))
-                .or_insert_with(Vec::new)
-                .push(package_id.to_string());
-        }
-
-        Ok(groups)
     }
 
     fn plan_providers(
@@ -316,46 +309,106 @@ impl<'a> ExecutionPlanner<'a> {
         Ok((plans, environments))
     }
 
-    fn plan_provider_batches(
+    fn plan_provider_installs(
         &self,
         manifest: &EffectiveManifest,
-        groups: ProviderGroups,
         environments: &BTreeMap<String, ExecutionEnvironment>,
-    ) -> Result<Vec<PlannedProviderBatch>, PlanningError> {
-        groups
-            .into_iter()
-            .map(|((provider_id, provider_args), packages)| {
-                let provider = &manifest.providers()[provider_id.as_str()];
-                let environment = &environments[provider_id.as_str()];
-                if !provider_args.is_empty() {
-                    let resolver_count = provider
-                        .install
-                        .args
-                        .iter()
-                        .filter(|argument| argument.as_str() == "${package:provider_args}")
-                        .count();
-                    if resolver_count != 1 {
-                        return Err(PlanningError::ProviderArgsResolverCount {
-                            provider: provider_id,
-                            actual: resolver_count,
-                        });
-                    }
-                }
-                let package_context = PackageContext::new(&packages, &provider_args);
-                let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
-                    .with_package(package_context);
-                let install = resolve_provider_install_action(&provider.install, &context)
-                    .map_err(|source| PlanningError::Interpolation {
-                        context: format!("provider `{provider_id}` install batch"),
-                        source,
-                    })?;
+    ) -> Result<Vec<PlannedProviderInstall>, PlanningError> {
+        manifest
+            .packages()
+            .iter()
+            .filter_map(|(package_id, package)| {
+                let Package::Provider(package) = package else {
+                    return None;
+                };
 
-                Ok(PlannedProviderBatch {
-                    provider: provider_id,
-                    provider_args,
-                    packages,
-                    install,
-                })
+                Some((|| {
+                    let provider_id = package.provider().as_str();
+                    let provider = manifest.providers().get(provider_id).ok_or_else(|| {
+                        PlanningError::UnknownProvider {
+                            package: package_id.to_string(),
+                            provider: provider_id.to_owned(),
+                        }
+                    })?;
+                    let environment = &environments[provider_id];
+                    let provider_args = package
+                        .provider_args()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(resolve_literal_string)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|source| PlanningError::Interpolation {
+                            context: format!("package `{package_id}` provider_args"),
+                            source,
+                        })?;
+                    if !provider_args.is_empty() {
+                        let resolver_count = provider
+                            .install
+                            .args
+                            .iter()
+                            .filter(|argument| argument.as_str() == "${package:provider_args}")
+                            .count();
+                        if resolver_count != 1 {
+                            return Err(PlanningError::ProviderArgsResolverCount {
+                                provider: provider_id.to_owned(),
+                                actual: resolver_count,
+                            });
+                        }
+                    }
+
+                    let names = match package {
+                        ProviderPackage::Single(_) => vec![package_id.to_string()],
+                        ProviderPackage::Batch(package) => {
+                            if package.names.is_empty() {
+                                return Err(PlanningError::EmptyPackageBatch {
+                                    package: package_id.to_string(),
+                                });
+                            }
+                            let mut seen = BTreeSet::new();
+                            let mut names = Vec::with_capacity(package.names.len());
+                            for name in &package.names {
+                                if !seen.insert(name.as_str()) {
+                                    return Err(PlanningError::DuplicatePackageBatchName {
+                                        package: package_id.to_string(),
+                                        name: name.to_string(),
+                                    });
+                                }
+                                names.push(name.to_string());
+                            }
+                            names
+                        }
+                    };
+                    let package_context = PackageContext::new(&names, &provider_args);
+                    let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
+                        .with_package(package_context);
+                    let install = resolve_provider_install_action(&provider.install, &context)
+                        .map_err(|source| PlanningError::Interpolation {
+                            context: format!(
+                                "provider `{provider_id}` install unit `{package_id}`"
+                            ),
+                            source,
+                        })?;
+
+                    Ok(match package {
+                        ProviderPackage::Single(_) => {
+                            PlannedProviderInstall::Single(PlannedSingleProviderPackage {
+                                id: package_id.to_string(),
+                                provider: provider_id.to_owned(),
+                                provider_args,
+                                install,
+                            })
+                        }
+                        ProviderPackage::Batch(_) => {
+                            PlannedProviderInstall::Batch(PlannedProviderPackageBatch {
+                                id: package_id.to_string(),
+                                provider: provider_id.to_owned(),
+                                provider_args,
+                                names,
+                                install,
+                            })
+                        }
+                    })
+                })())
             })
             .collect()
     }
@@ -497,6 +550,13 @@ pub enum PlanningError {
         provider: String,
         actual: usize,
     },
+    EmptyPackageBatch {
+        package: String,
+    },
+    DuplicatePackageBatchName {
+        package: String,
+        name: String,
+    },
     RelativeLinkTarget {
         link: String,
         target: PathBuf,
@@ -523,7 +583,17 @@ impl fmt::Display for PlanningError {
             }
             Self::ProviderArgsResolverCount { provider, actual } => write!(
                 formatter,
-                "provider `{provider}` install must contain exactly one `${{package:provider_args}}` argument for a nonempty provider_args batch; found {actual}"
+                "provider `{provider}` install must contain exactly one `${{package:provider_args}}` argument for an install unit with nonempty provider_args; found {actual}"
+            ),
+            Self::EmptyPackageBatch { package } => {
+                write!(
+                    formatter,
+                    "package batch `{package}` must contain at least one name"
+                )
+            }
+            Self::DuplicatePackageBatchName { package, name } => write!(
+                formatter,
+                "package batch `{package}` contains duplicate name `{name}`"
             ),
             Self::RelativeLinkTarget { link, target } => write!(
                 formatter,
@@ -541,6 +611,8 @@ impl Error for PlanningError {
             Self::Interpolation { source, .. } => Some(source),
             Self::EnvironmentPatch { source, .. } => Some(source),
             Self::ProviderArgsResolverCount { .. } => None,
+            Self::EmptyPackageBatch { .. } => None,
+            Self::DuplicatePackageBatchName { .. } => None,
             Self::RelativeLinkTarget { .. } => None,
         }
     }

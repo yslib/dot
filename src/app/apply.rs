@@ -43,7 +43,7 @@ pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> 
 fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyResult {
     let provider_runner = ProviderRunner::new(environment);
     let providers = provider_runner.ensure_all(plan.providers());
-    let provider_batches = provider_runner.install_batches(plan.provider_batches(), &providers);
+    let provider_batches = provider_runner.install_batches(plan.provider_installs(), &providers);
     let action_runner = ActionRunner::new(environment);
     let manual_packages = plan
         .manual_packages()

@@ -5,7 +5,7 @@ use crate::action::{
     CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
     PreparedCommand, ProcessExecutor,
 };
-use crate::plan::{PlannedProvider, PlannedProviderBatch};
+use crate::plan::{PlannedProvider, PlannedProviderInstall};
 use crate::schema::ExecAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +173,7 @@ impl<'a> ProviderRunner<'a> {
 
     pub fn install_batches(
         &self,
-        batches: &[PlannedProviderBatch],
+        batches: &[PlannedProviderInstall],
         readiness: &ProviderReadiness,
     ) -> ProviderBatchExecution {
         let statuses = batches
@@ -189,7 +189,7 @@ impl<'a> ProviderRunner<'a> {
                 ProviderBatchStatus {
                     provider: batch.provider().to_owned(),
                     provider_args: batch.provider_args().to_owned(),
-                    packages: batch.packages().to_owned(),
+                    packages: batch.names().to_owned(),
                     outcome,
                 }
             })
@@ -199,7 +199,7 @@ impl<'a> ProviderRunner<'a> {
 
     fn install_batch(
         &self,
-        batch: &PlannedProviderBatch,
+        batch: &PlannedProviderInstall,
         environment: &ExecutionEnvironment,
     ) -> Result<ProviderBatchOutcome, ProviderBatchError> {
         let command = PreparedCommand::from_exec_action(batch.install(), environment)

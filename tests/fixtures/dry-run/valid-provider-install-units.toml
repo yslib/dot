@@ -10,5 +10,4 @@ install = { program = "${env:BREW}", args = ["install", "${package:provider_args
 [targets.machine.packages]
 alpha = { provider = "brew" }
 beta = { provider = "brew" }
-font-one = { provider = "brew", provider_args = ["--cask"] }
-font-two = { provider = "brew", provider_args = ["--cask"] }
+fonts = { provider = "brew", names = ["font-one", "font-two"], provider_args = ["--cask"] }
