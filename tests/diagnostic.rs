@@ -22,23 +22,9 @@ fn requires_the_platform_operation_and_raw_code_to_match() {
     let privilege_error = io::Error::from_raw_os_error(1314);
     let other_error = io::Error::from_raw_os_error(5);
 
-    assert!(
-        lookup(
-            "linux",
-            Operation::CreateSymbolicLink,
-            &privilege_error
-        )
-        .is_none()
-    );
+    assert!(lookup("linux", Operation::CreateSymbolicLink, &privilege_error).is_none());
     assert!(lookup("windows", Operation::StartProcess, &privilege_error).is_none());
-    assert!(
-        lookup(
-            "windows",
-            Operation::CreateSymbolicLink,
-            &other_error
-        )
-        .is_none()
-    );
+    assert!(lookup("windows", Operation::CreateSymbolicLink, &other_error).is_none());
 }
 
 #[test]

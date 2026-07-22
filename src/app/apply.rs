@@ -528,9 +528,6 @@ mod tests {
                 .is_some_and(|message| message.contains("os error 1314"))
         );
         assert_eq!(evidence.hints.len(), 1);
-        assert_eq!(
-            evidence.hints[0].code,
-            "windows.symlink.privilege-required"
-        );
+        assert_eq!(evidence.hints[0].code, "windows.symlink.privilege-required");
     }
 }

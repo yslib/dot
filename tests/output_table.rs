@@ -183,7 +183,10 @@ fn renders_structured_hints_after_the_original_error() {
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
 
-    assert!(output.contains("os error 1314"), "native error missing:\n{output}");
+    assert!(
+        output.contains("os error 1314"),
+        "native error missing:\n{output}"
+    );
     assert!(
         output.contains("windows.symlink.privilege-required"),
         "diagnostic code missing:\n{output}"

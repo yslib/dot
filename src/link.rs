@@ -157,15 +157,14 @@ fn reconcile_one(link: PreparedLink<'_>) -> Result<LinkOutcome, LinkError> {
             }
             remove_native_symlink(&link.target, &metadata.file_type())
                 .map_err(|error| LinkError::io("remove symbolic link", &link.target, error))?;
-            create_native_symlink(&link.source, &link.target, link.kind)
-                .map_err(|error| {
-                    LinkError::io_with_diagnostic(
-                        "create replacement link",
-                        &link.target,
-                        Operation::CreateSymbolicLink,
-                        error,
-                    )
-                })?;
+            create_native_symlink(&link.source, &link.target, link.kind).map_err(|error| {
+                LinkError::io_with_diagnostic(
+                    "create replacement link",
+                    &link.target,
+                    Operation::CreateSymbolicLink,
+                    error,
+                )
+            })?;
             verify_link(&link)?;
             return Ok(LinkOutcome::Replaced);
         }
@@ -176,15 +175,14 @@ fn reconcile_one(link: PreparedLink<'_>) -> Result<LinkOutcome, LinkError> {
         }
     }
 
-    create_native_symlink(&link.source, &link.target, link.kind)
-        .map_err(|error| {
-            LinkError::io_with_diagnostic(
-                "create symbolic link",
-                &link.target,
-                Operation::CreateSymbolicLink,
-                error,
-            )
-        })?;
+    create_native_symlink(&link.source, &link.target, link.kind).map_err(|error| {
+        LinkError::io_with_diagnostic(
+            "create symbolic link",
+            &link.target,
+            Operation::CreateSymbolicLink,
+            error,
+        )
+    })?;
     verify_link(&link)?;
     Ok(LinkOutcome::Created)
 }
