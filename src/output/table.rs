@@ -209,21 +209,33 @@ fn command_line(command: &CommandInfo) -> String {
 }
 
 fn evidence_detail(item: &ReportItem) -> Option<String> {
+    let evidence = item
+        .evidence
+        .iter()
+        .rev()
+        .find(|evidence| evidence.message.is_some() || !evidence.hints.is_empty());
+    if let Some(evidence) = evidence {
+        let mut lines = evidence.message.iter().cloned().collect::<Vec<_>>();
+        lines.extend(evidence.hints.iter().map(|hint| {
+            format!(
+                "hint [{}]: {}; {}",
+                hint.code, hint.summary, hint.suggestion
+            )
+        }));
+        if !lines.is_empty() {
+            return Some(lines.join("\n"));
+        }
+    }
+
+    matches!(
+        item.status,
+        ItemStatus::NotReady | ItemStatus::Blocked | ItemStatus::Failed
+    )
+    .then_some(())?;
     item.evidence
         .iter()
         .rev()
-        .find_map(|evidence| evidence.message.clone())
-        .or_else(|| {
-            matches!(
-                item.status,
-                ItemStatus::NotReady | ItemStatus::Blocked | ItemStatus::Failed
-            )
-            .then_some(())?;
-            item.evidence
-                .iter()
-                .rev()
-                .find_map(|evidence| evidence.exit_code.map(|code| format!("exit {code}")))
-        })
+        .find_map(|evidence| evidence.exit_code.map(|code| format!("exit {code}")))
 }
 
 const fn report_command(command: ReportCommand) -> &'static str {

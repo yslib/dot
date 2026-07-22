@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use dot::diagnostic::ErrorHint;
 use dot::output::TableRenderer;
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ActionInfo, ActionItem, CommandInfo, CommandReport, ItemStatus, LinkItem, PackageItem,
-    PackageSource, ProviderItem, ReportCommand, ReportContext, ReportItem, ReportStatus,
-    ReportSubject,
+    ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
+    LinkItem, PackageItem, PackageSource, ProviderItem, ReportCommand, ReportContext, ReportItem,
+    ReportStatus, ReportSubject,
 };
 use dot::schema::{LinkConflict, LinkMissingParent};
 
@@ -154,5 +155,41 @@ fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     assert!(
         longest_line <= 120,
         "table line is {longest_line} columns wide:\n{output}"
+    );
+}
+
+#[test]
+fn renders_structured_hints_after_the_original_error() {
+    let mut report = report();
+    let link = &mut report.items[3];
+    link.status = ItemStatus::Failed;
+    link.evidence = vec![Evidence {
+        stage: EvidenceStage::Link,
+        exit_code: None,
+        message: Some("A required privilege is not held by the client. (os error 1314)".to_owned()),
+        stdout: None,
+        stderr: None,
+        hints: vec![ErrorHint {
+            code: "windows.symlink.privilege-required".to_owned(),
+            summary: "symbolic-link creation requires permission".to_owned(),
+            suggestion: "enable Windows Developer Mode or run dot from an elevated shell"
+                .to_owned(),
+        }],
+    }];
+
+    let mut output = Vec::new();
+    TableRenderer::new(false)
+        .render(&report, &mut output)
+        .expect("table should render");
+    let output = String::from_utf8(output).expect("table should be UTF-8");
+
+    assert!(output.contains("os error 1314"), "native error missing:\n{output}");
+    assert!(
+        output.contains("windows.symlink.privilege-required"),
+        "diagnostic code missing:\n{output}"
+    );
+    assert!(
+        output.contains("enable Windows Developer Mode"),
+        "diagnostic suggestion missing:\n{output}"
     );
 }
