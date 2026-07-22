@@ -13,6 +13,7 @@ install = { program = "brew", args = ["install", "${package:provider_args}", "${
 [targets.workstation.packages]
 ripgrep = { provider = "brew" }
 app = { provider = "brew", provider_args = ["--cask"] }
+cli-tools = { provider = "brew", names = ["bat", "fd", "fzf"] }
 manual-tool = { install = { check = { program = "/opt/tools/manual-tool", args = ["--version"] }, exec = { program = "bash", args = ["install-manual-tool.sh"] } } }
 
 [targets.workstation.links]

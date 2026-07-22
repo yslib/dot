@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use dot::manifest::{EffectiveManifest, ManifestError};
 use dot::platform::PlatformInfo;
-use dot::schema::{Config, Package};
+use dot::schema::{Config, Package, ProviderPackage};
 use support::fixture;
 
 fn parse_fixture(name: &str) -> Config {
@@ -104,7 +104,8 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
     assert!(manifest.packages().contains_key("laptop"));
     assert!(!manifest.packages().contains_key("server-only"));
 
-    let Package::Provider(replaced) = &manifest.packages()["replace-me"] else {
+    let Package::Provider(ProviderPackage::Single(replaced)) = &manifest.packages()["replace-me"]
+    else {
         panic!("replacement should remain a provider package");
     };
     assert_eq!(replaced.provider.as_str(), "desktop");

@@ -280,9 +280,40 @@ pub enum Package {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderPackage {
+    Batch(BatchProviderPackage),
+    Single(SingleProviderPackage),
+}
+
+impl ProviderPackage {
+    pub fn provider(&self) -> &Identifier {
+        match self {
+            Self::Single(package) => &package.provider,
+            Self::Batch(package) => &package.provider,
+        }
+    }
+
+    pub fn provider_args(&self) -> Option<&[LiteralString]> {
+        match self {
+            Self::Single(package) => package.provider_args.as_deref(),
+            Self::Batch(package) => package.provider_args.as_deref(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProviderPackage {
+pub struct SingleProviderPackage {
     pub provider: Identifier,
+    pub provider_args: Option<Vec<LiteralString>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchProviderPackage {
+    pub provider: Identifier,
+    pub names: Vec<Identifier>,
     pub provider_args: Option<Vec<LiteralString>>,
 }
 

@@ -13,7 +13,8 @@ use dot::platform::PlatformInfo;
 use dot::provider::{ProviderBatchError, ProviderBatchOutcome, ProviderRunner};
 use dot::schema::{
     Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, Identifier, OneOrMany, Package,
-    PlatformConstraint, Provider, ProviderInstallArg, ProviderPackage, ScalarTemplate, Target,
+    PlatformConstraint, Provider, ProviderInstallArg, ProviderPackage, ScalarTemplate,
+    SingleProviderPackage, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -120,10 +121,10 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<(&str, &str)>) -> Ex
         .map(|(package, provider)| {
             (
                 identifier(package),
-                Package::Provider(ProviderPackage {
+                Package::Provider(ProviderPackage::Single(SingleProviderPackage {
                     provider: identifier(provider),
                     provider_args: None,
-                }),
+                })),
             )
         })
         .collect::<Entries<_>>();

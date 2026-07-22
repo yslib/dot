@@ -2,7 +2,8 @@ mod support;
 
 use dot::schema::{
     Config, EnvironmentName, ExecAction, ExecActionType, Identifier, LinkConflict,
-    LinkMissingParent, LiteralString, OneOrMany, Package, ProviderInstallArg, ScalarTemplate,
+    LinkMissingParent, LiteralString, OneOrMany, Package, ProviderInstallArg, ProviderPackage,
+    ScalarTemplate,
 };
 
 use support::fixture;
@@ -50,7 +51,7 @@ fn deserializes_the_complete_schema() {
     assert_eq!(ensure.len(), 2);
     assert_eq!(ensure[1].kind, Some(ExecActionType::Exec));
 
-    let Package::Provider(app) = &target.packages["app"] else {
+    let Package::Provider(ProviderPackage::Single(app)) = &target.packages["app"] else {
         panic!("app should be a provider package");
     };
     assert_eq!(app.provider.as_str(), "brew");
@@ -63,6 +64,19 @@ fn deserializes_the_complete_schema() {
             .collect::<Vec<_>>(),
         vec!["--cask"]
     );
+    let Package::Provider(ProviderPackage::Batch(cli_tools)) = &target.packages["cli-tools"] else {
+        panic!("cli-tools should be a provider package batch");
+    };
+    assert_eq!(cli_tools.provider.as_str(), "brew");
+    assert_eq!(
+        cli_tools
+            .names
+            .iter()
+            .map(Identifier::as_str)
+            .collect::<Vec<_>>(),
+        vec!["bat", "fd", "fzf"]
+    );
+    assert!(cli_tools.provider_args.is_none());
     assert!(matches!(target.packages["manual-tool"], Package::Manual(_)));
 
     let link = &target.links["config"];
@@ -93,7 +107,8 @@ fn deserializes_strings_into_their_declared_schema_roles() {
         "${package:provider_args}"
     );
 
-    let Package::Provider(package) = &target.packages["application"] else {
+    let Package::Provider(ProviderPackage::Single(package)) = &target.packages["application"]
+    else {
         panic!("application should use a provider");
     };
     let provider_arg: &LiteralString = &package.provider_args.as_ref().expect("args exist")[0];

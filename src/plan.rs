@@ -233,7 +233,7 @@ impl<'a> ExecutionPlanner<'a> {
             let Package::Provider(package) = package else {
                 continue;
             };
-            let provider = package.provider.as_str();
+            let provider = package.provider().as_str();
             if !manifest.providers().contains_key(provider) {
                 return Err(PlanningError::UnknownProvider {
                     package: package_id.to_string(),
@@ -242,8 +242,7 @@ impl<'a> ExecutionPlanner<'a> {
             }
 
             let provider_args = package
-                .provider_args
-                .as_deref()
+                .provider_args()
                 .unwrap_or_default()
                 .iter()
                 .map(resolve_literal_string)
