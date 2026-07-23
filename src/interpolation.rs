@@ -7,8 +7,12 @@ use directories::{BaseDirs, UserDirs};
 
 use crate::action::ExecutionEnvironment;
 use crate::schema::{
-    EnvironmentName, EnvironmentPatch, ExecAction, LiteralString, OneOrMany, ProviderInstallArg,
-    ScalarTemplate,
+    EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType,
+    LiteralString, LiteralStringSource, OneOrMany, ParsedStringForm,
+    ParsedTemplate as ParsedStringTemplate, ParsedTemplatePart, ProviderInstallArg,
+    ProviderInstallArgSource, ProviderInstallArgs, ScalarTemplate, SchemaType, SchemaTypeMarker,
+    StringExpression, StringExpressionSource, StringTemplate, StringTemplatePart, StringType,
+    TypedVariable, UntypedVariableReference, ValidatedLiteralString,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,12 +213,6 @@ impl<'a> ResolveContext<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ResolverOutputKind {
-    Scalar,
-    List,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolverAvailability {
     Everywhere,
     ProviderInstallOnly,
@@ -238,41 +236,50 @@ enum ResolverValue {
 }
 
 type ValidatePayloadFn = fn(&str) -> bool;
+type SchemaTypeFn = fn() -> SchemaType;
 type ResolveFn = for<'a> fn(&str, &ResolveContext<'a>) -> Result<ResolverValue, InterpolationError>;
 
 struct BuiltinResolverSpec {
     name: &'static str,
-    output: ResolverOutputKind,
+    output: SchemaTypeFn,
     availability: ResolverAvailability,
     validate_payload: ValidatePayloadFn,
     resolve: ResolveFn,
 }
 
+fn string_schema_type() -> SchemaType {
+    StringType::schema_type()
+}
+
+fn string_list_schema_type() -> SchemaType {
+    ListType::<StringType>::schema_type()
+}
+
 static BUILTIN_RESOLVERS: &[BuiltinResolverSpec] = &[
     BuiltinResolverSpec {
         name: "env",
-        output: ResolverOutputKind::Scalar,
+        output: string_schema_type,
         availability: ResolverAvailability::Everywhere,
         validate_payload: validate_env_payload,
         resolve: resolve_env,
     },
     BuiltinResolverSpec {
         name: "dot",
-        output: ResolverOutputKind::Scalar,
+        output: string_schema_type,
         availability: ResolverAvailability::Everywhere,
         validate_payload: validate_dot_payload,
         resolve: resolve_dot,
     },
     BuiltinResolverSpec {
         name: "xdg",
-        output: ResolverOutputKind::Scalar,
+        output: string_schema_type,
         availability: ResolverAvailability::Everywhere,
         validate_payload: validate_xdg_payload,
         resolve: resolve_xdg,
     },
     BuiltinResolverSpec {
         name: "package",
-        output: ResolverOutputKind::List,
+        output: string_list_schema_type,
         availability: ResolverAvailability::ProviderInstallOnly,
         validate_payload: validate_package_payload,
         resolve: resolve_package,
@@ -366,6 +373,157 @@ fn resolve_package(
     Ok(ResolverValue::List(values.to_vec()))
 }
 
+fn validate_resolver_reference(
+    reference: &UntypedVariableReference,
+    role: TemplateRole,
+) -> Result<&'static BuiltinResolverSpec, InterpolationError> {
+    let resolver = lookup_resolver(reference.resolver()).ok_or_else(|| {
+        InterpolationError::UnknownResolver {
+            name: reference.resolver().to_owned(),
+        }
+    })?;
+
+    if !resolver.availability.allows(role) {
+        return Err(InterpolationError::ResolverUnavailable {
+            resolver: reference.resolver().to_owned(),
+        });
+    }
+    if !(resolver.validate_payload)(reference.payload()) {
+        return Err(InterpolationError::InvalidResolverPayload {
+            resolver: reference.resolver().to_owned(),
+            payload: reference.payload().to_owned(),
+        });
+    }
+
+    Ok(resolver)
+}
+
+fn validate_variable<T: SchemaTypeMarker>(
+    reference: &UntypedVariableReference,
+    role: TemplateRole,
+) -> Result<TypedVariable<T>, InterpolationError> {
+    let resolver = validate_resolver_reference(reference, role)?;
+    let expected = T::schema_type();
+    let actual = (resolver.output)();
+    if actual != expected {
+        return Err(InterpolationError::ResolverTypeMismatch {
+            resolver: reference.resolver().to_owned(),
+            expected,
+            actual,
+        });
+    }
+
+    Ok(TypedVariable::validated(reference.clone()))
+}
+
+fn promote_parse_error(error: &ExpressionParseError) -> InterpolationError {
+    match error {
+        ExpressionParseError::UnclosedResolver { offset } => {
+            InterpolationError::UnclosedResolver { offset: *offset }
+        }
+        ExpressionParseError::MissingPayloadSeparator { offset } => {
+            InterpolationError::MissingPayloadSeparator { offset: *offset }
+        }
+        ExpressionParseError::NestedResolver { offset } => {
+            InterpolationError::NestedResolver { offset: *offset }
+        }
+    }
+}
+
+pub fn promote_literal_string(
+    source: &LiteralStringSource,
+) -> Result<ValidatedLiteralString, InterpolationError> {
+    match source.parsed() {
+        ParsedStringForm::Literal(literal) => Ok(ValidatedLiteralString::validated(
+            literal.value().to_owned(),
+        )),
+        ParsedStringForm::Variable(reference) => Err(InterpolationError::ResolverInLiteralString {
+            resolver: reference.resolver().to_owned(),
+        }),
+        ParsedStringForm::Template(template) => {
+            let resolver = template.parts().iter().find_map(|part| match part {
+                ParsedTemplatePart::Literal(_) => None,
+                ParsedTemplatePart::Variable(reference) => Some(reference.resolver()),
+            });
+            Err(InterpolationError::ResolverInLiteralString {
+                resolver: resolver
+                    .expect("a parsed template contains at least one variable")
+                    .to_owned(),
+            })
+        }
+        ParsedStringForm::Malformed(error) => Err(promote_parse_error(error)),
+    }
+}
+
+pub fn promote_string_expression(
+    source: &StringExpressionSource,
+) -> Result<StringExpression, InterpolationError> {
+    promote_string_form(source.parsed(), TemplateRole::Scalar)
+}
+
+fn promote_string_form(
+    parsed: &ParsedStringForm,
+    role: TemplateRole,
+) -> Result<StringExpression, InterpolationError> {
+    match parsed {
+        ParsedStringForm::Literal(literal) => Ok(StringExpression::Literal(
+            ValidatedLiteralString::validated(literal.value().to_owned()),
+        )),
+        ParsedStringForm::Variable(reference) => {
+            validate_variable(reference, role).map(StringExpression::Variable)
+        }
+        ParsedStringForm::Template(template) => {
+            promote_string_template(template, role).map(StringExpression::Template)
+        }
+        ParsedStringForm::Malformed(error) => Err(promote_parse_error(error)),
+    }
+}
+
+fn promote_string_template(
+    template: &ParsedStringTemplate,
+    role: TemplateRole,
+) -> Result<StringTemplate<TypedVariable<StringType>>, InterpolationError> {
+    let parts = template
+        .parts()
+        .iter()
+        .map(|part| match part {
+            ParsedTemplatePart::Literal(value) => Ok(StringTemplatePart::Literal(value.to_owned())),
+            ParsedTemplatePart::Variable(reference) => {
+                validate_variable(reference, role).map(StringTemplatePart::Variable)
+            }
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(StringTemplate::validated(parts))
+}
+
+pub fn promote_provider_install_arg(
+    source: &ProviderInstallArgSource,
+) -> Result<FlatListPart<StringType, StringExpression>, InterpolationError> {
+    let ParsedStringForm::Variable(reference) = source.parsed() else {
+        return promote_string_form(source.parsed(), TemplateRole::ProviderInstallArg)
+            .map(FlatListPart::One);
+    };
+
+    let resolver = validate_resolver_reference(reference, TemplateRole::ProviderInstallArg)?;
+    if (resolver.output)() == ListType::<StringType>::schema_type() {
+        validate_variable(reference, TemplateRole::ProviderInstallArg).map(FlatListPart::Many)
+    } else {
+        validate_variable(reference, TemplateRole::ProviderInstallArg)
+            .map(StringExpression::Variable)
+            .map(FlatListPart::One)
+    }
+}
+
+pub fn promote_provider_install_args(
+    sources: &[ProviderInstallArgSource],
+) -> Result<ProviderInstallArgs, InterpolationError> {
+    let parts = sources
+        .iter()
+        .map(promote_provider_install_arg)
+        .collect::<Result<_, _>>()?;
+    Ok(ProviderInstallArgs::validated(parts))
+}
+
 pub fn validate_scalar_template(template: &ScalarTemplate) -> Result<(), InterpolationError> {
     let parsed = parse_template(template.as_str())?;
     validate_template(&parsed, TemplateRole::Scalar)
@@ -420,7 +578,9 @@ fn validate_template(
                 payload: call.payload.clone(),
             });
         }
-        if resolver.output == ResolverOutputKind::List && template.segments().len() != 1 {
+        if (resolver.output)() == ListType::<StringType>::schema_type()
+            && template.segments().len() != 1
+        {
             return Err(InterpolationError::ListResolverMustOccupyArgument {
                 resolver: call.name.clone(),
             });
@@ -544,7 +704,7 @@ pub fn resolve_provider_install_arg(
 
     if let [TemplateSegment::Resolver(call)] = parsed.segments() {
         let resolver = lookup_resolver(&call.name).expect("validated resolver exists");
-        if resolver.output == ResolverOutputKind::List {
+        if (resolver.output)() == ListType::<StringType>::schema_type() {
             let ResolverValue::List(values) = (resolver.resolve)(&call.payload, context)? else {
                 unreachable!("resolver output matches its static definition");
             };
@@ -639,18 +799,48 @@ fn parse_template(input: &str) -> Result<ParsedTemplate, InterpolationError> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InterpolationError {
-    UnclosedResolver { offset: usize },
-    MissingPayloadSeparator { offset: usize },
-    NestedResolver { offset: usize },
-    UnknownResolver { name: String },
-    InvalidResolverPayload { resolver: String, payload: String },
-    ResolverUnavailable { resolver: String },
-    ResolverInLiteralString { resolver: String },
-    ListResolverMustOccupyArgument { resolver: String },
-    MissingEnvironmentVariable { name: String },
-    NonUnicodeEnvironmentVariable { name: String },
-    UnavailablePath { name: String },
-    NonUnicodePath { name: String },
+    UnclosedResolver {
+        offset: usize,
+    },
+    MissingPayloadSeparator {
+        offset: usize,
+    },
+    NestedResolver {
+        offset: usize,
+    },
+    UnknownResolver {
+        name: String,
+    },
+    InvalidResolverPayload {
+        resolver: String,
+        payload: String,
+    },
+    ResolverUnavailable {
+        resolver: String,
+    },
+    ResolverTypeMismatch {
+        resolver: String,
+        expected: SchemaType,
+        actual: SchemaType,
+    },
+    ResolverInLiteralString {
+        resolver: String,
+    },
+    ListResolverMustOccupyArgument {
+        resolver: String,
+    },
+    MissingEnvironmentVariable {
+        name: String,
+    },
+    NonUnicodeEnvironmentVariable {
+        name: String,
+    },
+    UnavailablePath {
+        name: String,
+    },
+    NonUnicodePath {
+        name: String,
+    },
     MissingPackageContext,
 }
 
@@ -680,6 +870,14 @@ impl fmt::Display for InterpolationError {
                     "resolver `{resolver}` is unavailable in this context"
                 )
             }
+            Self::ResolverTypeMismatch {
+                resolver,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "resolver `{resolver}` has type {actual:?}, but this context requires {expected:?}"
+            ),
             Self::ResolverInLiteralString { resolver } => write!(
                 formatter,
                 "resolver `{resolver}` is not allowed in a literal string"
@@ -718,16 +916,19 @@ mod tests {
 
     use crate::action::ExecutionEnvironment;
     use crate::schema::{
-        EnvironmentName, EnvironmentPatch, ExecAction, LiteralString, OneOrMany,
-        ProviderInstallArg, ScalarTemplate,
+        EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralString,
+        LiteralStringSource, OneOrMany, ParsedStringForm, ProviderInstallArg,
+        ProviderInstallArgSource, ScalarTemplate, SchemaType, StringExpression,
+        StringExpressionSource, StringTemplatePart, StringType, TypedVariable,
     };
 
     use super::{
         DotPaths, InterpolationError, PackageContext, ResolveContext, ResolverCall,
-        TemplateSegment, XdgPath, XdgPaths, parse_template, resolve_environment_patch,
-        resolve_exec_action, resolve_literal_string, resolve_provider_install_action,
-        resolve_provider_install_arg, resolve_scalar_template, validate_provider_install_arg,
-        validate_scalar_template,
+        TemplateSegment, XdgPath, XdgPaths, parse_template, promote_literal_string,
+        promote_provider_install_arg, promote_provider_install_args, promote_string_expression,
+        resolve_environment_patch, resolve_exec_action, resolve_literal_string,
+        resolve_provider_install_action, resolve_provider_install_arg, resolve_scalar_template,
+        validate_provider_install_arg, validate_scalar_template,
     };
 
     fn environment(variables: &[(&str, &str)]) -> ExecutionEnvironment {
@@ -766,6 +967,180 @@ mod tests {
                 .map(|(key, value)| (*key, PathBuf::from(value)))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn promotes_an_exact_string_resolver_to_a_variable_node() {
+        let promoted = promote_string_expression(&StringExpressionSource::from("${env:HOME}"))
+            .expect("the environment resolver produces a string");
+
+        let StringExpression::Variable(variable) = promoted else {
+            panic!("an exact variable must retain its syntax node");
+        };
+        assert_eq!(variable.reference().resolver(), "env");
+        assert_eq!(variable.reference().payload(), "HOME");
+    }
+
+    #[test]
+    fn promotes_an_exact_list_resolver_to_a_many_part() {
+        let promoted =
+            promote_provider_install_arg(&ProviderInstallArgSource::from("${package:names}"))
+                .expect("package names produce a string list");
+
+        let FlatListPart::Many(variable) = promoted else {
+            panic!("an exact list variable must expand as a many part");
+        };
+        assert_eq!(variable.reference().resolver(), "package");
+        assert_eq!(variable.reference().payload(), "names");
+    }
+
+    #[test]
+    fn promotes_literal_and_template_provider_args_to_one_parts() {
+        let literal = promote_provider_install_arg(&ProviderInstallArgSource::from("install"))
+            .expect("a literal provider argument is one string");
+        assert!(matches!(
+            literal,
+            FlatListPart::One(StringExpression::Literal(value)) if value.value() == "install"
+        ));
+
+        let template =
+            promote_provider_install_arg(&ProviderInstallArgSource::from("--root=${env:HOME}"))
+                .expect("a string template provider argument is one string");
+        let FlatListPart::One(StringExpression::Template(template)) = template else {
+            panic!("a template provider argument must remain a single string expression");
+        };
+        assert_eq!(template.parts().len(), 2);
+    }
+
+    #[test]
+    fn rejects_a_list_variable_inside_a_string_template() {
+        let error = promote_provider_install_arg(&ProviderInstallArgSource::from(
+            "prefix-${package:names}",
+        ))
+        .expect_err("a list variable cannot be embedded in one string");
+
+        assert_eq!(
+            error,
+            InterpolationError::ResolverTypeMismatch {
+                resolver: "package".into(),
+                expected: SchemaType::String,
+                actual: SchemaType::List(Box::new(SchemaType::String)),
+            }
+        );
+    }
+
+    #[test]
+    fn reports_stored_syntax_errors_only_during_promotion() {
+        let source = StringExpressionSource::from("prefix-${env:HOME");
+        assert!(matches!(source.parsed(), ParsedStringForm::Malformed(_)));
+
+        assert_eq!(
+            promote_string_expression(&source),
+            Err(InterpolationError::UnclosedResolver { offset: 7 })
+        );
+    }
+
+    #[test]
+    fn reports_unknown_resolvers_during_promotion() {
+        assert_eq!(
+            promote_string_expression(&StringExpressionSource::from("${future:value}")),
+            Err(InterpolationError::UnknownResolver {
+                name: "future".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn reports_invalid_resolver_payloads_during_promotion() {
+        assert_eq!(
+            promote_string_expression(&StringExpressionSource::from("${xdg:repository}")),
+            Err(InterpolationError::InvalidResolverPayload {
+                resolver: "xdg".into(),
+                payload: "repository".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn package_resolver_is_unavailable_in_a_scalar_role() {
+        assert_eq!(
+            promote_string_expression(&StringExpressionSource::from("${package:names}")),
+            Err(InterpolationError::ResolverUnavailable {
+                resolver: "package".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn exact_scalar_and_list_variables_have_distinct_typed_nodes() {
+        fn assert_string_variable(_: &TypedVariable<StringType>) {}
+        fn assert_string_list_variable(_: &TypedVariable<ListType<StringType>>) {}
+
+        let scalar = promote_provider_install_arg(&ProviderInstallArgSource::from("${env:HOME}"))
+            .expect("an exact scalar resolver is one provider argument");
+        let FlatListPart::One(StringExpression::Variable(variable)) = scalar else {
+            panic!("the exact scalar variable must be a one part");
+        };
+        assert_string_variable(&variable);
+
+        let list =
+            promote_provider_install_arg(&ProviderInstallArgSource::from("${package:names}"))
+                .expect("an exact list resolver is a many provider argument");
+        let FlatListPart::Many(variable) = list else {
+            panic!("the exact list variable must be a many part");
+        };
+        assert_string_list_variable(&variable);
+    }
+
+    #[test]
+    fn string_templates_contain_only_string_typed_variables() {
+        fn assert_string_variable(_: &TypedVariable<StringType>) {}
+
+        let promoted =
+            promote_string_expression(&StringExpressionSource::from("${env:HOME}/${dot:cwd}"))
+                .expect("both variables produce strings");
+        let StringExpression::Template(template) = promoted else {
+            panic!("literal surroundings and multiple variables form a template");
+        };
+
+        for part in template.parts() {
+            if let StringTemplatePart::Variable(variable) = part {
+                assert_string_variable(variable);
+            }
+        }
+    }
+
+    #[test]
+    fn promotes_validated_unescaped_literal_values() {
+        let promoted = promote_literal_string(&LiteralStringSource::from(r"prefix-\${literal}"))
+            .expect("escaped resolver syntax is literal");
+
+        assert_eq!(promoted.value(), "prefix-${literal}");
+    }
+
+    #[test]
+    fn literal_source_promotion_rejects_resolvers() {
+        assert_eq!(
+            promote_literal_string(&LiteralStringSource::from("${env:HOME}")),
+            Err(InterpolationError::ResolverInLiteralString {
+                resolver: "env".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn promotes_provider_arg_vectors_into_one_flat_list() {
+        let sources = [
+            ProviderInstallArgSource::from("install"),
+            ProviderInstallArgSource::from("${package:names}"),
+        ];
+        let promoted =
+            promote_provider_install_args(&sources).expect("both provider arguments are valid");
+
+        assert!(matches!(
+            promoted.parts(),
+            [FlatListPart::One(_), FlatListPart::Many(_)]
+        ));
     }
 
     #[test]

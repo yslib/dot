@@ -367,6 +367,89 @@ pub enum ExpressionParseError {
     NestedResolver { offset: usize },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedVariable<T> {
+    reference: UntypedVariableReference,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T> TypedVariable<T> {
+    pub fn reference(&self) -> &UntypedVariableReference {
+        &self.reference
+    }
+
+    pub(crate) fn validated(reference: UntypedVariableReference) -> Self {
+        Self {
+            reference,
+            marker: PhantomData,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedLiteralString(String);
+
+impl ValidatedLiteralString {
+    pub fn value(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn validated(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringTemplatePart<V> {
+    Literal(String),
+    Variable(V),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringTemplate<V> {
+    parts: Vec<StringTemplatePart<V>>,
+}
+
+impl<V> StringTemplate<V> {
+    pub fn parts(&self) -> &[StringTemplatePart<V>] {
+        &self.parts
+    }
+
+    pub(crate) fn validated(parts: Vec<StringTemplatePart<V>>) -> Self {
+        Self { parts }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringExpression {
+    Literal(ValidatedLiteralString),
+    Template(StringTemplate<TypedVariable<StringType>>),
+    Variable(TypedVariable<StringType>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FlatListPart<T, E> {
+    One(E),
+    Many(TypedVariable<ListType<T>>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlatListExpression<T, E> {
+    parts: Vec<FlatListPart<T, E>>,
+}
+
+impl<T, E> FlatListExpression<T, E> {
+    pub fn parts(&self) -> &[FlatListPart<T, E>] {
+        &self.parts
+    }
+
+    pub(crate) fn validated(parts: Vec<FlatListPart<T, E>>) -> Self {
+        Self { parts }
+    }
+}
+
+pub type ProviderInstallArgs = FlatListExpression<StringType, StringExpression>;
+
 fn classify_string(source: &str) -> ParsedStringForm {
     let mut parts = Vec::new();
     let mut literal = String::new();
