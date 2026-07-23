@@ -310,6 +310,182 @@ raw_string_type!(LiteralString);
 raw_string_type!(ScalarTemplate);
 raw_string_type!(ProviderInstallArg);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParsedStringForm {
+    Literal(StringLiteralSource),
+    Template(ParsedTemplate),
+    Variable(UntypedVariableReference),
+    Malformed(ExpressionParseError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringLiteralSource(String);
+
+impl StringLiteralSource {
+    pub fn value(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParsedTemplate {
+    parts: Vec<ParsedTemplatePart>,
+}
+
+impl ParsedTemplate {
+    pub fn parts(&self) -> &[ParsedTemplatePart] {
+        &self.parts
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParsedTemplatePart {
+    Literal(String),
+    Variable(UntypedVariableReference),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UntypedVariableReference {
+    resolver: String,
+    payload: String,
+}
+
+impl UntypedVariableReference {
+    pub fn resolver(&self) -> &str {
+        &self.resolver
+    }
+
+    pub fn payload(&self) -> &str {
+        &self.payload
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExpressionParseError {
+    UnclosedResolver { offset: usize },
+    MissingPayloadSeparator { offset: usize },
+    NestedResolver { offset: usize },
+}
+
+fn classify_string(source: &str) -> ParsedStringForm {
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut cursor = 0;
+
+    while cursor < source.len() {
+        let remaining = &source[cursor..];
+
+        if remaining.starts_with(r"\${") {
+            literal.push_str("${");
+            cursor += 3;
+            continue;
+        }
+
+        if remaining.starts_with("${") {
+            if !literal.is_empty() {
+                parts.push(ParsedTemplatePart::Literal(std::mem::take(&mut literal)));
+            }
+
+            let call_offset = cursor;
+            let body_offset = cursor + 2;
+            let body_and_rest = &source[body_offset..];
+            let Some(close_offset) = body_and_rest.find('}') else {
+                return ParsedStringForm::Malformed(ExpressionParseError::UnclosedResolver {
+                    offset: call_offset,
+                });
+            };
+            let body = &body_and_rest[..close_offset];
+
+            if let Some(nested_offset) = body.find("${") {
+                return ParsedStringForm::Malformed(ExpressionParseError::NestedResolver {
+                    offset: body_offset + nested_offset,
+                });
+            }
+
+            let Some((resolver, payload)) = body.split_once(':') else {
+                return ParsedStringForm::Malformed(
+                    ExpressionParseError::MissingPayloadSeparator {
+                        offset: call_offset,
+                    },
+                );
+            };
+
+            parts.push(ParsedTemplatePart::Variable(UntypedVariableReference {
+                resolver: resolver.to_owned(),
+                payload: payload.to_owned(),
+            }));
+            cursor = body_offset + close_offset + 1;
+            continue;
+        }
+
+        let character = remaining
+            .chars()
+            .next()
+            .expect("cursor is before the end of the source");
+        literal.push(character);
+        cursor += character.len_utf8();
+    }
+
+    if !literal.is_empty() {
+        parts.push(ParsedTemplatePart::Literal(literal));
+    }
+
+    match parts.as_slice() {
+        [] => ParsedStringForm::Literal(StringLiteralSource(String::new())),
+        [ParsedTemplatePart::Literal(value)] => {
+            ParsedStringForm::Literal(StringLiteralSource(value.clone()))
+        }
+        [ParsedTemplatePart::Variable(reference)] => ParsedStringForm::Variable(reference.clone()),
+        _ => ParsedStringForm::Template(ParsedTemplate { parts }),
+    }
+}
+
+macro_rules! source_string_type {
+    ($name:ident) => {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct $name {
+            source: String,
+            parsed: ParsedStringForm,
+        }
+
+        impl $name {
+            pub fn parsed(&self) -> &ParsedStringForm {
+                &self.parsed
+            }
+
+            pub fn source_spelling(&self) -> &str {
+                &self.source
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(source: String) -> Self {
+                let parsed = classify_string(&source);
+                Self { source, parsed }
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(source: &str) -> Self {
+                Self::from(source.to_owned())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Ok(Self::from(String::deserialize(deserializer)?))
+            }
+        }
+    };
+}
+
+source_string_type!(LiteralStringSource);
+source_string_type!(StringExpressionSource);
+source_string_type!(ProviderInstallArgSource);
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {

@@ -1,10 +1,11 @@
 mod support;
 
 use dot::schema::{
-    Config, EnvironmentName, ExecAction, ExecActionType, Identifier, LinkConflict,
-    LinkMissingParent, ListType, LiteralString, OneOrMany, Package, ProviderInstallArg,
+    Config, EnvironmentName, ExecAction, ExecActionType, ExpressionParseError, Identifier,
+    LinkConflict, LinkMissingParent, ListType, LiteralString, LiteralStringSource, OneOrMany,
+    Package, ParsedStringForm, ParsedTemplatePart, ProviderInstallArg, ProviderInstallArgSource,
     ProviderPackage, RecordTypeId, ResolvedString, ScalarTemplate, SchemaType, SchemaTypeMarker,
-    StringKeyType, StringRefinementTypeId, StringType,
+    StringExpressionSource, StringKeyType, StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
@@ -53,6 +54,106 @@ fn logical_markers_define_their_resolved_value_types() {
 
     assert_eq!(list[0].value(), "owned");
     assert_eq!(list[1].value(), "borrowed");
+}
+
+#[test]
+fn classifies_literal_template_variable_and_malformed_sources() {
+    #[derive(serde::Deserialize)]
+    struct Document {
+        value: StringExpressionSource,
+    }
+
+    let cases = [
+        ("", "literal"),
+        ("plain", "literal"),
+        ("prefix-${env:HOME}", "template"),
+        ("${env:HOME}", "variable"),
+        ("${env:HOME}${dot:cwd}", "template"),
+        ("${env", "malformed"),
+        ("${unknown:value}", "variable"),
+    ];
+
+    for (source, expected) in cases {
+        let input = format!("value = {source:?}");
+        let parsed = toml::from_str::<Document>(&input).unwrap().value;
+        let actual = match parsed.parsed() {
+            ParsedStringForm::Literal(_) => "literal",
+            ParsedStringForm::Template(_) => "template",
+            ParsedStringForm::Variable(_) => "variable",
+            ParsedStringForm::Malformed(_) => "malformed",
+        };
+        assert_eq!(actual, expected, "source: {source}");
+        assert_eq!(parsed.source_spelling(), source);
+    }
+}
+
+#[test]
+fn preserves_recoverable_source_syntax_details() {
+    let empty = StringExpressionSource::from("");
+    let ParsedStringForm::Literal(empty) = empty.parsed() else {
+        panic!("an empty source is literal");
+    };
+    assert_eq!(empty.value(), "");
+
+    let adjacent = StringExpressionSource::from("${env:HOME}${dot:cwd}");
+    let ParsedStringForm::Template(template) = adjacent.parsed() else {
+        panic!("adjacent resolver calls form a template");
+    };
+    assert_eq!(template.parts().len(), 2);
+    let ParsedTemplatePart::Variable(first) = &template.parts()[0] else {
+        panic!("first part should be a variable");
+    };
+    assert_eq!(first.resolver(), "env");
+    assert_eq!(first.payload(), "HOME");
+    let ParsedTemplatePart::Variable(second) = &template.parts()[1] else {
+        panic!("second part should be a variable");
+    };
+    assert_eq!(second.resolver(), "dot");
+    assert_eq!(second.payload(), "cwd");
+
+    assert!(matches!(
+        StringExpressionSource::from("${env").parsed(),
+        ParsedStringForm::Malformed(ExpressionParseError::UnclosedResolver { offset: 0 })
+    ));
+    assert!(matches!(
+        StringExpressionSource::from("${env}").parsed(),
+        ParsedStringForm::Malformed(ExpressionParseError::MissingPayloadSeparator { offset: 0 })
+    ));
+    assert!(matches!(
+        StringExpressionSource::from("${env:${dot:cwd}}").parsed(),
+        ParsedStringForm::Malformed(ExpressionParseError::NestedResolver { offset: 6 })
+    ));
+
+    let unknown = StringExpressionSource::from("${unknown:value}");
+    let ParsedStringForm::Variable(reference) = unknown.parsed() else {
+        panic!("resolver lookup must not affect source classification");
+    };
+    assert_eq!(reference.resolver(), "unknown");
+    assert_eq!(reference.payload(), "value");
+}
+
+#[test]
+fn escaped_resolver_syntax_is_literal_source_text() {
+    #[derive(serde::Deserialize)]
+    struct Document {
+        value: ProviderInstallArgSource,
+    }
+
+    let parsed = toml::from_str::<Document>(r#"value = 'prefix-\${package:names}'"#)
+        .unwrap()
+        .value;
+    let ParsedStringForm::Literal(literal) = parsed.parsed() else {
+        panic!("escaped syntax must not become a variable");
+    };
+    assert_eq!(literal.value(), "prefix-${package:names}");
+    assert_eq!(parsed.source_spelling(), r"prefix-\${package:names}");
+
+    let literal = LiteralStringSource::from(String::from(r"\${env:HOME}"));
+    let ParsedStringForm::Literal(value) = literal.parsed() else {
+        panic!("every source role must use the shared classifier");
+    };
+    assert_eq!(value.value(), "${env:HOME}");
+    assert_eq!(literal.source_spelling(), r"\${env:HOME}");
 }
 
 #[test]
@@ -172,6 +273,14 @@ fn deserializes_strings_into_their_declared_schema_roles() {
     let _: &ScalarTemplate = value;
     assert_eq!(name.as_str(), "HOMEBREW_PREFIX");
     assert_eq!(value.as_str(), "${env:HOME}/.homebrew");
+}
+
+#[test]
+fn expression_syntax_errors_are_recoverable_during_deserialization() {
+    let input = fixture::read("schema/valid-recoverable-string-errors.toml");
+
+    toml::from_str::<Config>(&input)
+        .expect("expression syntax is validated only when a consumer uses the field");
 }
 
 #[test]

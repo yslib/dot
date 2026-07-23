@@ -1,0 +1,19 @@
+[targets.selected]
+platform = { os = "linux" }
+
+[targets.unselected]
+platform = { os = "other" }
+
+[targets.unselected.providers.broken]
+probe = { program = "${program", args = ["${argument}"], cwd = "${cwd:${dot:cwd}}", env = { path_prepend = "${prepend", path_append = ["${append}"], variables = { BROKEN_VALUE = "${environment" } } }
+activate = { path_prepend = "${activate-prepend", path_append = "${activate-append}", variables = { ACTIVATION_VALUE = "${activation" } }
+ensure = { program = "${ensure-program", args = ["${ensure-argument}"], cwd = "${ensure-cwd" }
+install = { program = "${install-program", args = ["${install-argument}"], cwd = "${install-cwd", env = { variables = { INSTALL_VALUE = "${install-environment" } } }
+
+[targets.unselected.links.broken]
+source = "${source"
+target = "${target}"
+
+[targets.unselected.actions.broken]
+check = { program = "${check-program", args = ["${check-argument}"], cwd = "${check-cwd" }
+exec = { program = "${exec-program", args = ["${exec-argument}"], cwd = "${exec-cwd", env = { variables = { ACTION_VALUE = "${action-environment" } } }
