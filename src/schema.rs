@@ -2,8 +2,100 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::marker::PhantomData;
 
 use serde::{Deserialize, Deserializer, de};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordTypeId(&'static str);
+
+impl RecordTypeId {
+    pub const fn new(value: &'static str) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StringRefinementTypeId(&'static str);
+
+impl StringRefinementTypeId {
+    pub const fn new(value: &'static str) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringKeyType {
+    String,
+    Refinement(StringRefinementTypeId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SchemaType {
+    String,
+    Integer,
+    Float,
+    Boolean,
+    OffsetDateTime,
+    LocalDateTime,
+    LocalDate,
+    LocalTime,
+    List(Box<SchemaType>),
+    Map(StringKeyType, Box<SchemaType>),
+    Record(RecordTypeId),
+}
+
+pub trait SchemaTypeMarker {
+    type Resolved;
+
+    fn schema_type() -> SchemaType;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StringType;
+
+impl SchemaTypeMarker for StringType {
+    type Resolved = ResolvedString;
+
+    fn schema_type() -> SchemaType {
+        SchemaType::String
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListType<T>(PhantomData<fn() -> T>);
+
+impl<T> SchemaTypeMarker for ListType<T>
+where
+    T: SchemaTypeMarker,
+{
+    type Resolved = Vec<T::Resolved>;
+
+    fn schema_type() -> SchemaType {
+        SchemaType::List(Box::new(T::schema_type()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResolvedString(String);
+
+impl ResolvedString {
+    pub fn value(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for ResolvedString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for ResolvedString {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
 
 pub type Entries<T> = BTreeMap<Identifier, T>;
 

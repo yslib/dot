@@ -2,11 +2,58 @@ mod support;
 
 use dot::schema::{
     Config, EnvironmentName, ExecAction, ExecActionType, Identifier, LinkConflict,
-    LinkMissingParent, LiteralString, OneOrMany, Package, ProviderInstallArg, ProviderPackage,
-    ScalarTemplate,
+    LinkMissingParent, ListType, LiteralString, OneOrMany, Package, ProviderInstallArg,
+    ProviderPackage, RecordTypeId, ResolvedString, ScalarTemplate, SchemaType, SchemaTypeMarker,
+    StringKeyType, StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
+
+#[test]
+fn describes_every_toml_literal_and_nested_schema_type() {
+    let primitives = [
+        SchemaType::String,
+        SchemaType::Integer,
+        SchemaType::Float,
+        SchemaType::Boolean,
+        SchemaType::OffsetDateTime,
+        SchemaType::LocalDateTime,
+        SchemaType::LocalDate,
+        SchemaType::LocalTime,
+    ];
+    assert_eq!(primitives.len(), 8);
+
+    let nested = SchemaType::List(Box::new(SchemaType::Map(
+        StringKeyType::Refinement(StringRefinementTypeId::new("environment_name")),
+        Box::new(SchemaType::Record(RecordTypeId::new("exec_action"))),
+    )));
+    assert_eq!(
+        nested,
+        SchemaType::List(Box::new(SchemaType::Map(
+            StringKeyType::Refinement(StringRefinementTypeId::new("environment_name")),
+            Box::new(SchemaType::Record(RecordTypeId::new("exec_action"))),
+        )))
+    );
+}
+
+#[test]
+fn logical_markers_have_runtime_schema_signatures() {
+    assert_eq!(StringType::schema_type(), SchemaType::String);
+    assert_eq!(
+        ListType::<StringType>::schema_type(),
+        SchemaType::List(Box::new(SchemaType::String))
+    );
+}
+
+#[test]
+fn logical_markers_define_their_resolved_value_types() {
+    let owned: <StringType as SchemaTypeMarker>::Resolved = String::from("owned").into();
+    let borrowed: ResolvedString = "borrowed".into();
+    let list: <ListType<StringType> as SchemaTypeMarker>::Resolved = vec![owned, borrowed];
+
+    assert_eq!(list[0].value(), "owned");
+    assert_eq!(list[1].value(), "borrowed");
+}
 
 #[test]
 fn deserializes_the_repository_dotfile() {
