@@ -295,6 +295,14 @@ mod tests {
             ResolverAvailability::Everywhere
         );
         assert_eq!(
+            registry["dot"].availability(),
+            ResolverAvailability::Everywhere
+        );
+        assert_eq!(
+            registry["xdg"].availability(),
+            ResolverAvailability::Everywhere
+        );
+        assert_eq!(
             registry["package"].availability(),
             ResolverAvailability::ProviderInstallOnly
         );
