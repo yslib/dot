@@ -5,13 +5,13 @@ use std::path::Path;
 use std::process;
 
 use dot::action::ExecutionEnvironment;
-use dot::check::{ProviderChecker, ProviderReadiness, build_report};
-use dot::interpolation::{DotPaths, XdgPaths};
+use dot::check::{ProviderCheckError, ProviderChecker, ProviderReadiness, build_report};
+use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
 use dot::platform::PlatformInfo;
 use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
 use dot::schema::{
-    Entries, EnvironmentName, EnvironmentPatch, ExecAction, Provider, ProviderInstallArgSource,
-    ResolvedEnvironmentPatch, ResolvedString, StringExpressionSource,
+    Entries, EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, Provider,
+    ProviderInstallArgSource, ResolvedEnvironmentPatch, ResolvedString, StringExpressionSource,
 };
 
 fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
@@ -190,6 +190,60 @@ fn projects_readiness_and_captured_output_to_structured_evidence() {
 }
 
 #[test]
+fn ignores_provider_ensure_and_install_expression_errors() {
+    let mut ignored = provider("ready", "ignored-provider-fields");
+    ignored.ensure = Some(OneOrMany::Many(vec![
+        ExecAction {
+            kind: None,
+            program: "${ensure-program".into(),
+            args: Vec::new(),
+            cwd: None,
+            env: None,
+        },
+        ExecAction {
+            kind: None,
+            program: "${unknown:ensure}".into(),
+            args: Vec::new(),
+            cwd: None,
+            env: None,
+        },
+        ExecAction {
+            kind: None,
+            program: "${package:names}".into(),
+            args: Vec::new(),
+            cwd: None,
+            env: None,
+        },
+    ]));
+    ignored.install = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
+        kind: None,
+        program: "${install-program".into(),
+        args: vec![
+            "${unknown:install}".into(),
+            "prefix-${package:names}".into(),
+        ],
+        cwd: Some("${package:names}".into()),
+        env: None,
+    };
+    let providers: Entries<Provider> = BTreeMap::from([(
+        "ignored".try_into().expect("test id should be valid"),
+        ignored,
+    )]);
+    let xdg = XdgPaths::detect();
+    let environment = base_environment();
+    let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
+
+    let report = checker.check(&providers);
+
+    assert_eq!(report.results().len(), 1);
+    assert_eq!(report.results()[0].readiness(), ProviderReadiness::Ready);
+    assert!(
+        String::from_utf8_lossy(report.results()[0].output().unwrap().stdout().unwrap())
+            .contains("value=ignored-provider-fields")
+    );
+}
+
+#[test]
 fn an_unstartable_probe_does_not_stop_later_providers() {
     let mut missing = provider("unused", "unused");
     missing.probe.program = "dot-provider-probe-that-must-not-exist-3b33529b".into();
@@ -221,6 +275,93 @@ fn an_unstartable_probe_does_not_stop_later_providers() {
             .contains("dot-provider-probe-that-must-not-exist")
     );
     assert_eq!(report.results()[1].readiness(), ProviderReadiness::Ready);
+}
+
+#[test]
+fn source_promotion_errors_are_provider_local_and_do_not_stop_later_probes() {
+    let mut malformed_activate = provider("ready", "unused");
+    malformed_activate.activate = Some(environment_patch(&[("BROKEN", "${env:BASE_ROOT")]));
+
+    let mut unknown_probe = provider("ready", "unused");
+    unknown_probe.activate = None;
+    unknown_probe.probe.program = "${unknown:probe}".into();
+
+    let mut unavailable_probe = provider("ready", "unused");
+    unavailable_probe.activate = None;
+    unavailable_probe.probe.program = "${package:names}".into();
+
+    let providers: Entries<Provider> = BTreeMap::from([
+        (
+            "a-malformed-activate"
+                .try_into()
+                .expect("test id should be valid"),
+            malformed_activate,
+        ),
+        (
+            "b-unknown-probe"
+                .try_into()
+                .expect("test id should be valid"),
+            unknown_probe,
+        ),
+        (
+            "c-unavailable-probe"
+                .try_into()
+                .expect("test id should be valid"),
+            unavailable_probe,
+        ),
+        (
+            "z-ready".try_into().expect("test id should be valid"),
+            provider("ready", "later-provider-probe-ran"),
+        ),
+    ]);
+    let xdg = XdgPaths::detect();
+    let environment = base_environment();
+    let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
+
+    let report = checker.check(&providers);
+
+    assert_eq!(
+        report
+            .results()
+            .iter()
+            .map(|result| result.provider())
+            .collect::<Vec<_>>(),
+        [
+            "a-malformed-activate",
+            "b-unknown-probe",
+            "c-unavailable-probe",
+            "z-ready",
+        ]
+    );
+    assert!(matches!(
+        report.results()[0].error(),
+        Some(ProviderCheckError::ActivateInterpolation(
+            InterpolationError::UnclosedResolver { .. }
+        ))
+    ));
+    assert!(matches!(
+        report.results()[1].error(),
+        Some(ProviderCheckError::ProbeInterpolation(
+            InterpolationError::UnknownResolver { name }
+        )) if name == "unknown"
+    ));
+    assert!(matches!(
+        report.results()[2].error(),
+        Some(ProviderCheckError::ProbeInterpolation(
+            InterpolationError::ResolverUnavailable { resolver }
+        )) if resolver == "package"
+    ));
+    assert!(
+        report.results()[..3]
+            .iter()
+            .all(|result| result.readiness() == ProviderReadiness::NotReady)
+    );
+    let ready = &report.results()[3];
+    assert_eq!(ready.readiness(), ProviderReadiness::Ready);
+    assert!(
+        String::from_utf8_lossy(ready.output().unwrap().stdout().unwrap())
+            .contains("value=later-provider-probe-ran")
+    );
 }
 
 #[test]

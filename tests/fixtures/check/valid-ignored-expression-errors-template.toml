@@ -1,0 +1,27 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.ignored-fields]
+activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/ready" } }
+probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "ready" } } }
+ensure = [
+  { program = "${ensure-program" },
+  { program = "${unknown:ensure}" },
+  { program = "${package:names}" },
+]
+install = { program = "${install-program", args = ["${unknown:install}", "prefix-${package:names}"], cwd = "${package:names}" }
+
+[targets.current.packages.provider-package]
+provider = "ignored-fields"
+provider_args = ["${env:HOME}"]
+
+[targets.current.packages.manual-package]
+install = { check = { program = "${manual-check-program" }, exec = { program = "${unknown:manual-install}" } }
+
+[targets.current.actions.invalid-action]
+check = { program = "${package:names}" }
+exec = { program = "${action-program" }
+
+[targets.current.links.invalid-link]
+source = "${link-source"
+target = "${unknown:link-target}"

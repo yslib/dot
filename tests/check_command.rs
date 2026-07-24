@@ -52,6 +52,30 @@ fn provider_manifest() -> TempManifest {
 }
 
 #[test]
+fn check_providers_ignores_expression_errors_outside_activate_and_probe() {
+    let contents = fixture::read("check/valid-ignored-expression-errors-template.toml")
+        .replace("__OS__", env::consts::OS)
+        .replace("__PROGRAM__", &helper_program_toml());
+    let manifest = TempManifest::write(&contents);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["check", "providers", "--config"])
+        .arg(manifest.path())
+        .output()
+        .expect("dot should start");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("│ provider ┆ ignored-fields"), "{stdout}");
+    assert!(stdout.contains("READY"), "{stdout}");
+    assert!(stdout.contains("SUCCESS · 1 item · 1 provider"), "{stdout}");
+}
+
+#[test]
 fn check_providers_runs_the_selected_manifest_and_sets_the_exit_code() {
     let manifest = provider_manifest();
 
