@@ -35,6 +35,30 @@ impl Drop for TempManifest {
     }
 }
 
+struct TempMarker(PathBuf);
+
+impl TempMarker {
+    fn new() -> Self {
+        let sequence = NEXT_MANIFEST.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "dot-check-command-marker-{}-{sequence}",
+            process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempMarker {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn helper_program_toml() -> String {
     format!(
         "{:?}",
@@ -57,10 +81,13 @@ fn check_providers_ignores_expression_errors_outside_activate_and_probe() {
         .replace("__OS__", env::consts::OS)
         .replace("__PROGRAM__", &helper_program_toml());
     let manifest = TempManifest::write(&contents);
+    let marker = TempMarker::new();
+    assert!(!marker.path().exists());
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
         .args(["check", "providers", "--config"])
         .arg(manifest.path())
+        .env("DOT_CHECK_COMMAND_MARKER", marker.path())
         .output()
         .expect("dot should start");
 
@@ -72,6 +99,18 @@ fn check_providers_ignores_expression_errors_outside_activate_and_probe() {
     );
     assert!(stdout.contains("│ provider ┆ ignored-fields"), "{stdout}");
     assert!(stdout.contains("READY"), "{stdout}");
+    let expected_value = format!(
+        "{}/ready",
+        manifest
+            .path()
+            .parent()
+            .expect("manifest should have a parent")
+            .to_string_lossy()
+    );
+    assert_eq!(
+        fs::read_to_string(marker.path()).expect("provider probe should write the marker"),
+        format!("provider-probe-ran:{expected_value}")
+    );
     assert!(stdout.contains("SUCCESS · 1 item · 1 provider"), "{stdout}");
 }
 
@@ -161,6 +200,10 @@ fn helper_process() {
         return;
     };
     let value = env::var("PROVIDER_VALUE").expect("provider activate should set a value");
+    if let Some(marker) = env::var_os("DOT_CHECK_COMMAND_MARKER") {
+        fs::write(PathBuf::from(marker), format!("provider-probe-ran:{value}"))
+            .expect("provider probe should write its marker");
+    }
     println!("value={value}");
 
     if mode == "not-ready" {
