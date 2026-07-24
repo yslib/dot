@@ -86,17 +86,27 @@ contain `=` or `${`.
 #parsed_string_form =
     #parsed_literal_string_source
   | #parsed_string_template_source
-  | #variable_source
+  | #exact_variable_source
   | #malformed_string_expression
 
 #parsed_literal_string_source =
-    literal text after interpolation escapes are decoded
+    a complete literal source after interpolation escapes are decoded
+
+#parsed_literal_fragment =
+    literal text within a parsed string template
+
+#untyped_variable_reference =
+    one parsed resolver call containing its namespace and payload
+
+#exact_variable_source =
+    one #untyped_variable_reference occupying the complete source string
+
+#parsed_string_template_part =
+    Literal(#parsed_literal_fragment)
+  | Variable(#untyped_variable_reference)
 
 #parsed_string_template_source =
-    [#parsed_literal_string_source | #variable_source]
-
-#variable_source =
-    one untyped resolver namespace and payload occupying the complete source
+    [#parsed_string_template_part]
 
 #malformed_string_expression =
     a retained interpolation syntax error and its source offset
@@ -107,6 +117,13 @@ a syntax-directed parsed form. With no unescaped resolver call the form is a
 literal; one resolver call occupying the complete string is an exact variable;
 literal text around a resolver or multiple calls form a string template.
 Malformed resolver syntax is stored as a recoverable malformed form.
+
+A parsed string template contains at least one
+`Variable(#untyped_variable_reference)` part. It is neither literal-only nor
+exactly one sole variable; those classify as `#parsed_literal_string_source`
+and `#exact_variable_source`, respectively. An untyped variable reference is a
+syntax node usable inside a template or exact-variable source. It does not yet
+claim a resolver result type.
 
 `\${` represents a literal `${`, following the OmegaConf surface syntax.
 Resolver lookup and result typing do not affect source classification.
@@ -140,7 +157,8 @@ distinctions add no TOML syntax.
 
 #string_fragment = !string
 
-#variable<T> = a complete resolver reference proven to return T
+#variable<T> =
+    an #untyped_variable_reference proven to return T
 
 #string_template_part<V> =
     Literal(#string_fragment)
@@ -164,15 +182,18 @@ distinctions add no TOML syntax.
 #provider_install_args =
     #flat_list_expression<!string, #string_expression>
 
-Promotion is contextual. A complete variable takes the declared result type of
-its resolver. A string expression resolves to exactly one string: it is a
+Promotion is contextual. `#variable<T>` is created only after resolver lookup
+proves that its `#untyped_variable_reference` has declared result type `T`; it
+does not retain whether that reference occupied a whole source or a template
+part. The source-position wrapper `#exact_variable_source` remains a distinct
+phase concept. A string expression resolves to exactly one string: it is a
 literal string, a string template containing only string-valued variables, or
 an exact string-valued variable. String-valued variables may occupy a whole
 string or appear within a string template. List-valued variables cannot
 interpolate into text. A typed string template contains contextual
 `Literal(#string_fragment)` and `Variable(#variable<!string>)` parts. Its
 string fragments are plain resolved-domain string fragments, never
-source-phase `#parsed_literal_string_source` nodes.
+source-phase `#parsed_literal_fragment` nodes.
 
 Provider `install.args` starts as `[#provider_install_arg_source]` and is
 promoted as one ordered `#provider_install_args` flat-list expression. An exact

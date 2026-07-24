@@ -22,10 +22,8 @@ this reference.
   [`BatchProviderPackage`](#batchproviderpackage), and
   [`ManualPackage`](#manualpackage).
 - [Execution types](#execution-types): [`Provider`](#provider),
-  [`EnvironmentPatch<S>`](#environmentpatchs),
-  [`ExecAction<S, A>`](#execactions-a),
-  [`ExecActionType`](#execactiontype), and
-  [`Action<S, A>`](#actions-a).
+  [`EnvironmentPatch`](#environmentpatch), [`ExecAction`](#execaction),
+  [`ExecActionType`](#execactiontype), and [`Action`](#action).
 - [Link types](#link-types): [`Link`](#link),
   [`LinkConflict`](#linkconflict), and
   [`LinkMissingParent`](#linkmissingparent).
@@ -49,11 +47,6 @@ Root
         ├── actions: { identifier -> Action }
         └── profiles: { identifier -> Profile } (recursive)
 ```
-
-In the configuration tree and field tables, the short name `Action` means the
-source specialization
-`Action<string-expression source, string-expression source>`. The generic and
-resolved forms are detailed in [`Action<S, A>`](#actions-a).
 
 A selected profile inherits the target and each profile on its lexical ancestor
 path. Each keyed provider, package, link, or action record is atomic: a deeper
@@ -501,10 +494,10 @@ one-or-many `ensure` actions.
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `activate` | `EnvironmentPatch<string-expression source>` | no | string-valued resolvers |
-| `probe` | ordinary source `ExecAction` | yes | string-valued resolvers |
-| `ensure` | `OneOrMany<ordinary source ExecAction>` | no | string-valued resolvers |
-| `install` | provider-install source `ExecAction` | yes | string-valued resolvers plus complete package list variables in `args` |
+| `activate` | `EnvironmentPatch` | no | string-valued resolvers |
+| `probe` | `ExecAction` | yes | string-valued resolvers |
+| `ensure` | `OneOrMany<ExecAction>` | no | string-valued resolvers |
+| `install` | provider-install `ExecAction` | yes | string-valued resolvers plus complete package list variables in `args` |
 
 Contextual fragment:
 
@@ -529,16 +522,24 @@ are valid only as complete `install.args` elements. The provider install's
 only its argument sources participate in the flat-list expression. Unknown
 fields are rejected.
 
-### EnvironmentPatch<S>
+### EnvironmentPatch
 
 Shape: optional one-or-many path entries and an optional environment-variable
-map, all parameterized by the same field source or resolved value type `S`.
+map.
+
+```text
+{
+  path_prepend?: string-expression source | [string-expression source],
+  path_append?: string-expression source | [string-expression source],
+  variables?: { environment_name -> string-expression source },
+}
+```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `path_prepend` | `OneOrMany<S>` | no | determined by `S` |
-| `path_append` | `OneOrMany<S>` | no | determined by `S` |
-| `variables` | `{ environment_name -> S }` | no, defaults empty | names no; values determined by `S` |
+| `path_prepend` | one or many string-expression sources | no | string-valued resolvers |
+| `path_append` | one or many string-expression sources | no | string-valued resolvers |
+| `variables` | `{ environment_name -> string-expression source }` | no, defaults empty | names no; values use string-valued resolvers |
 
 Contextual fragment:
 
@@ -546,56 +547,70 @@ Contextual fragment:
 env = { path_prepend = "${xdg:home}/bin", path_append = ["/opt/tools/bin"], variables = { TOOL_HOME = "${xdg:data}/tool" } }
 ```
 
+#### Phase model
+
+The implementation models this record as `EnvironmentPatch<S>`. Source
+configuration uses `S = string-expression source`; a planned process uses
+`S = resolved string`. The parameter distinguishes source and resolved phases
+without changing the writable TOML fields above.
+
 The patch affects child processes launched by dot and never persistently edits
 the user's shell. Values resolve against the effective environment immediately
 before the patch is applied. For a provider operation, ordering is: current dot
 process environment, provider `activate`, then that ExecAction's `env`. Action
 variables override provider variables; action prepends come before provider
 PATH entries, and appended entries are placed at the end. Global and manual
-actions have no implicit provider patch. Source records use
-`S = string-expression source`; resolved execution records use resolved
-strings.
+actions have no implicit provider patch.
 
-### ExecAction<S, A>
+### ExecAction
 
 Shape:
 
 ```text
 {
   type?: "exec",
-  program: S,
-  args?: [A],
-  cwd?: S,
-  env?: EnvironmentPatch<S>,
+  program: string-expression source,
+  args?: [string-expression source],
+  cwd?: string-expression source,
+  env?: EnvironmentPatch,
 }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
 | `type` | `ExecActionType` | no | no |
-| `program` | `S` | yes | determined by `S` |
-| `args` | list of `A` | no, defaults empty | determined by `A` |
-| `cwd` | `S` | no; inherits the dot process cwd | determined by `S` |
-| `env` | `EnvironmentPatch<S>` | no | determined by `S` |
+| `program` | string-expression source | yes | string-valued resolvers |
+| `args` | list of string-expression sources; provider install uses provider-install argument sources | no, defaults empty | string-valued resolvers; provider install also accepts complete package list variables |
+| `cwd` | string-expression source | no; inherits the dot process cwd | string-valued resolvers |
+| `env` | `EnvironmentPatch` | no | string-valued resolvers in values |
 
-Ordinary source contextual fragment
-(`S = A = string-expression source`):
+Contextual fragment:
 
 ```toml
 exec = { type = "exec", program = "git", args = ["-C", "${dot:config_dir}", "status"], cwd = "${dot:cwd}" }
 ```
 
-Ordinary source ExecAction fields and arguments are string-expression sources.
-Provider `install` is the specialization with
-`S = string-expression source` and `A = provider-install argument source`; its
-complete `args` vector is promoted to the provider install flat-list
-expression. This is separate from a package declaration's `provider_args`,
-which is literal unit data expanded only by `${package:provider_args}`.
+Provider `install` has the same writable fields, except each `args` element is
+a provider-install argument source. Its complete `args` array becomes the
+provider install flat-list expression. This is separate from a package
+declaration's `provider_args`, which is literal unit data expanded only by
+`${package:provider_args}`.
 
-After resolution, both generic parameters are resolved strings, so a planned
-process record has one resolved `program`, zero or more resolved `args`, an
-optional resolved `cwd`, and an optional environment patch of resolved
-strings.
+#### Phase model
+
+The implementation models this record as `ExecAction<S, A>`: `S` is the type
+of `program`, `cwd`, and environment values, while `A` is the type of each
+source argument.
+
+- An ordinary source action uses
+  `ExecAction<string-expression source, string-expression source>`.
+- A provider-install source action uses
+  `ExecAction<string-expression source, provider-install argument source>`.
+- A planned process uses `ExecAction<resolved string, resolved string>`.
+
+After resolution, a planned process has one resolved `program`, zero or more
+resolved `args`, an optional resolved `cwd`, and an optional environment patch
+of resolved strings. These phase types do not change the writable TOML shape.
 
 When `cwd` is omitted, dot does not explicitly set the child process working
 directory. The child therefore inherits the current working directory of the
@@ -623,21 +638,21 @@ type = "exec"
 The discriminator is reserved for the execution kind. It does not request a
 shell and does not change interpolation rules.
 
-### Action<S, A>
+### Action
 
 Shape:
 
 ```text
 {
-  check?: ExecAction<S, A>,
-  exec: ExecAction<S, A>
+  check?: ExecAction,
+  exec: ExecAction
 }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `check` | `ExecAction<S, A>` | no | determined by `S` and `A` |
-| `exec` | `ExecAction<S, A>` | yes | determined by `S` and `A` |
+| `check` | `ExecAction` | no | string-valued resolvers |
+| `exec` | `ExecAction` | yes | string-valued resolvers |
 
 Contextual fragment:
 
@@ -647,11 +662,15 @@ check = { program = "test", args = ["-d", "${xdg:cache}/dot"] }
 exec = { program = "mkdir", args = ["-p", "${xdg:cache}/dot"] }
 ```
 
-Every TOML action record uses the source specialization
-`S = A = string-expression source`. Its selected `check` and `exec` fields are
-promoted to string expressions and then resolved. A planned action uses the
-resolved specialization `S = A = resolved string`; this changes the phase
-model, not the TOML shape.
+#### Phase model
+
+The implementation models this record as `Action<S, A>`, containing optional
+and required `ExecAction<S, A>` records. Every TOML action uses
+`Action<string-expression source, string-expression source>`. Its selected
+fields are promoted to typed string expressions and resolved into
+`Action<resolved string, resolved string>`. These generic parameters distinguish
+source and planned phases; users write only the concrete `check` and `exec`
+shape above.
 
 Without `check`, `exec` runs on every apply. Check exit code 0 means satisfied
 and skips exec; 1 means unsatisfied, so dot runs exec and checks exactly once
