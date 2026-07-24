@@ -1,25 +1,45 @@
 # dot configuration schema (v0.0.1)
 
-This file contains structural schema definitions and field-level string
-capabilities. Runtime evaluation semantics remain in DESIGN.txt.
+This file is the sole authoritative structural schema and field-level
+capability definition for dot configuration. Runtime evaluation semantics
+remain in DESIGN.txt.
 
 
 ### notation
 
-!type                   built-in primitive type
+!type                   built-in TOML primitive category
 #type                   custom type defined in this file
 #type<A>                custom type parameterized by A
 field?                  optional field
 A | B                   either A or B
-[A]                     a list of A
+[A]                     a schema-typed list of A
 { <id>: A }             a table keyed by a unique id
 { <id: K>: A }          a table whose keys have type K
 "literal"               a fixed literal value
+T -> U                  a resolver or evaluation from T to U
 
 
 ### primitive types
 
 !string
+!integer
+!float
+!boolean
+!offset_datetime
+!local_datetime
+!local_date
+!local_time
+
+TOML integers use signed 64-bit (`i64`) semantics. TOML floats use `f64`,
+including NaN and positive or negative infinity; a universal TOML literal
+container therefore cannot promise `Eq`. Datetimes are classified as offset
+date-time, local date-time, local date, or local time.
+
+TOML arrays and tables are raw carrier containers. Accepted dot configuration
+is still governed by the schema-typed list, map, sum, and record definitions
+below. There is no `Any`, no arbitrary heterogeneous array, and no general
+recursive flattening. A schema may explicitly declare a sum type for an array
+element, as provider install arguments do.
 
 
 ### identifier
@@ -41,20 +61,129 @@ An environment name is non-empty, does not accept interpolation, and must not
 contain `=` or `${`.
 
 
-### literal_string
+### raw TOML string carrier and recoverable source form
 
-!string
+#raw_toml_string = !string
 
-A literal string does not accept resolvers. An unescaped `${` is a validation
-error. `\${` represents a literal `${`, following the OmegaConf surface syntax.
+#parsed_string_form =
+    #parsed_literal_string_source
+  | #parsed_string_template_source
+  | #variable_source
+  | #malformed_string_expression
+
+#parsed_literal_string_source =
+    literal text after interpolation escapes are decoded
+
+#parsed_string_template_source =
+    [#parsed_literal_string_source | #variable_source]
+
+#variable_source =
+    one untyped resolver namespace and payload occupying the complete source
+
+#malformed_string_expression =
+    a retained interpolation syntax error and its source offset
+
+A TOML string is carrier syntax, not necessarily the expression's result type.
+Every string-bearing source role retains the deserialized TOML string value and
+a syntax-directed parsed form. With no unescaped resolver call the form is a
+literal; one resolver call occupying the complete string is an exact variable;
+literal text around a resolver or multiple calls form a string template.
+Malformed resolver syntax is stored as a recoverable malformed form.
+
+`\${` represents a literal `${`, following the OmegaConf surface syntax.
+Resolver lookup and result typing do not affect source classification.
 
 
-### scalar_template
+### source-role wrappers
 
-!string
+#source_role<S, P> =
+    a source-phase value retaining carrier S and parsed form P
 
-A scalar template is a sequence of literal fragments and zero or more scalar
-resolver references. v0.0.1 accepts only:
+#literal_string_source =
+    #source_role<#raw_toml_string, #parsed_string_form>
+
+#string_expression_source =
+    #source_role<#raw_toml_string, #parsed_string_form>
+
+#provider_install_arg_source =
+    #source_role<#raw_toml_string, #parsed_string_form>
+
+These wrappers have the same TOML shape (`!string`) but declare how a selected
+consumer may promote the source. A literal-string source permits no resolver.
+A string-expression source may become a validated string expression. A
+provider-install argument source may become either one string expression or an
+exact list variable in the provider install flat-list expression. These type
+distinctions add no TOML syntax.
+
+
+### contextual typed variables and expressions
+
+#literal_string = !string
+
+#variable<T> = a complete resolver reference proven to return T
+
+#string_template<V> =
+    [#parsed_literal_string_source | V]
+
+#string_expression =
+    #literal_string
+  | #string_template<#variable<!string>>
+  | #variable<!string>
+
+#flat_list_part<T, E> =
+    E
+  | #variable<[T]>
+
+#flat_list_expression<T, E> =
+    [#flat_list_part<T, E>]
+
+#provider_install_args =
+    #flat_list_expression<!string, #string_expression>
+
+Promotion is contextual. A complete variable takes the declared result type of
+its resolver. A string expression resolves to exactly one string: it is a
+literal string, a string template containing only string-valued variables, or
+an exact string-valued variable. String-valued variables may occupy a whole
+string or appear within a string template. List-valued variables cannot
+interpolate into text.
+
+Provider `install.args` starts as `[#provider_install_arg_source]` and is
+promoted as one ordered `#provider_install_args` flat-list expression. An exact
+list-valued package variable expands in place to zero or more argv elements.
+Only one flattening layer exists. Literal nested arrays are invalid, and no
+recursive-flattening or implicit-stringification behavior exists.
+
+
+### resolved values and execution records
+
+#resolved_string = the resolved runtime string value
+
+#resolved_environment_patch =
+    #environment_patch<#resolved_string>
+
+#resolved_exec_action =
+    #exec_action<#resolved_string, #resolved_string>
+
+#resolved_action =
+{
+check?: #resolved_exec_action,
+exec: #resolved_exec_action,
+}
+
+Resolved strings, argv elements, working directories, and environment values
+remain typed process data. They are not parsed again as templates and are not
+reinterpreted as shell syntax.
+
+
+### resolver signatures and contexts
+
+env:*                       -> !string
+dot:*                       -> !string
+xdg:*                       -> !string
+package:names               -> [!string]
+package:provider_args       -> [!string]
+
+The accepted string-valued calls in v0.0.1 are:
 
 - `${env:NAME}`;
 - `${dot:config}`;
@@ -71,35 +200,41 @@ resolver references. v0.0.1 accepts only:
 - `${xdg:executable}`;
 - `${xdg:documents}`.
 
-Scalar resolver references may occupy the complete string or be embedded in
-literal text. `\${` represents a literal `${`. Node references, nested
-interpolation, resolver argument lists, defaults, expressions, and unknown
-resolvers are invalid.
+Package resolvers are available only in provider `install.args` and must occupy
+one complete argument source. `${package:names}` and
+`${package:provider_args}` are exact list-valued variables, not string
+interpolation. Unknown resolvers, invalid payloads, node references, nested
+interpolation, resolver argument lists, defaults, and expressions are invalid.
 
 
-### provider_install_arg
+### validation boundaries
 
-#scalar_template | "${package:names}" | "${package:provider_args}"
+Identifiers, environment names, fixed enums, and object shapes remain strict
+during TOML deserialization. All object shapes reject unknown fields. A
+malformed string source is retained during deserialization and becomes an
+error only if the selected command consumes that field.
 
-The two package resolvers are list-valued. Each must occupy one complete args
-element and cannot be embedded in another string. An escaped package resolver
-is a scalar literal rather than a list expansion.
+After selecting a target and optional profile, apply and dry-run plan the
+selected effective records. They consume provider activate, probe, and ensure
+fields; provider install fields only for selected provider-package units that
+reference that provider; selected manual packages, actions, and links. A
+selected provider with no provider-package install unit leaves its install
+source unconsumed.
 
+`check providers` consumes only each effective provider's activate and probe
+fields. It records a local activation, interpolation, preparation, execution,
+or probe error for that provider and continues checking the remaining
+providers. It does not consume provider ensure or install fields, packages,
+actions, or links.
 
-### interpolation validation
+Declarations outside the selected profile ancestry and ancestor records
+replaced by a deeper record are not consumed by these contextual validation
+steps. They remain subject to the strict whole-document deserialization rules
+above.
 
-Identifiers and environment names are validated during TOML deserialization.
-After a target and optional profile are selected and merged, apply and dry-run
-validate and resolve every effective literal/template string while constructing
-the execution plan. `check providers` deliberately consumes only provider
-activate and probe fields, so unrelated package, action, and link strings are
-not validated by that command. Declarations outside the selected profile path
-and declarations replaced by a deeper profile do not participate.
-
-All object shapes reject unknown fields. Omitted provider/package/link/action/
-profile maps, exec args, and environment variables deserialize as empty
-collections. Other fields marked with `?` remain absent and receive any runtime
-default described in DESIGN.txt.
+Omitted provider/package/link/action/profile maps, exec args, and environment
+variables deserialize as empty collections. Other fields marked with `?`
+remain absent and receive any runtime default described in DESIGN.txt.
 
 
 ### root
@@ -131,6 +266,11 @@ actions?: { <action_id: #identifier>: #action },
 profiles?: { <profile_id: #identifier>: #profile },
 }
 
+A selected profile inherits the target and each profile on its lexical ancestor
+path. Provider, package, link, and action records are atomic: a deeper record
+with the same key replaces the complete ancestor record. Record fields and
+lists are not merged. Profiles cannot replace the target platform.
+
 
 ### platform_constraint
 
@@ -157,7 +297,7 @@ environment?: #identifier | [#identifier],
 
 {
 provider: #identifier,
-provider_args?: [#literal_string],
+provider_args?: [#literal_string_source],
 }
 
 
@@ -166,7 +306,7 @@ provider_args?: [#literal_string],
 {
 provider: #identifier,
 names: [#identifier],
-provider_args?: [#literal_string],
+provider_args?: [#literal_string_source],
 }
 
 `names` is required and must contain at least one value. The single and batch
@@ -186,38 +326,51 @@ install: #action,
 ### provider
 
 {
-probe: #exec_action<#scalar_template>,
-activate?: #environment_patch,
-ensure?: #exec_action<#scalar_template> | [#exec_action<#scalar_template>],
-install: #exec_action<#provider_install_arg>,
+probe: #exec_action<#string_expression_source, #string_expression_source>,
+activate?: #environment_patch<#string_expression_source>,
+ensure?:
+    #exec_action<#string_expression_source, #string_expression_source>
+  | [#exec_action<#string_expression_source, #string_expression_source>],
+install:
+    #exec_action<#string_expression_source, #provider_install_arg_source>,
 }
 
+Provider activate, probe, and ensure scalar fields use string-expression
+sources. Provider install program, cwd, and environment fields also use
+string-expression sources; only its args elements use provider-install
+argument sources.
 
-### environment_patch
+
+### environment_patch<S>
 
 {
-path_prepend?: #scalar_template | [#scalar_template],
-path_append?: #scalar_template | [#scalar_template],
-variables?: { <name: #environment_name>: #scalar_template },
+path_prepend?: S | [S],
+path_append?: S | [S],
+variables?: { <name: #environment_name>: S },
 }
 
 
-### exec_action<A>
+### exec_action<S, A>
 
 {
 type?: "exec",
-program: #scalar_template,
+program: S,
 args?: [A],
-cwd?: #scalar_template,
-env?: #environment_patch,
+cwd?: S,
+env?: #environment_patch<S>,
 }
+
+Every ordinary source execution action uses:
+
+#source_exec_action =
+    #exec_action<#string_expression_source, #string_expression_source>
 
 
 ### link
 
 {
-source: #scalar_template,
-target: #scalar_template,
+source: #string_expression_source,
+target: #string_expression_source,
 on_conflict?: #link_conflict,
 on_missing_parent?: #link_missing_parent,
 }
@@ -232,10 +385,15 @@ on_missing_parent?: #link_missing_parent,
 
 "create" | "skip"
 
+When omitted, `on_conflict` defaults at runtime to `"replace-link"` and
+`on_missing_parent` defaults to `"create"`.
+
 
 ### action
 
 {
-check?: #exec_action<#scalar_template>,
-exec: #exec_action<#scalar_template>,
+check?:
+    #exec_action<#string_expression_source, #string_expression_source>,
+exec:
+    #exec_action<#string_expression_source, #string_expression_source>,
 }

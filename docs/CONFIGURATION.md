@@ -10,8 +10,9 @@ this reference.
 
 - [Foundational types](#foundational-types): [`string`](#string),
   [`identifier`](#identifier), [`environment_name`](#environment_name),
-  [`literal_string`](#literal_string), [`scalar_template`](#scalar_template),
-  [`provider_install_arg`](#provider_install_arg),
+  [literal-string source](#literal-string-source),
+  [string-expression source](#string-expression-source),
+  [provider install flat-list expression](#provider-install-flat-list-expression),
   [`OneOrMany<T>`](#oneormanyt), and [keyed tables](#keyed-tables).
 - [Structural types](#structural-types): [`Root`](#root), [`Target`](#target),
   [`Profile`](#profile), and [`PlatformConstraint`](#platformconstraint).
@@ -21,7 +22,8 @@ this reference.
   [`BatchProviderPackage`](#batchproviderpackage), and
   [`ManualPackage`](#manualpackage).
 - [Execution types](#execution-types): [`Provider`](#provider),
-  [`EnvironmentPatch`](#environmentpatch), [`ExecAction<A>`](#execactiona),
+  [`EnvironmentPatch<S>`](#environmentpatchs),
+  [`ExecAction<S, A>`](#execactions-a),
   [`ExecActionType`](#execactiontype), and [`Action`](#action).
 - [Link types](#link-types): [`Link`](#link),
   [`LinkConflict`](#linkconflict), and
@@ -74,8 +76,8 @@ program = "brew"
 
 TOML parsing handles quoting and escapes first. A plain `string` has no
 standalone runtime behavior or interpolation promise; use the documented
-`identifier`, `environment_name`, `literal_string`, or `scalar_template` rules
-for the actual field.
+`identifier`, `environment_name`, literal-string source, string-expression
+source, or provider install flat-list rules for the actual field.
 
 ### identifier
 
@@ -107,13 +109,14 @@ variables = { CARGO_HOME = "${xdg:data}/cargo" }
 
 Environment names are validated during TOML deserialization. A name cannot
 contain `=` or `${` (even when preceded by a backslash), and never accepts
-interpolation. The value paired with the name is a `scalar_template` and may
-interpolate.
+interpolation. The value paired with the name is a string-expression source
+and may interpolate.
 
-### literal_string
+### Literal-string source
 
-Shape: a TOML string whose parsed value is treated literally rather than as a
-template. It is currently used for package `provider_args` elements.
+Shape: a TOML string whose selected consumer requires a validated literal
+string. This source role is currently used for package `provider_args`
+elements.
 
 Contextual fragment:
 
@@ -121,16 +124,18 @@ Contextual fragment:
 provider_args = ["--cask", '--label=\${literal}']
 ```
 
-Literal strings do not resolve anything. An unescaped `${` is rejected when
-the selected effective manifest is planned. `\${` represents literal `${` in
-the interpolation syntax; a TOML literal string is convenient when the parsed
-value must retain that backslash. Literal strings are data and are never shell
-syntax.
+Literal strings do not resolve anything. Every source retains its deserialized
+TOML string value and a recoverable parsed form. An unescaped `${` in this role
+is rejected when a selected install unit consumes the package. `\${`
+represents literal `${` in the interpolation syntax; a TOML literal string is
+convenient when the parsed value must retain that backslash. Literal strings
+are data and are never shell syntax.
 
-### scalar_template
+### String-expression source
 
-Shape: a TOML string containing literal fragments and zero or more supported
-scalar resolver calls. A call may occupy the entire value or be embedded.
+Shape: a TOML string that may be promoted, in context, to exactly one resolved
+string. Its recoverable source form is a literal, a string template, an exact
+variable, or malformed expression syntax.
 
 Contextual fragment:
 
@@ -138,18 +143,38 @@ Contextual fragment:
 cwd = "${dot:config_dir}/scripts"
 ```
 
-Scalar templates accept the `env`, `dot`, and `xdg` scalar resolvers listed in
-[Interpolation](#interpolation). They reject unknown resolvers, invalid
-payloads, list-valued package resolvers, nesting, defaults, and expressions.
-An unescaped `${` starts resolver syntax; `\${` represents literal `${` after
-TOML parsing. Resolution happens during planning in the field's execution
-context, not merely during TOML deserialization.
+String expressions accept the string-valued `env`, `dot`, and `xdg` resolvers
+listed in [Interpolation](#interpolation). A literal has no variable; a string
+template combines literal fragments with one or more string-valued variables;
+an exact variable is one resolver call occupying the entire source. A complete
+exact variable takes the resolver's declared result type.
 
-### provider_install_arg
+These sources reject unknown resolvers, invalid payloads, list-valued package
+variables, nesting, defaults, and expressions when the selected command
+consumes them. An unescaped `${` starts resolver syntax; `\${` represents
+literal `${` after TOML parsing. Malformed syntax remains recoverable during
+deserialization. Contextual validation and resolution happen later, at the
+field's command-sensitive planning or provider-check boundary.
 
-Shape: one provider-install argument is either a `scalar_template`, the exact
-list resolver `${package:names}`, or the exact list resolver
-`${package:provider_args}`.
+TOML string syntax is only the carrier. Strings that look alike at that level
+can represent different typed forms:
+
+| TOML string value | Parsed and typed meaning | Result |
+| --- | --- | --- |
+| `"literal"` | literal string | exactly one string |
+| `"prefix-${env:HOME}"` | string template with a string variable | exactly one string |
+| `"${env:HOME}"` | exact string variable | exactly one string |
+| `"${package:names}"` | exact list variable, valid only in provider install args | zero or more strings in the general list model; current package names contain one or more |
+
+String-valued exact variables may occupy a whole source or participate in a
+string template. List-valued variables cannot interpolate into text. These
+source and result-type distinctions do not add any TOML syntax.
+
+### Provider install flat-list expression
+
+Shape: the complete provider `install.args` array. Each source element becomes
+either one string expression, the exact list variable `${package:names}`, or
+the exact list variable `${package:provider_args}`.
 
 Contextual fragment:
 
@@ -157,18 +182,24 @@ Contextual fragment:
 args = ["install", "--root=${xdg:data}", "${package:provider_args}", "${package:names}"]
 ```
 
-The two package resolvers must each occupy a complete array element:
+The two package variables must each occupy a complete array element:
 
-| List resolver | Expansion cardinality |
+| List variable | Expansion cardinality |
 | --- | --- |
 | `${package:names}` | one or more argv elements |
 | `${package:provider_args}` | zero or more argv elements |
 
 For `${package:names}`, the one-or-more result is the Single package key or the
-non-empty Batch `names`. Neither resolver can be embedded in text. Escaping a
-package resolver makes it scalar literal syntax rather than a list expansion.
-All scalar-template resolvers remain available here. This type is accepted only
-for `Provider.install.args`.
+non-empty Batch `names`. Neither list variable can be embedded in text.
+Escaping one makes it literal syntax rather than a list expansion. All
+string-valued resolvers remain available in one-string parts.
+
+Expansion is ordered and has exactly one flattening layer: each string
+expression contributes one argv element, while each exact list variable
+contributes its zero-or-more values in place. Nested literal arrays are invalid
+configuration values for `install.args`; there is no alternate spread syntax
+or recursive-flattening behavior. This expression type is accepted only for
+`Provider.install.args`.
 
 ### OneOrMany<T>
 
@@ -190,7 +221,7 @@ os = ["linux", "macos"]
 The scalar and list forms deserialize to distinct `One` and `Many` shapes but
 have the same element semantics. Interpolation is determined by `T`: for
 example, platform identifiers do not interpolate, while environment path
-`scalar_template` values do.
+string-expression sources do.
 
 ### Keyed tables
 
@@ -357,20 +388,20 @@ Single and Batch are distinct variants. Runtime never infers the kind from an
 optional or empty `names` value. Every declaration is one explicit install
 unit and one report item; dot performs no automatic provider grouping.
 Provider ids and names are non-interpolated identifiers. `provider_args`
-elements are non-interpolated `literal_string` values.
+elements are non-interpolated literal-string sources.
 
 ### SingleProviderPackage
 
 Shape:
 
 ```text
-{ provider: identifier, provider_args?: [literal_string] }
+{ provider: identifier, provider_args?: [literal-string source] }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
 | `provider` | `identifier` | yes | no |
-| `provider_args` | list of `literal_string` | no | no |
+| `provider_args` | list of literal-string sources | no | no |
 
 Contextual fragment:
 
@@ -396,14 +427,18 @@ interpolate.
 Shape:
 
 ```text
-{ provider: identifier, names: [identifier], provider_args?: [literal_string] }
+{
+  provider: identifier,
+  names: [identifier],
+  provider_args?: [literal-string source]
+}
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
 | `provider` | `identifier` | yes | no |
 | `names` | non-empty list of `identifier` | yes | no |
-| `provider_args` | list of `literal_string` | no | no |
+| `provider_args` | list of literal-string sources | no | no |
 
 Contextual fragment:
 
@@ -436,7 +471,7 @@ Shape:
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `install` | `Action` | yes | its action templates accept scalar resolvers |
+| `install` | `Action` | yes | its string expressions accept string-valued resolvers |
 
 Contextual fragment:
 
@@ -448,7 +483,7 @@ exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-starship"]
 
 The package key is a diagnostic/report id. The install action uses the normal
 Action lifecycle: without `check`, `exec` runs on every apply. A manual package
-has no provider and no access to package list resolvers or an implicit provider
+has no provider and no access to package list variables or an implicit provider
 environment. Unknown fields are rejected.
 
 ## Execution types
@@ -460,10 +495,10 @@ one-or-many `ensure` actions.
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `activate` | `EnvironmentPatch` | no | scalar resolvers |
-| `probe` | `ExecAction<scalar_template>` | yes | scalar resolvers |
-| `ensure` | `OneOrMany<ExecAction<scalar_template>>` | no | scalar resolvers |
-| `install` | `ExecAction<provider_install_arg>` | yes | scalar resolvers plus complete package list elements in `args` |
+| `activate` | `EnvironmentPatch<string-expression source>` | no | string-valued resolvers |
+| `probe` | ordinary source `ExecAction` | yes | string-valued resolvers |
+| `ensure` | `OneOrMany<ordinary source ExecAction>` | no | string-valued resolvers |
+| `install` | provider-install source `ExecAction` | yes | string-valued resolvers plus complete package list variables in `args` |
 
 Contextual fragment:
 
@@ -482,19 +517,22 @@ and probes once more. Provider install then runs once per declared Single or
 Batch unit only when the provider is ready. An unavailable provider blocks its
 units without invoking install, while unrelated providers continue.
 
-Package list resolvers are invalid in `activate`, `probe`, and `ensure`, and are
-valid only as complete `install.args` elements. Unknown fields are rejected.
+Package list variables are invalid in `activate`, `probe`, and `ensure`, and
+are valid only as complete `install.args` elements. The provider install's
+`program`, `cwd`, and environment values remain string-expression sources;
+only its argument sources participate in the flat-list expression. Unknown
+fields are rejected.
 
-### EnvironmentPatch
+### EnvironmentPatch<S>
 
 Shape: optional one-or-many path entries and an optional environment-variable
-map.
+map, all parameterized by the same field source or resolved value type `S`.
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `path_prepend` | `OneOrMany<scalar_template>` | no | scalar resolvers |
-| `path_append` | `OneOrMany<scalar_template>` | no | scalar resolvers |
-| `variables` | `{ environment_name -> scalar_template }` | no, defaults empty | names no; values scalar resolvers |
+| `path_prepend` | `OneOrMany<S>` | no | determined by `S` |
+| `path_append` | `OneOrMany<S>` | no | determined by `S` |
+| `variables` | `{ environment_name -> S }` | no, defaults empty | names no; values determined by `S` |
 
 Contextual fragment:
 
@@ -508,41 +546,50 @@ before the patch is applied. For a provider operation, ordering is: current dot
 process environment, provider `activate`, then that ExecAction's `env`. Action
 variables override provider variables; action prepends come before provider
 PATH entries, and appended entries are placed at the end. Global and manual
-actions have no implicit provider patch.
+actions have no implicit provider patch. Source records use
+`S = string-expression source`; resolved execution records use resolved
+strings.
 
-### ExecAction<A>
+### ExecAction<S, A>
 
 Shape:
 
 ```text
 {
   type?: "exec",
-  program: scalar_template,
+  program: S,
   args?: [A],
-  cwd?: scalar_template,
-  env?: EnvironmentPatch,
+  cwd?: S,
+  env?: EnvironmentPatch<S>,
 }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
 | `type` | `ExecActionType` | no | no |
-| `program` | `scalar_template` | yes | scalar resolvers |
+| `program` | `S` | yes | determined by `S` |
 | `args` | list of `A` | no, defaults empty | determined by `A` |
-| `cwd` | `scalar_template` | no; inherits the dot process cwd | scalar resolvers |
-| `env` | `EnvironmentPatch` | no | scalar resolvers in values |
+| `cwd` | `S` | no; inherits the dot process cwd | determined by `S` |
+| `env` | `EnvironmentPatch<S>` | no | determined by `S` |
 
-Generic contextual fragment (`A = scalar_template`):
+Ordinary source contextual fragment
+(`S = A = string-expression source`):
 
 ```toml
 exec = { type = "exec", program = "git", args = ["-C", "${dot:config_dir}", "status"], cwd = "${dot:cwd}" }
 ```
 
-Generic ExecAction arguments are scalar templates. Provider `install` is the
-specialization `ExecAction<provider_install_arg>`: its `args` additionally
-accept the two package list resolvers. This is separate from a package
-declaration's `provider_args`, which is literal unit data expanded only by
-`${package:provider_args}`.
+Ordinary source ExecAction fields and arguments are string-expression sources.
+Provider `install` is the specialization with
+`S = string-expression source` and `A = provider-install argument source`; its
+complete `args` vector is promoted to the provider install flat-list
+expression. This is separate from a package declaration's `provider_args`,
+which is literal unit data expanded only by `${package:provider_args}`.
+
+After resolution, both generic parameters are resolved strings, so a planned
+process record has one resolved `program`, zero or more resolved `args`, an
+optional resolved `cwd`, and an optional environment patch of resolved
+strings.
 
 When `cwd` is omitted, dot does not explicitly set the child process working
 directory. The child therefore inherits the current working directory of the
@@ -575,13 +622,16 @@ shell and does not change interpolation rules.
 Shape:
 
 ```text
-{ check?: ExecAction<scalar_template>, exec: ExecAction<scalar_template> }
+{
+  check?: ExecAction<string-expression source, string-expression source>,
+  exec: ExecAction<string-expression source, string-expression source>
+}
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `check` | generic `ExecAction` | no | scalar resolvers |
-| `exec` | generic `ExecAction` | yes | scalar resolvers |
+| `check` | ordinary source `ExecAction` | no | string-valued resolvers |
+| `exec` | ordinary source `ExecAction` | yes | string-valued resolvers |
 
 Contextual fragment:
 
@@ -595,19 +645,20 @@ Without `check`, `exec` runs on every apply. Check exit code 0 means satisfied
 and skips exec; 1 means unsatisfied, so dot runs exec and checks exactly once
 more; any other code means check failed. The action fails if the post-exec
 check is not 0 even when exec succeeded. Manual-package and global actions use
-this same lifecycle, direct-process rules, and scalar interpolation. They do
-not accept package list resolvers.
+this same lifecycle, direct-process rules, and string expressions. They do not
+accept package list variables.
 
 ## Link types
 
 ### Link
 
-Shape: source and target templates plus two optional policy enums.
+Shape: source and target string-expression sources plus two optional policy
+enums.
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `source` | `scalar_template` | yes | scalar resolvers |
-| `target` | `scalar_template` | yes | scalar resolvers |
+| `source` | string-expression source | yes | string-valued resolvers |
+| `target` | string-expression source | yes | string-valued resolvers |
 | `on_conflict` | `LinkConflict` | no, defaults `replace-link` | no |
 | `on_missing_parent` | `LinkMissingParent` | no, defaults `create` | no |
 
@@ -626,7 +677,7 @@ must resolve to an absolute path. Apply requires source to exist as a regular
 file or directory and creates a native symbolic link. A matching link is
 satisfied. All effective link paths resolve before mutation, and duplicate
 resolved targets prevent the link phase from starting. Link ids and policy
-literals do not interpolate; source and target accept scalar resolvers.
+literals do not interpolate; source and target accept string-valued resolvers.
 
 ### LinkConflict
 
@@ -666,12 +717,18 @@ Validation has three distinct boundaries:
 
 1. **Parsing and deserialization** check TOML structure, type shapes, required
    fields, identifier rules, and environment-name rules. All object shapes
-   reject unknown fields. Parsing alone does not validate every resolver
-   occurrence.
+   reject unknown fields. String-bearing source roles retain both their
+   deserialized TOML string value and a recoverable literal, template,
+   exact-variable, or malformed parsed form. Resolver lookup, result typing,
+   and malformed-source errors are deferred until a command consumes the
+   field.
 2. **Selection, merge, and planning** choose one target and optional profile,
-   replace keyed records along its ancestor path, then validate semantic rules
-   and resolve strings in the resulting effective manifest. Apply and dry-run
-   perform this complete effective-manifest validation before execution.
+   replace keyed records along its ancestor path, then promote and resolve the
+   fields consumed while building the requested plan. Apply and dry-run consume
+   effective provider activate, probe, and ensure fields, selected manual
+   packages, actions, and links. They consume a provider's install sources only
+   for a selected provider-package unit that references that provider; an
+   otherwise selected but unused provider install remains unvalidated.
 3. **Execution** probes providers, runs processes, and reconciles links only
    after planning succeeds. Dry-run stops before this boundary.
 
@@ -681,19 +738,37 @@ empty collections. Other fields marked optional remain absent and receive any
 runtime default documented in their type section.
 
 `check providers` intentionally has a narrower validation boundary: it selects
-and merges the effective manifest but resolves and validates only provider
-`activate` and `probe` fields. It does not validate unrelated packages,
-actions, links, provider `ensure`, or provider `install` strings. Declarations
-outside the selected profile ancestry, and ancestor declarations replaced by a
-deeper record, are excluded from interpolation validation for all commands.
+and merges the effective manifest, then resolves, applies, and checks only each
+provider's `activate` and `probe` fields. A local interpolation, activation,
+preparation, execution, or nonzero-probe result is recorded for that provider,
+and checking continues with the remaining providers. The command does not
+consume packages, actions, links, provider `ensure`, or provider `install`
+sources.
+
+Declarations outside the selected profile ancestry, and ancestor declarations
+replaced by a deeper record, are excluded from contextual expression
+validation for every command. They still pass through strict whole-document
+TOML deserialization, including identifier, environment-name, fixed-enum,
+required-field, and unknown-field checks.
 
 ## Interpolation
 
 Interpolation uses the OmegaConf-like surface `${resolver:payload}` and a
-closed, static registry. Configuration cannot add resolvers. A scalar resolver
-may fill a complete `scalar_template` or be embedded within literal text.
+closed, static registry. Configuration cannot add resolvers. A string-valued
+variable may occupy a complete string-expression source or appear inside a
+string template.
 
-### Scalar resolver registry
+The resolver signatures are:
+
+```text
+env:*                   -> string
+dot:*                   -> string
+xdg:*                   -> string
+package:names           -> list<string>
+package:provider_args   -> list<string>
+```
+
+### String-valued resolver registry
 
 | Resolver form | Resolved value |
 | --- | --- |
@@ -717,7 +792,7 @@ XDG directories on Linux and platform-standard equivalents on Windows and
 macOS. A missing environment variable or an unavailable platform directory is
 an error; it never silently becomes an empty string.
 
-### Provider-package list resolvers
+### Provider-package list-valued variables
 
 | Resolver form | Resolved value | Availability |
 | --- | --- | --- |
@@ -726,31 +801,32 @@ an error; it never silently becomes an empty string.
 
 For a Single, `${package:names}` expands to its surrounding package key. For a
 Batch, it expands to its declared non-empty `names` list. An omitted
-`provider_args` expands to zero elements. List resolvers cannot be embedded or
-used in activate, probe, ensure, manual/global actions, links, or any other
-field. If a unit declares non-empty `provider_args`, the provider install args
-must contain exactly one `${package:provider_args}` element.
+`provider_args` expands to zero elements. These are exact list-valued variables,
+not string interpolation: they cannot be embedded or used in activate, probe,
+ensure, manual/global actions, links, or any other field. If a unit declares
+non-empty `provider_args`, the provider install args must contain exactly one
+`${package:provider_args}` element.
 
 ### Availability by string-bearing role
 
-| Role | Schema type | Scalar resolvers | Package list resolvers |
+| Role | Schema type | String variables | Package list variables |
 | --- | --- | --- | --- |
 | table keys/ids/provider refs/platform values | `identifier` | no | no |
 | environment map keys | `environment_name` | no | no |
-| package `provider_args` | `literal_string` | no | no |
-| provider `activate` path/variable values | `scalar_template` | yes | no |
-| generic ExecAction `program`, `args`, `cwd`, `env` values | `scalar_template` | yes | no |
-| provider `install` `program`, `cwd`, `env` values | `scalar_template` | yes | no |
-| provider `install.args` | `provider_install_arg` | yes | package lists as a complete element only |
-| Link `source`, `target` | `scalar_template` | yes | no |
+| package `provider_args` | literal-string source | no | no |
+| provider `activate` path/variable values | string-expression source | yes | no |
+| ordinary ExecAction `program`, `args`, `cwd`, `env` values | string-expression source | yes | no |
+| provider `install` `program`, `cwd`, `env` values | string-expression source | yes | no |
+| provider `install.args` | provider install flat-list expression | yes | exact package lists as a complete element only |
+| Link `source`, `target` | string-expression source | yes | no |
 | fixed enum literals | fixed literal | no | no |
 
 Identifiers and environment names reject every `${` substring, even escaped.
-For `literal_string` and template roles, unescaped `${` introduces resolver
-syntax and `\${` represents literal `${` after TOML parsing. Fixed enums accept
-only their declared literals. Unknown resolvers, unsupported or missing
-payloads, nested interpolation, defaults, expressions, missing values, and a
-resolver used outside its allowed context are errors.
+For literal-string and string-expression source roles, unescaped `${`
+introduces resolver syntax and `\${` represents literal `${` after TOML
+parsing. Fixed enums accept only their declared literals. Unknown resolvers,
+unsupported or missing payloads, nested interpolation, defaults, expressions,
+missing values, and a resolver used outside its allowed context are errors.
 
 Environment patches resolve in application order: current dot process
 environment, provider activation when applicable, then the individual action's
