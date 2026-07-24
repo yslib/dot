@@ -300,7 +300,7 @@ mod tests {
     use std::path::Path;
 
     use crate::action::ExecutionEnvironment;
-    use crate::schema::{ListType, SchemaType, SchemaTypeMarker, StringType};
+    use crate::schema::{ListType, ResolvedString, SchemaType, SchemaTypeMarker, StringType};
 
     use super::super::{DotPaths, InterpolationError, ResolveContext, XdgPaths};
     use super::{
@@ -360,13 +360,21 @@ mod tests {
     }
 
     #[test]
-    fn checked_conversion_preserves_the_resolver_namespace_in_contract_errors() {
+    fn checked_conversions_preserve_the_resolver_namespace_in_contract_errors() {
         assert_eq!(
             ResolvedValue::StringList(Vec::new()).into_string("package"),
             Err(InterpolationError::ResolverContractViolation {
                 resolver: "package".into(),
                 expected: SchemaType::String,
                 actual: ListType::<StringType>::schema_type(),
+            })
+        );
+        assert_eq!(
+            ResolvedValue::String(ResolvedString::from("value")).into_string_list("env"),
+            Err(InterpolationError::ResolverContractViolation {
+                resolver: "env".into(),
+                expected: ListType::<StringType>::schema_type(),
+                actual: SchemaType::String,
             })
         );
     }
