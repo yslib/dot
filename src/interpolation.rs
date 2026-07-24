@@ -1,3 +1,5 @@
+mod resolver;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -7,13 +9,15 @@ use directories::{BaseDirs, UserDirs};
 
 use crate::action::ExecutionEnvironment;
 use crate::schema::{
-    EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType,
-    LiteralString, LiteralStringSource, OneOrMany, ParsedStringForm,
-    ParsedTemplate as ParsedStringTemplate, ParsedTemplatePart, ProviderInstallArgSource,
-    ProviderInstallArgs, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString, SchemaType,
-    SchemaTypeMarker, SourceExecAction, StringExpression, StringExpressionSource, StringTemplate,
-    StringTemplatePart, StringType, TypedVariable, UntypedVariableReference,
+    EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType, LiteralString,
+    LiteralStringSource, OneOrMany, ParsedStringForm, ParsedTemplate as ParsedStringTemplate,
+    ParsedTemplatePart, ProviderInstallArgSource, ProviderInstallArgs, ResolvedEnvironmentPatch,
+    ResolvedExecAction, ResolvedString, SchemaType, SchemaTypeMarker, SourceExecAction,
+    StringExpression, StringExpressionSource, StringTemplate, StringTemplatePart, StringType,
+    TypedVariable, UntypedVariableReference,
 };
+
+use resolver::{ResolvedValue, ResolverEntry, lookup_resolver};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DotPaths<'a> {
@@ -181,182 +185,27 @@ impl<'a> ResolveContext<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ResolverAvailability {
-    Everywhere,
-    ProviderInstallOnly,
-}
-
-impl ResolverAvailability {
-    fn allows(self, role: TemplateRole) -> bool {
-        self == Self::Everywhere || role == TemplateRole::ProviderInstallArg
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TemplateRole {
     Scalar,
     ProviderInstallArg,
 }
 
-enum ResolverValue {
-    Scalar(String),
-    List(Vec<String>),
-}
-
-type ValidatePayloadFn = fn(&str) -> bool;
-type SchemaTypeFn = fn() -> SchemaType;
-type ResolveFn = for<'a> fn(&str, &ResolveContext<'a>) -> Result<ResolverValue, InterpolationError>;
-
-struct BuiltinResolverSpec {
-    name: &'static str,
-    output: SchemaTypeFn,
-    availability: ResolverAvailability,
-    validate_payload: ValidatePayloadFn,
-    resolve: ResolveFn,
-}
-
-fn string_schema_type() -> SchemaType {
-    StringType::schema_type()
-}
-
-fn string_list_schema_type() -> SchemaType {
-    ListType::<StringType>::schema_type()
-}
-
-static BUILTIN_RESOLVERS: &[BuiltinResolverSpec] = &[
-    BuiltinResolverSpec {
-        name: "env",
-        output: string_schema_type,
-        availability: ResolverAvailability::Everywhere,
-        validate_payload: validate_env_payload,
-        resolve: resolve_env,
-    },
-    BuiltinResolverSpec {
-        name: "dot",
-        output: string_schema_type,
-        availability: ResolverAvailability::Everywhere,
-        validate_payload: validate_dot_payload,
-        resolve: resolve_dot,
-    },
-    BuiltinResolverSpec {
-        name: "xdg",
-        output: string_schema_type,
-        availability: ResolverAvailability::Everywhere,
-        validate_payload: validate_xdg_payload,
-        resolve: resolve_xdg,
-    },
-    BuiltinResolverSpec {
-        name: "package",
-        output: string_list_schema_type,
-        availability: ResolverAvailability::ProviderInstallOnly,
-        validate_payload: validate_package_payload,
-        resolve: resolve_package,
-    },
-];
-
-fn lookup_resolver(name: &str) -> Option<&'static BuiltinResolverSpec> {
-    BUILTIN_RESOLVERS
-        .iter()
-        .find(|resolver| resolver.name == name)
-}
-
-fn validate_env_payload(payload: &str) -> bool {
-    EnvironmentName::new(payload).is_ok()
-}
-
-fn validate_dot_payload(payload: &str) -> bool {
-    DotPath::from_payload(payload).is_some()
-}
-
-fn validate_xdg_payload(payload: &str) -> bool {
-    XdgPath::from_payload(payload).is_some()
-}
-
-fn validate_package_payload(payload: &str) -> bool {
-    matches!(payload, "names" | "provider_args")
-}
-
-fn resolve_env(
-    payload: &str,
-    context: &ResolveContext<'_>,
-) -> Result<ResolverValue, InterpolationError> {
-    let value = context.environment.get(payload).ok_or_else(|| {
-        InterpolationError::MissingEnvironmentVariable {
-            name: payload.to_owned(),
-        }
-    })?;
-    let value =
-        value
-            .to_str()
-            .ok_or_else(|| InterpolationError::NonUnicodeEnvironmentVariable {
-                name: payload.to_owned(),
-            })?;
-    Ok(ResolverValue::Scalar(value.to_owned()))
-}
-
-fn resolve_dot(
-    payload: &str,
-    context: &ResolveContext<'_>,
-) -> Result<ResolverValue, InterpolationError> {
-    let path = context.dot.get(
-        DotPath::from_payload(payload).expect("payload was validated by the resolver definition"),
-    );
-    let value = path
-        .to_str()
-        .ok_or_else(|| InterpolationError::NonUnicodePath {
-            name: payload.to_owned(),
-        })?;
-    Ok(ResolverValue::Scalar(value.to_owned()))
-}
-
-fn resolve_xdg(
-    payload: &str,
-    context: &ResolveContext<'_>,
-) -> Result<ResolverValue, InterpolationError> {
-    let path = XdgPath::from_payload(payload)
-        .and_then(|path| context.xdg.get(path))
-        .ok_or_else(|| InterpolationError::UnavailablePath {
-            name: payload.to_owned(),
-        })?;
-    let value = path
-        .to_str()
-        .ok_or_else(|| InterpolationError::NonUnicodePath {
-            name: payload.to_owned(),
-        })?;
-    Ok(ResolverValue::Scalar(value.to_owned()))
-}
-
-fn resolve_package(
-    payload: &str,
-    context: &ResolveContext<'_>,
-) -> Result<ResolverValue, InterpolationError> {
-    let package = context
-        .package
-        .ok_or(InterpolationError::MissingPackageContext)?;
-    let values = match payload {
-        "names" => package.names,
-        "provider_args" => package.provider_args,
-        _ => &[],
-    };
-    Ok(ResolverValue::List(values.to_vec()))
-}
-
 fn validate_resolver_reference(
     reference: &UntypedVariableReference,
     role: TemplateRole,
-) -> Result<&'static BuiltinResolverSpec, InterpolationError> {
+) -> Result<&'static ResolverEntry, InterpolationError> {
     let resolver = lookup_resolver(reference.resolver()).ok_or_else(|| {
         InterpolationError::UnknownResolver {
             name: reference.resolver().to_owned(),
         }
     })?;
 
-    if !resolver.availability.allows(role) {
+    if !resolver.availability().allows(role) {
         return Err(InterpolationError::ResolverUnavailable {
             resolver: reference.resolver().to_owned(),
         });
     }
-    if !(resolver.validate_payload)(reference.payload()) {
+    if !resolver.validate_payload(reference.payload()) {
         return Err(InterpolationError::InvalidResolverPayload {
             resolver: reference.resolver().to_owned(),
             payload: reference.payload().to_owned(),
@@ -376,15 +225,15 @@ fn validate_variable<T: SchemaTypeMarker>(
 
 fn validate_variable_type<T: SchemaTypeMarker>(
     reference: &UntypedVariableReference,
-    resolver: &BuiltinResolverSpec,
+    resolver: &ResolverEntry,
 ) -> Result<TypedVariable<T>, InterpolationError> {
     let expected = T::schema_type();
-    let actual = (resolver.output)();
-    if actual != expected {
+    let actual = resolver.output_type();
+    if actual != &expected {
         return Err(InterpolationError::ResolverTypeMismatch {
             resolver: reference.resolver().to_owned(),
             expected,
-            actual,
+            actual: actual.clone(),
         });
     }
 
@@ -477,7 +326,7 @@ fn validate_string_template_variable(
 ) -> Result<TypedVariable<StringType>, InterpolationError> {
     let resolver = validate_resolver_reference(reference, role)?;
     if role == TemplateRole::ProviderInstallArg
-        && matches!((resolver.output)(), SchemaType::List(_))
+        && matches!(resolver.output_type(), SchemaType::List(_))
     {
         return Err(InterpolationError::ListResolverMustOccupyArgument {
             resolver: reference.resolver().to_owned(),
@@ -495,7 +344,7 @@ pub fn promote_provider_install_arg(
     };
 
     let resolver = validate_resolver_reference(reference, TemplateRole::ProviderInstallArg)?;
-    if (resolver.output)() == ListType::<StringType>::schema_type() {
+    if resolver.output_type() == &ListType::<StringType>::schema_type() {
         validate_variable_type(reference, resolver).map(FlatListPart::Many)
     } else {
         validate_variable_type(reference, resolver)
@@ -671,10 +520,10 @@ fn evaluate_string_variable(
 ) -> Result<ResolvedString, InterpolationError> {
     let reference = variable.reference();
     let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    let ResolverValue::Scalar(value) = (resolver.resolve)(reference.payload(), context)? else {
+    let ResolvedValue::String(value) = resolver.resolve(reference.payload(), context)? else {
         unreachable!("typed string resolver produces a scalar");
     };
-    Ok(ResolvedString::from(value))
+    Ok(value)
 }
 
 fn evaluate_string_list_variable(
@@ -683,10 +532,10 @@ fn evaluate_string_list_variable(
 ) -> Result<Vec<ResolvedString>, InterpolationError> {
     let reference = variable.reference();
     let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    let ResolverValue::List(values) = (resolver.resolve)(reference.payload(), context)? else {
+    let ResolvedValue::StringList(values) = resolver.resolve(reference.payload(), context)? else {
         unreachable!("typed string-list resolver produces a list");
     };
-    Ok(values.into_iter().map(ResolvedString::from).collect())
+    Ok(values)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
