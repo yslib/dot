@@ -24,7 +24,8 @@ this reference.
 - [Execution types](#execution-types): [`Provider`](#provider),
   [`EnvironmentPatch<S>`](#environmentpatchs),
   [`ExecAction<S, A>`](#execactions-a),
-  [`ExecActionType`](#execactiontype), and [`Action`](#action).
+  [`ExecActionType`](#execactiontype), and
+  [`Action<S, A>`](#actions-a).
 - [Link types](#link-types): [`Link`](#link),
   [`LinkConflict`](#linkconflict), and
   [`LinkMissingParent`](#linkmissingparent).
@@ -48,6 +49,11 @@ Root
         ├── actions: { identifier -> Action }
         └── profiles: { identifier -> Profile } (recursive)
 ```
+
+In the configuration tree and field tables, the short name `Action` means the
+source specialization
+`Action<string-expression source, string-expression source>`. The generic and
+resolved forms are detailed in [`Action<S, A>`](#actions-a).
 
 A selected profile inherits the target and each profile on its lexical ancestor
 path. Each keyed provider, package, link, or action record is atomic: a deeper
@@ -617,21 +623,21 @@ type = "exec"
 The discriminator is reserved for the execution kind. It does not request a
 shell and does not change interpolation rules.
 
-### Action
+### Action<S, A>
 
 Shape:
 
 ```text
 {
-  check?: ExecAction<string-expression source, string-expression source>,
-  exec: ExecAction<string-expression source, string-expression source>
+  check?: ExecAction<S, A>,
+  exec: ExecAction<S, A>
 }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `check` | ordinary source `ExecAction` | no | string-valued resolvers |
-| `exec` | ordinary source `ExecAction` | yes | string-valued resolvers |
+| `check` | `ExecAction<S, A>` | no | determined by `S` and `A` |
+| `exec` | `ExecAction<S, A>` | yes | determined by `S` and `A` |
 
 Contextual fragment:
 
@@ -640,6 +646,12 @@ Contextual fragment:
 check = { program = "test", args = ["-d", "${xdg:cache}/dot"] }
 exec = { program = "mkdir", args = ["-p", "${xdg:cache}/dot"] }
 ```
+
+Every TOML action record uses the source specialization
+`S = A = string-expression source`. Its selected `check` and `exec` fields are
+promoted to string expressions and then resolved. A planned action uses the
+resolved specialization `S = A = resolved string`; this changes the phase
+model, not the TOML shape.
 
 Without `check`, `exec` runs on every apply. Check exit code 0 means satisfied
 and skips exec; 1 means unsatisfied, so dot runs exec and checks exactly once
