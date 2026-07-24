@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
     DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPaths,
-    resolve_environment_patch, resolve_exec_action, resolve_literal_string,
-    resolve_provider_install_action, resolve_string_expression,
+    promote_provider_install_args, resolve_environment_patch, resolve_exec_action,
+    resolve_literal_string, resolve_provider_install_action_with_args, resolve_string_expression,
 };
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage, ResolvedAction,
-    ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
+    FlatListPart, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage,
+    ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
 };
 
 #[derive(Debug)]
@@ -341,23 +341,6 @@ impl<'a> ExecutionPlanner<'a> {
                             context: format!("package `{package_id}` provider_args"),
                             source,
                         })?;
-                    if !provider_args.is_empty() {
-                        let resolver_count = provider
-                            .install
-                            .args
-                            .iter()
-                            .filter(|argument| {
-                                argument.source_spelling() == "${package:provider_args}"
-                            })
-                            .count();
-                        if resolver_count != 1 {
-                            return Err(PlanningError::ProviderArgsResolverCount {
-                                provider: provider_id.to_owned(),
-                                actual: resolver_count,
-                            });
-                        }
-                    }
-
                     let names = match package {
                         ProviderPackage::Single(_) => vec![package_id.to_string()],
                         ProviderPackage::Batch(package) => {
@@ -380,6 +363,33 @@ impl<'a> ExecutionPlanner<'a> {
                             names
                         }
                     };
+                    let install_args = promote_provider_install_args(&provider.install.args)
+                        .map_err(|source| PlanningError::Interpolation {
+                            context: format!(
+                                "provider `{provider_id}` install unit `{package_id}`"
+                            ),
+                            source,
+                        })?;
+                    if !provider_args.is_empty() {
+                        let resolver_count = install_args
+                            .parts()
+                            .iter()
+                            .filter(|part| {
+                                matches!(
+                                    part,
+                                    FlatListPart::Many(variable)
+                                        if variable.reference().resolver() == "package"
+                                            && variable.reference().payload() == "provider_args"
+                                )
+                            })
+                            .count();
+                        if resolver_count != 1 {
+                            return Err(PlanningError::ProviderArgsResolverCount {
+                                provider: provider_id.to_owned(),
+                                actual: resolver_count,
+                            });
+                        }
+                    }
                     let provider_args = provider_args
                         .into_iter()
                         .map(|argument| argument.value().to_owned())
@@ -387,13 +397,15 @@ impl<'a> ExecutionPlanner<'a> {
                     let package_context = PackageContext::new(&names, &provider_args);
                     let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
                         .with_package(package_context);
-                    let install = resolve_provider_install_action(&provider.install, &context)
-                        .map_err(|source| PlanningError::Interpolation {
-                            context: format!(
-                                "provider `{provider_id}` install unit `{package_id}`"
-                            ),
-                            source,
-                        })?;
+                    let install = resolve_provider_install_action_with_args(
+                        &provider.install,
+                        &install_args,
+                        &context,
+                    )
+                    .map_err(|source| PlanningError::Interpolation {
+                        context: format!("provider `{provider_id}` install unit `{package_id}`"),
+                        source,
+                    })?;
 
                     Ok(match package {
                         ProviderPackage::Single(_) => {

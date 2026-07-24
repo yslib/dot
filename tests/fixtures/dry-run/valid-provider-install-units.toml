@@ -5,7 +5,7 @@ platform = { os = "linux" }
 activate = { variables = { BREW = "${env:ROOT}/homebrew/bin/brew" } }
 probe = { program = "${env:BREW}", args = ["--version"] }
 ensure = { program = "bootstrap-brew" }
-install = { program = "${env:BREW}", args = ["install", "${package:provider_args}", "${package:names}"] }
+install = { program = "${env:BREW}", args = ["before", "${package:provider_args}", "middle", "${package:names}", "after"] }
 
 [targets.machine.packages]
 alpha = { provider = "brew" }

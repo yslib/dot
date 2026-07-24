@@ -331,3 +331,10 @@ fn rejects_a_package_with_both_provider_and_manual_install() {
 
     assert!(toml::from_str::<Config>(&input).is_err());
 }
+
+#[test]
+fn rejects_nested_provider_install_argument_arrays() {
+    let input = fixture::read("schema/invalid-nested-provider-install-args.toml");
+
+    assert!(toml::from_str::<Config>(&input).is_err());
+}

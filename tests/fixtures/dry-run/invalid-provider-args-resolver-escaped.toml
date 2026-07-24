@@ -1,0 +1,9 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.brew]
+probe = { program = "brew", args = ["--version"] }
+install = { program = "brew", args = ['\${package:provider_args}', "${package:names}"] }
+
+[targets.machine.packages]
+app = { provider = "brew", provider_args = ["--cask"] }

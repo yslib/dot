@@ -130,7 +130,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
             .iter()
             .map(ResolvedString::value)
             .collect::<Vec<_>>(),
-        vec!["install", "alpha"]
+        vec!["before", "middle", "alpha", "after"]
     );
 
     let beta = &plan.provider_installs()[1];
@@ -143,7 +143,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
             .iter()
             .map(ResolvedString::value)
             .collect::<Vec<_>>(),
-        vec!["install", "beta"]
+        vec!["before", "middle", "beta", "after"]
     );
 
     let fonts = &plan.provider_installs()[2];
@@ -161,7 +161,9 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
             .iter()
             .map(ResolvedString::value)
             .collect::<Vec<_>>(),
-        vec!["install", "--cask", "font-one", "font-two"]
+        vec![
+            "before", "--cask", "middle", "font-one", "font-two", "after"
+        ]
     );
 }
 
@@ -238,22 +240,36 @@ fn rejects_a_duplicate_name_inside_one_provider_package_batch() {
 }
 
 #[test]
-fn nonempty_provider_args_require_one_install_list_resolver() {
-    let manifest = select_fixture("dry-run/invalid-provider-args-resolver.toml");
-    let environment = environment();
-    let xdg = XdgPaths::detect();
-    let platform = platform();
-    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+fn nonempty_provider_args_require_exactly_one_install_list_resolver() {
+    let cases = [
+        ("invalid-provider-args-resolver.toml", 0),
+        ("invalid-provider-args-resolver-twice.toml", 2),
+        ("invalid-provider-args-resolver-escaped.toml", 0),
+    ];
 
-    let error = planner
-        .plan(&manifest)
-        .expect_err("nonempty provider args must not be silently discarded");
+    for (fixture_name, expected_count) in cases {
+        let manifest = select_fixture(&format!("dry-run/{fixture_name}"));
+        let environment = environment();
+        let xdg = XdgPaths::detect();
+        let platform = platform();
+        let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    assert!(
-        error
-            .to_string()
-            .contains("exactly one `${package:provider_args}`")
-    );
+        let error = planner
+            .plan(&manifest)
+            .expect_err("nonempty provider args must not be silently discarded");
+
+        assert!(
+            matches!(
+                error,
+                PlanningError::ProviderArgsResolverCount {
+                    ref provider,
+                    actual,
+                }
+                    if provider == "brew" && actual == expected_count
+            ),
+            "unexpected error for {fixture_name}: {error}"
+        );
+    }
 }
 
 #[test]

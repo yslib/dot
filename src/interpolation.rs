@@ -584,7 +584,15 @@ pub fn resolve_provider_install_action(
     context: &ResolveContext<'_>,
 ) -> Result<ResolvedExecAction, InterpolationError> {
     let args = promote_provider_install_args(&action.args)?;
-    let args = evaluate_provider_install_args(&args, context)?;
+    resolve_provider_install_action_with_args(action, &args, context)
+}
+
+pub(crate) fn resolve_provider_install_action_with_args(
+    action: &ExecAction<StringExpressionSource, ProviderInstallArgSource>,
+    args: &ProviderInstallArgs,
+    context: &ResolveContext<'_>,
+) -> Result<ResolvedExecAction, InterpolationError> {
+    let args = evaluate_provider_install_args(args, context)?;
 
     Ok(ResolvedExecAction {
         kind: action.kind,
