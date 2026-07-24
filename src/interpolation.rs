@@ -464,11 +464,26 @@ fn promote_string_template(
         .map(|part| match part {
             ParsedTemplatePart::Literal(value) => Ok(StringTemplatePart::Literal(value.to_owned())),
             ParsedTemplatePart::Variable(reference) => {
-                validate_variable(reference, role).map(StringTemplatePart::Variable)
+                validate_string_template_variable(reference, role).map(StringTemplatePart::Variable)
             }
         })
         .collect::<Result<_, _>>()?;
     Ok(StringTemplate::validated(parts))
+}
+
+fn validate_string_template_variable(
+    reference: &UntypedVariableReference,
+    role: TemplateRole,
+) -> Result<TypedVariable<StringType>, InterpolationError> {
+    let resolver = validate_resolver_reference(reference, role)?;
+    if role == TemplateRole::ProviderInstallArg
+        && matches!((resolver.output)(), SchemaType::List(_))
+    {
+        return Err(InterpolationError::ListResolverMustOccupyArgument {
+            resolver: reference.resolver().to_owned(),
+        });
+    }
+    validate_variable_type(reference, resolver)
 }
 
 pub fn promote_provider_install_arg(
@@ -787,8 +802,8 @@ mod tests {
     use crate::schema::{
         EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
         OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedEnvironmentPatch,
-        ResolvedString, SchemaType, StringExpression, StringExpressionSource, StringTemplatePart,
-        StringType, TypedVariable,
+        ResolvedString, StringExpression, StringExpressionSource, StringTemplatePart, StringType,
+        TypedVariable,
     };
 
     use super::{
@@ -889,10 +904,8 @@ mod tests {
 
         assert_eq!(
             error,
-            InterpolationError::ResolverTypeMismatch {
+            InterpolationError::ListResolverMustOccupyArgument {
                 resolver: "package".into(),
-                expected: SchemaType::String,
-                actual: SchemaType::List(Box::new(SchemaType::String)),
             }
         );
     }
@@ -1292,15 +1305,25 @@ mod tests {
     }
 
     #[test]
-    fn list_resolvers_cannot_be_embedded_in_an_argument() {
-        let argument = ProviderInstallArgSource::from("prefix-${package:names}");
+    fn provider_install_action_reports_an_embedded_list_resolver() {
+        let environment = environment(&[]);
+        let xdg = xdg_paths(&[]);
+        let names = ["ripgrep".into()];
+        let provider_args = Vec::new();
+        let context = ResolveContext::new(&environment, dot_paths(), &xdg)
+            .with_package(PackageContext::new(&names, &provider_args));
+        let action = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
+            kind: None,
+            program: "install".into(),
+            args: vec!["prefix-${package:names}".into()],
+            cwd: None,
+            env: None,
+        };
 
         assert_eq!(
-            promote_provider_install_arg(&argument),
-            Err(InterpolationError::ResolverTypeMismatch {
-                resolver: "package".into(),
-                expected: SchemaType::String,
-                actual: SchemaType::List(Box::new(SchemaType::String)),
+            resolve_provider_install_action(&action, &context),
+            Err(InterpolationError::ListResolverMustOccupyArgument {
+                resolver: "package".into()
             })
         );
     }

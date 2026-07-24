@@ -123,8 +123,11 @@ pub struct ActionInfo {
     pub exec: CommandInfo,
 }
 
-/// Resolved command data that is safe for reporting. It deliberately excludes
-/// the inherited process environment.
+/// Presentation-safe command data that deliberately excludes the inherited
+/// process environment.
+///
+/// [`Self::from_source`] preserves configured source spelling, including
+/// interpolation syntax, while [`Self::from_resolved`] records evaluated values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandInfo {
     pub program: String,

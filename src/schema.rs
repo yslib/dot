@@ -641,13 +641,23 @@ pub struct Provider {
     pub install: ExecAction<StringExpressionSource, ProviderInstallArgSource>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, bound(deserialize = "S: Deserialize<'de>"))]
 pub struct EnvironmentPatch<S = StringExpressionSource> {
     pub path_prepend: Option<OneOrMany<S>>,
     pub path_append: Option<OneOrMany<S>>,
     #[serde(default)]
     pub variables: BTreeMap<EnvironmentName, S>,
+}
+
+impl<S> Default for EnvironmentPatch<S> {
+    fn default() -> Self {
+        Self {
+            path_prepend: None,
+            path_append: None,
+            variables: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

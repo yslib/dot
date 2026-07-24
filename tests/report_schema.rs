@@ -8,7 +8,7 @@ use dot::report::{
     LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
     ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
-use dot::schema::{LinkConflict, LinkMissingParent};
+use dot::schema::{LinkConflict, LinkMissingParent, ResolvedExecAction, SourceExecAction};
 
 fn command(program: &str, args: &[&str]) -> CommandInfo {
     CommandInfo {
@@ -16,6 +16,34 @@ fn command(program: &str, args: &[&str]) -> CommandInfo {
         args: args.iter().map(|arg| (*arg).to_owned()).collect(),
         cwd: None,
     }
+}
+
+#[test]
+fn command_info_distinguishes_source_spelling_from_resolved_values() {
+    let source = SourceExecAction {
+        kind: None,
+        program: "${env:PROGRAM}".into(),
+        args: vec!["--root=${env:HOME}".into()],
+        cwd: Some("${dot:cwd}".into()),
+        env: None,
+    };
+    let resolved = ResolvedExecAction {
+        kind: None,
+        program: "tool".into(),
+        args: vec!["--root=/home/tester".into()],
+        cwd: Some("/work".into()),
+        env: None,
+    };
+
+    let source_info = CommandInfo::from_source(&source);
+    let resolved_info = CommandInfo::from_resolved(&resolved);
+
+    assert_eq!(source_info.program, "${env:PROGRAM}");
+    assert_eq!(source_info.args, ["--root=${env:HOME}"]);
+    assert_eq!(source_info.cwd, Some(PathBuf::from("${dot:cwd}")));
+    assert_eq!(resolved_info.program, "tool");
+    assert_eq!(resolved_info.args, ["--root=/home/tester"]);
+    assert_eq!(resolved_info.cwd, Some(PathBuf::from("/work")));
 }
 
 fn context() -> ReportContext {

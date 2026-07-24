@@ -1,11 +1,11 @@
 mod support;
 
 use dot::schema::{
-    Config, EnvironmentName, ExecAction, ExecActionType, ExpressionParseError, Identifier,
-    LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
+    Config, EnvironmentName, EnvironmentPatch, ExecAction, ExecActionType, ExpressionParseError,
+    Identifier, LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
     ParsedStringForm, ParsedTemplatePart, ProviderInstallArgSource, ProviderPackage, RecordTypeId,
-    ResolvedString, SchemaType, SchemaTypeMarker, StringExpressionSource, StringKeyType,
-    StringRefinementTypeId, StringType,
+    ResolvedEnvironmentPatch, ResolvedString, SchemaType, SchemaTypeMarker, StringExpressionSource,
+    StringKeyType, StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
@@ -54,6 +54,19 @@ fn logical_markers_define_their_resolved_value_types() {
 
     assert_eq!(list[0].value(), "owned");
     assert_eq!(list[1].value(), "borrowed");
+}
+
+#[test]
+fn source_and_resolved_environment_patches_have_empty_defaults() {
+    let source = EnvironmentPatch::<StringExpressionSource>::default();
+    let resolved = ResolvedEnvironmentPatch::default();
+
+    assert!(source.path_prepend.is_none());
+    assert!(source.path_append.is_none());
+    assert!(source.variables.is_empty());
+    assert!(resolved.path_prepend.is_none());
+    assert!(resolved.path_append.is_none());
+    assert!(resolved.variables.is_empty());
 }
 
 #[test]
