@@ -1,0 +1,18 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.profiles.malformed.actions.malformed-action]
+exec = { program = "${env:HOME" }
+
+[targets.machine.profiles.unknown.actions.unknown-action]
+exec = { program = "${mystery:value}" }
+
+[targets.machine.profiles.unavailable.actions.unavailable-action]
+exec = { program = "${package:names}" }
+
+[targets.machine.profiles.wrong-output.providers.catalog]
+probe = { program = "catalog", args = ["--version"] }
+install = { program = "catalog", args = ["prefix-${package:names}"] }
+
+[targets.machine.profiles.wrong-output.packages]
+wrong-output-package = { provider = "catalog" }

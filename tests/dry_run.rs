@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use dot::action::ExecutionEnvironment;
 use dot::dry_run;
-use dot::interpolation::{DotPaths, XdgPaths};
+use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
@@ -91,10 +91,180 @@ fn gitconfig_target() -> PathBuf {
 }
 
 fn select_fixture(name: &str) -> EffectiveManifest {
+    select_named_fixture(name, "machine", None)
+}
+
+fn select_named_fixture(name: &str, target: &str, profile: Option<&str>) -> EffectiveManifest {
     let input = fixture::read(name);
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
-    EffectiveManifest::select(&config, &platform(), Some("machine"), None)
+    EffectiveManifest::select(&config, &platform(), Some(target), profile)
         .expect("test manifest should select")
+}
+
+#[test]
+fn plans_only_selected_effective_records_and_defers_unused_provider_installs() {
+    let manifest = select_named_fixture(
+        "dry-run/valid-deferred-expression-errors.toml",
+        "selected",
+        Some("chosen"),
+    );
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let plan = planner
+        .plan(&manifest)
+        .expect("deferred source expression errors must not affect the selected plan");
+
+    assert_eq!(plan.target(), "selected");
+    assert_eq!(plan.profile(), Some("chosen"));
+    assert_eq!(
+        plan.providers()
+            .iter()
+            .map(|provider| provider.id())
+            .collect::<Vec<_>>(),
+        ["shared", "unused-broken"]
+    );
+    assert_eq!(
+        plan.providers()[0].probe().program.value(),
+        "selected-probe"
+    );
+    assert!(plan.providers()[0].activate().is_none());
+    assert!(plan.providers()[0].ensure().is_empty());
+    assert_eq!(plan.providers()[1].probe().program.value(), "unused-probe");
+    assert_eq!(
+        plan.provider_installs()
+            .iter()
+            .map(PlannedProviderInstall::id)
+            .collect::<Vec<_>>(),
+        ["shared-package"]
+    );
+    assert_eq!(
+        plan.provider_installs()[0].install().program.value(),
+        "selected-install"
+    );
+    assert!(plan.manual_packages().is_empty());
+    assert_eq!(
+        plan.actions()
+            .iter()
+            .map(|action| action.id())
+            .collect::<Vec<_>>(),
+        ["shared-action"]
+    );
+    assert_eq!(
+        plan.actions()[0].action().exec.program.value(),
+        "selected-action"
+    );
+    assert!(plan.actions()[0].action().check.is_none());
+    assert_eq!(
+        plan.links()
+            .iter()
+            .map(|link| link.id())
+            .collect::<Vec<_>>(),
+        ["shared-link"]
+    );
+    assert_eq!(plan.links()[0].source(), config_path("selected-source"));
+    assert_eq!(
+        plan.links()[0].target(),
+        Path::new(&format!("{TEST_HOME}/selected-target"))
+    );
+}
+
+#[test]
+fn rejects_selected_expression_errors_at_their_existing_consumers() {
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedError {
+        UnclosedResolver,
+        UnknownResolver,
+        ResolverUnavailable,
+        ListResolverMustOccupyArgument,
+    }
+
+    let cases = [
+        (
+            "malformed",
+            "action `malformed-action`",
+            ExpectedError::UnclosedResolver,
+        ),
+        (
+            "unknown",
+            "action `unknown-action`",
+            ExpectedError::UnknownResolver,
+        ),
+        (
+            "unavailable",
+            "action `unavailable-action`",
+            ExpectedError::ResolverUnavailable,
+        ),
+        (
+            "wrong-output",
+            "provider `catalog` install unit `wrong-output-package`",
+            ExpectedError::ListResolverMustOccupyArgument,
+        ),
+    ];
+
+    for (profile, expected_context, expected_error) in cases {
+        let manifest = select_named_fixture(
+            "dry-run/invalid-selected-expression-errors.toml",
+            "machine",
+            Some(profile),
+        );
+        let environment = environment();
+        let xdg = XdgPaths::detect();
+        let platform = platform();
+        let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+        let error = planner
+            .plan(&manifest)
+            .expect_err("the selected expression error must fail planning");
+        let PlanningError::Interpolation { context, source } = error else {
+            panic!("unexpected planning error for profile `{profile}`: {error}");
+        };
+
+        assert_eq!(context, expected_context, "profile `{profile}`");
+        assert!(
+            match expected_error {
+                ExpectedError::UnclosedResolver => {
+                    matches!(source, InterpolationError::UnclosedResolver { offset: 0 })
+                }
+                ExpectedError::UnknownResolver => matches!(
+                    source,
+                    InterpolationError::UnknownResolver { ref name } if name == "mystery"
+                ),
+                ExpectedError::ResolverUnavailable => matches!(
+                    source,
+                    InterpolationError::ResolverUnavailable { ref resolver }
+                        if resolver == "package"
+                ),
+                ExpectedError::ListResolverMustOccupyArgument => matches!(
+                    source,
+                    InterpolationError::ListResolverMustOccupyArgument { ref resolver }
+                        if resolver == "package"
+                ),
+            },
+            "unexpected interpolation error for profile `{profile}`: {source}"
+        );
+    }
+}
+
+#[test]
+fn rejects_an_unknown_provider_before_invalid_literal_provider_args() {
+    let manifest = select_fixture("dry-run/invalid-unknown-provider-before-args.toml");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let error = planner
+        .plan(&manifest)
+        .expect_err("provider lookup must precede provider_args validation");
+
+    assert!(matches!(
+        error,
+        PlanningError::UnknownProvider { package, provider }
+            if package == "invalid-args" && provider == "missing"
+    ));
 }
 
 #[test]

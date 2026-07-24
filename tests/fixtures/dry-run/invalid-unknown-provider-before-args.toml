@@ -1,0 +1,5 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.packages]
+invalid-args = { provider = "missing", provider_args = ["${env:HOME}"] }

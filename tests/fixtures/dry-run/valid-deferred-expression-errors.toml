@@ -1,0 +1,49 @@
+[targets.unselected]
+platform = { os = "linux" }
+
+[targets.unselected.actions.unselected-target]
+exec = { program = "${unclosed" }
+
+[targets.selected]
+platform = { os = "linux" }
+
+[targets.selected.providers.shared]
+activate = { variables = { BROKEN = "${root-provider-activate" } }
+probe = { program = "root-probe" }
+ensure = { program = "${root-provider-ensure" }
+install = { program = "root-install" }
+
+[targets.selected.providers.unused-broken]
+probe = { program = "unused-probe" }
+install = { program = "${unknown:program}", args = ["${unclosed", "prefix-${package:names}"] }
+
+[targets.selected.packages.shared-package]
+install = { check = { program = "${root-package-check" }, exec = { program = "root-package" } }
+
+[targets.selected.actions.shared-action]
+check = { program = "${root-action-check" }
+exec = { program = "root-action" }
+
+[targets.selected.links.shared-link]
+source = "${root-link"
+target = "${root-target"
+
+[targets.selected.profiles.chosen.providers.shared]
+probe = { program = "selected-probe" }
+install = { program = "selected-install", args = ["install", "${package:names}"] }
+
+[targets.selected.profiles.chosen.packages]
+shared-package = { provider = "shared" }
+
+[targets.selected.profiles.chosen.actions.shared-action]
+exec = { program = "selected-action" }
+
+[targets.selected.profiles.chosen.links.shared-link]
+source = "selected-source"
+target = "${env:HOME}/selected-target"
+
+[targets.selected.profiles.sibling.actions.unselected-sibling]
+exec = { program = "${unknown:sibling}" }
+
+[targets.selected.profiles.other.profiles.descendant.actions.unselected-descendant]
+exec = { program = "${package:names}" }
