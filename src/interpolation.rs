@@ -17,7 +17,7 @@ use crate::schema::{
     TypedVariable, UntypedVariableReference,
 };
 
-use resolver::{ResolvedValue, ResolverEntry, lookup_resolver};
+use resolver::{ResolverEntry, lookup_resolver};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DotPaths<'a> {
@@ -520,10 +520,9 @@ fn evaluate_string_variable(
 ) -> Result<ResolvedString, InterpolationError> {
     let reference = variable.reference();
     let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    let ResolvedValue::String(value) = resolver.resolve(reference.payload(), context)? else {
-        unreachable!("typed string resolver produces a scalar");
-    };
-    Ok(value)
+    resolver
+        .resolve(reference.payload(), context)?
+        .into_string(reference.resolver())
 }
 
 fn evaluate_string_list_variable(
@@ -532,10 +531,9 @@ fn evaluate_string_list_variable(
 ) -> Result<Vec<ResolvedString>, InterpolationError> {
     let reference = variable.reference();
     let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    let ResolvedValue::StringList(values) = resolver.resolve(reference.payload(), context)? else {
-        unreachable!("typed string-list resolver produces a list");
-    };
-    Ok(values)
+    resolver
+        .resolve(reference.payload(), context)?
+        .into_string_list(reference.resolver())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -560,6 +558,11 @@ pub enum InterpolationError {
         resolver: String,
     },
     ResolverTypeMismatch {
+        resolver: String,
+        expected: SchemaType,
+        actual: SchemaType,
+    },
+    ResolverContractViolation {
         resolver: String,
         expected: SchemaType,
         actual: SchemaType,
@@ -618,6 +621,14 @@ impl fmt::Display for InterpolationError {
             } => write!(
                 formatter,
                 "resolver `{resolver}` has type {actual:?}, but this context requires {expected:?}"
+            ),
+            Self::ResolverContractViolation {
+                resolver,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "resolver `{resolver}` returned {actual:?}, but declared {expected:?}"
             ),
             Self::ResolverInLiteralString { resolver } => write!(
                 formatter,

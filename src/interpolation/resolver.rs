@@ -25,6 +25,40 @@ pub(super) enum ResolvedValue {
     StringList(Vec<ResolvedString>),
 }
 
+impl ResolvedValue {
+    fn schema_type(&self) -> SchemaType {
+        match self {
+            Self::String(_) => StringType::schema_type(),
+            Self::StringList(_) => ListType::<StringType>::schema_type(),
+        }
+    }
+
+    pub(super) fn into_string(self, resolver: &str) -> Result<ResolvedString, InterpolationError> {
+        match self {
+            Self::String(value) => Ok(value),
+            other => Err(InterpolationError::ResolverContractViolation {
+                resolver: resolver.to_owned(),
+                expected: StringType::schema_type(),
+                actual: other.schema_type(),
+            }),
+        }
+    }
+
+    pub(super) fn into_string_list(
+        self,
+        resolver: &str,
+    ) -> Result<Vec<ResolvedString>, InterpolationError> {
+        match self {
+            Self::StringList(values) => Ok(values),
+            other => Err(InterpolationError::ResolverContractViolation {
+                resolver: resolver.to_owned(),
+                expected: ListType::<StringType>::schema_type(),
+                actual: other.schema_type(),
+            }),
+        }
+    }
+}
+
 trait Resolver: Send + Sync {
     fn namespace(&self) -> &'static str;
     fn output_type(&self) -> SchemaType;
@@ -60,7 +94,16 @@ impl ResolverEntry {
         payload: &str,
         context: &ResolveContext<'_>,
     ) -> Result<ResolvedValue, InterpolationError> {
-        self.resolver.resolve(payload, context)
+        let value = self.resolver.resolve(payload, context)?;
+        let actual = value.schema_type();
+        if actual != self.output_type {
+            return Err(InterpolationError::ResolverContractViolation {
+                resolver: self.resolver.namespace().to_owned(),
+                expected: self.output_type.clone(),
+                actual,
+            });
+        }
+        Ok(value)
     }
 }
 
@@ -254,11 +297,79 @@ impl Resolver for PackageResolver {
 
 #[cfg(test)]
 mod tests {
-    use crate::schema::{ListType, SchemaTypeMarker, StringType};
+    use std::path::Path;
 
+    use crate::action::ExecutionEnvironment;
+    use crate::schema::{ListType, SchemaType, SchemaTypeMarker, StringType};
+
+    use super::super::{DotPaths, InterpolationError, ResolveContext, XdgPaths};
     use super::{
-        EnvResolver, ResolverAvailability, build_resolver_registry, lookup_resolver, register,
+        EnvResolver, ResolvedValue, Resolver, ResolverAvailability, build_resolver_registry,
+        lookup_resolver, register,
     };
+
+    struct WrongOutputResolver;
+
+    impl Resolver for WrongOutputResolver {
+        fn namespace(&self) -> &'static str {
+            "wrong"
+        }
+
+        fn output_type(&self) -> SchemaType {
+            SchemaType::String
+        }
+
+        fn availability(&self) -> ResolverAvailability {
+            ResolverAvailability::Everywhere
+        }
+
+        fn validate_payload(&self, _: &str) -> bool {
+            true
+        }
+
+        fn resolve(
+            &self,
+            _: &str,
+            _: &ResolveContext<'_>,
+        ) -> Result<ResolvedValue, InterpolationError> {
+            Ok(ResolvedValue::StringList(Vec::new()))
+        }
+    }
+
+    #[test]
+    fn resolver_entry_rejects_values_that_violate_the_declared_output_type() {
+        let mut registry = Default::default();
+        register(&mut registry, WrongOutputResolver);
+        let environment = ExecutionEnvironment::empty();
+        let dot = DotPaths::new(
+            Path::new("/repo/dot.toml"),
+            Path::new("/repo"),
+            Path::new("/work"),
+        );
+        let xdg = XdgPaths::default();
+        let context = ResolveContext::new(&environment, dot, &xdg);
+
+        assert_eq!(
+            registry["wrong"].resolve("payload", &context),
+            Err(InterpolationError::ResolverContractViolation {
+                resolver: "wrong".into(),
+                expected: SchemaType::String,
+                actual: ListType::<StringType>::schema_type(),
+            })
+        );
+    }
+
+    #[test]
+    fn checked_conversion_preserves_the_resolver_namespace_in_contract_errors() {
+        assert_eq!(
+            ResolvedValue::StringList(Vec::new()).into_string("package"),
+            Err(InterpolationError::ResolverContractViolation {
+                resolver: "package".into(),
+                expected: SchemaType::String,
+                actual: ListType::<StringType>::schema_type(),
+            })
+        );
+    }
 
     #[test]
     fn registry_contains_each_builtin_namespace_in_sorted_order() {
