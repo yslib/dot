@@ -109,9 +109,15 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
         panic!("replacement should remain a provider package");
     };
     assert_eq!(replaced.provider.as_str(), "desktop");
-    assert_eq!(manifest.links()["shared"].source.as_str(), "desktop-source");
     assert_eq!(
-        manifest.actions()["configure"].exec.program.as_str(),
+        manifest.links()["shared"].source.source_spelling(),
+        "desktop-source"
+    );
+    assert_eq!(
+        manifest.actions()["configure"]
+            .exec
+            .program
+            .source_spelling(),
         "desktop-exec"
     );
     assert!(
@@ -131,7 +137,10 @@ fn selecting_no_profile_uses_only_the_target_root() {
     assert!(manifest.packages().contains_key("base"));
     assert!(!manifest.packages().contains_key("desktop"));
     assert!(!manifest.packages().contains_key("laptop"));
-    assert_eq!(manifest.links()["shared"].source.as_str(), "root-source");
+    assert_eq!(
+        manifest.links()["shared"].source.source_spelling(),
+        "root-source"
+    );
     assert!(manifest.actions()["configure"].check.is_some());
 }
 

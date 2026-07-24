@@ -6,7 +6,7 @@ use crate::action::{
     PreparedCommand, ProcessExecutor,
 };
 use crate::plan::{PlannedProvider, PlannedProviderInstall};
-use crate::schema::ExecAction;
+use crate::schema::ResolvedExecAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderStage {
@@ -257,7 +257,7 @@ impl<'a> ProviderRunner<'a> {
 
     fn probe(
         &self,
-        probe: &ExecAction,
+        probe: &ResolvedExecAction,
         environment: &ExecutionEnvironment,
         stage: ProviderStage,
     ) -> Result<ExecutionResult, ProviderError> {
@@ -272,7 +272,7 @@ impl<'a> ProviderRunner<'a> {
 
     fn prepare(
         &self,
-        action: &ExecAction,
+        action: &ResolvedExecAction,
         environment: &ExecutionEnvironment,
         stage: ProviderStage,
     ) -> Result<PreparedCommand, ProviderError> {

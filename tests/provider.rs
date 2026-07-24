@@ -13,7 +13,7 @@ use dot::platform::PlatformInfo;
 use dot::provider::{ProviderOutcome, ProviderRunner, ProviderStage};
 use dot::schema::{
     Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, Identifier, OneOrMany,
-    PlatformConstraint, Provider, ProviderInstallArg, ScalarTemplate, Target,
+    PlatformConstraint, Provider, ProviderInstallArgSource, StringExpressionSource, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -61,13 +61,13 @@ fn identifier(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
 }
 
-fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, ScalarTemplate> {
+fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, StringExpressionSource> {
     values
         .iter()
         .map(|(name, value)| {
             (
                 EnvironmentName::new(*name).expect("test environment name should be valid"),
-                ScalarTemplate::from(value.clone()),
+                StringExpressionSource::from(value.clone()),
             )
         })
         .collect()
@@ -118,7 +118,7 @@ fn provider(probe: ExecAction, ensure: Vec<ExecAction>) -> Provider {
             variables: variables(&[("DOT_PROVIDER_ACTIVE", "yes".to_owned())]),
         }),
         ensure: (!ensure.is_empty()).then_some(OneOrMany::Many(ensure)),
-        install: ExecAction::<ProviderInstallArg> {
+        install: ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
             kind: None,
             program: "unused-install".into(),
             args: Vec::new(),

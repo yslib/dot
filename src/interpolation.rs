@@ -9,43 +9,11 @@ use crate::action::ExecutionEnvironment;
 use crate::schema::{
     EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType,
     LiteralString, LiteralStringSource, OneOrMany, ParsedStringForm,
-    ParsedTemplate as ParsedStringTemplate, ParsedTemplatePart, ProviderInstallArg,
-    ProviderInstallArgSource, ProviderInstallArgs, ScalarTemplate, SchemaType, SchemaTypeMarker,
-    StringExpression, StringExpressionSource, StringTemplate, StringTemplatePart, StringType,
-    TypedVariable, UntypedVariableReference, ValidatedLiteralString,
+    ParsedTemplate as ParsedStringTemplate, ParsedTemplatePart, ProviderInstallArgSource,
+    ProviderInstallArgs, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString, SchemaType,
+    SchemaTypeMarker, SourceExecAction, StringExpression, StringExpressionSource, StringTemplate,
+    StringTemplatePart, StringType, TypedVariable, UntypedVariableReference,
 };
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ParsedTemplate {
-    segments: Vec<TemplateSegment>,
-}
-
-impl ParsedTemplate {
-    fn segments(&self) -> &[TemplateSegment] {
-        &self.segments
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum TemplateSegment {
-    Literal(String),
-    Resolver(ResolverCall),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolverCall {
-    name: String,
-    payload: String,
-}
-
-impl ResolverCall {
-    fn new(name: impl Into<String>, payload: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            payload: payload.into(),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct DotPaths<'a> {
@@ -403,6 +371,13 @@ fn validate_variable<T: SchemaTypeMarker>(
     role: TemplateRole,
 ) -> Result<TypedVariable<T>, InterpolationError> {
     let resolver = validate_resolver_reference(reference, role)?;
+    validate_variable_type(reference, resolver)
+}
+
+fn validate_variable_type<T: SchemaTypeMarker>(
+    reference: &UntypedVariableReference,
+    resolver: &BuiltinResolverSpec,
+) -> Result<TypedVariable<T>, InterpolationError> {
     let expected = T::schema_type();
     let actual = (resolver.output)();
     if actual != expected {
@@ -432,11 +407,11 @@ fn promote_parse_error(error: &ExpressionParseError) -> InterpolationError {
 
 pub fn promote_literal_string(
     source: &LiteralStringSource,
-) -> Result<ValidatedLiteralString, InterpolationError> {
+) -> Result<LiteralString, InterpolationError> {
     match source.parsed() {
-        ParsedStringForm::Literal(literal) => Ok(ValidatedLiteralString::validated(
-            literal.value().to_owned(),
-        )),
+        ParsedStringForm::Literal(literal) => {
+            Ok(LiteralString::validated(literal.value().to_owned()))
+        }
         ParsedStringForm::Variable(reference) => Err(InterpolationError::ResolverInLiteralString {
             resolver: reference.resolver().to_owned(),
         }),
@@ -467,7 +442,7 @@ fn promote_string_form(
 ) -> Result<StringExpression, InterpolationError> {
     match parsed {
         ParsedStringForm::Literal(literal) => Ok(StringExpression::Literal(
-            ValidatedLiteralString::validated(literal.value().to_owned()),
+            LiteralString::validated(literal.value().to_owned()),
         )),
         ParsedStringForm::Variable(reference) => {
             validate_variable(reference, role).map(StringExpression::Variable)
@@ -506,9 +481,9 @@ pub fn promote_provider_install_arg(
 
     let resolver = validate_resolver_reference(reference, TemplateRole::ProviderInstallArg)?;
     if (resolver.output)() == ListType::<StringType>::schema_type() {
-        validate_variable(reference, TemplateRole::ProviderInstallArg).map(FlatListPart::Many)
+        validate_variable_type(reference, resolver).map(FlatListPart::Many)
     } else {
-        validate_variable(reference, TemplateRole::ProviderInstallArg)
+        validate_variable_type(reference, resolver)
             .map(StringExpression::Variable)
             .map(FlatListPart::One)
     }
@@ -524,122 +499,62 @@ pub fn promote_provider_install_args(
     Ok(ProviderInstallArgs::validated(parts))
 }
 
-pub fn validate_scalar_template(template: &ScalarTemplate) -> Result<(), InterpolationError> {
-    let parsed = parse_template(template.as_str())?;
-    validate_template(&parsed, TemplateRole::Scalar)
+pub fn resolve_literal_string(
+    source: &LiteralStringSource,
+) -> Result<ResolvedString, InterpolationError> {
+    let literal = promote_literal_string(source)?;
+    Ok(ResolvedString::from(literal.value()))
 }
 
-pub fn resolve_literal_string(value: &LiteralString) -> Result<String, InterpolationError> {
-    let parsed = parse_template(value.as_str())?;
-    let mut result = String::new();
-
-    for segment in parsed.segments() {
-        match segment {
-            TemplateSegment::Literal(value) => result.push_str(value),
-            TemplateSegment::Resolver(call) => {
-                return Err(InterpolationError::ResolverInLiteralString {
-                    resolver: call.name.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(result)
-}
-
-pub fn validate_provider_install_arg(
-    argument: &ProviderInstallArg,
-) -> Result<(), InterpolationError> {
-    let parsed = parse_template(argument.as_str())?;
-    validate_template(&parsed, TemplateRole::ProviderInstallArg)
-}
-
-fn validate_template(
-    template: &ParsedTemplate,
-    role: TemplateRole,
-) -> Result<(), InterpolationError> {
-    for segment in template.segments() {
-        let TemplateSegment::Resolver(call) = segment else {
-            continue;
-        };
-        let resolver =
-            lookup_resolver(&call.name).ok_or_else(|| InterpolationError::UnknownResolver {
-                name: call.name.clone(),
-            })?;
-
-        if !resolver.availability.allows(role) {
-            return Err(InterpolationError::ResolverUnavailable {
-                resolver: call.name.clone(),
-            });
-        }
-        if !(resolver.validate_payload)(&call.payload) {
-            return Err(InterpolationError::InvalidResolverPayload {
-                resolver: call.name.clone(),
-                payload: call.payload.clone(),
-            });
-        }
-        if (resolver.output)() == ListType::<StringType>::schema_type()
-            && template.segments().len() != 1
-        {
-            return Err(InterpolationError::ListResolverMustOccupyArgument {
-                resolver: call.name.clone(),
-            });
-        }
-    }
-    Ok(())
-}
-
-pub fn resolve_scalar_template(
-    template: &ScalarTemplate,
+pub fn resolve_string_expression(
+    source: &StringExpressionSource,
     context: &ResolveContext<'_>,
-) -> Result<String, InterpolationError> {
-    let parsed = parse_template(template.as_str())?;
-    validate_template(&parsed, TemplateRole::Scalar)?;
-    resolve_scalar_segments(&parsed, context)
+) -> Result<ResolvedString, InterpolationError> {
+    let expression = promote_string_expression(source)?;
+    evaluate_string_expression(&expression, context)
 }
 
 pub fn resolve_environment_patch(
-    patch: &EnvironmentPatch,
+    patch: &EnvironmentPatch<StringExpressionSource>,
     context: &ResolveContext<'_>,
-) -> Result<EnvironmentPatch, InterpolationError> {
-    Ok(EnvironmentPatch {
+) -> Result<ResolvedEnvironmentPatch, InterpolationError> {
+    Ok(ResolvedEnvironmentPatch {
         path_prepend: patch
             .path_prepend
             .as_ref()
-            .map(|values| resolve_scalar_values(values, context))
+            .map(|values| resolve_string_values(values, context))
             .transpose()?,
         path_append: patch
             .path_append
             .as_ref()
-            .map(|values| resolve_scalar_values(values, context))
+            .map(|values| resolve_string_values(values, context))
             .transpose()?,
         variables: patch
             .variables
             .iter()
             .map(|(name, value)| {
-                resolve_scalar_template(value, context)
-                    .map(|value| (name.clone(), ScalarTemplate::from(value)))
+                resolve_string_expression(value, context).map(|value| (name.clone(), value))
             })
             .collect::<Result<_, _>>()?,
     })
 }
 
 pub fn resolve_exec_action(
-    action: &ExecAction,
+    action: &SourceExecAction,
     context: &ResolveContext<'_>,
-) -> Result<ExecAction, InterpolationError> {
-    Ok(ExecAction {
+) -> Result<ResolvedExecAction, InterpolationError> {
+    Ok(ResolvedExecAction {
         kind: action.kind,
-        program: resolve_scalar_template(&action.program, context)?.into(),
+        program: resolve_string_expression(&action.program, context)?,
         args: action
             .args
             .iter()
-            .map(|argument| resolve_scalar_template(argument, context).map(ScalarTemplate::from))
+            .map(|argument| resolve_string_expression(argument, context))
             .collect::<Result<_, _>>()?,
         cwd: action
             .cwd
             .as_ref()
-            .map(|cwd| resolve_scalar_template(cwd, context).map(ScalarTemplate::from))
+            .map(|cwd| resolve_string_expression(cwd, context))
             .transpose()?,
         env: action
             .env
@@ -650,26 +565,20 @@ pub fn resolve_exec_action(
 }
 
 pub fn resolve_provider_install_action(
-    action: &ExecAction<ProviderInstallArg>,
+    action: &ExecAction<StringExpressionSource, ProviderInstallArgSource>,
     context: &ResolveContext<'_>,
-) -> Result<ExecAction, InterpolationError> {
-    let mut args = Vec::new();
-    for argument in &action.args {
-        args.extend(
-            resolve_provider_install_arg(argument, context)?
-                .into_iter()
-                .map(ScalarTemplate::from),
-        );
-    }
+) -> Result<ResolvedExecAction, InterpolationError> {
+    let args = promote_provider_install_args(&action.args)?;
+    let args = evaluate_provider_install_args(&args, context)?;
 
-    Ok(ExecAction {
+    Ok(ResolvedExecAction {
         kind: action.kind,
-        program: resolve_scalar_template(&action.program, context)?.into(),
+        program: resolve_string_expression(&action.program, context)?,
         args,
         cwd: action
             .cwd
             .as_ref()
-            .map(|cwd| resolve_scalar_template(cwd, context).map(ScalarTemplate::from))
+            .map(|cwd| resolve_string_expression(cwd, context))
             .transpose()?,
         env: action
             .env
@@ -679,122 +588,82 @@ pub fn resolve_provider_install_action(
     })
 }
 
-fn resolve_scalar_values(
-    values: &OneOrMany<ScalarTemplate>,
+fn resolve_string_values(
+    values: &OneOrMany<StringExpressionSource>,
     context: &ResolveContext<'_>,
-) -> Result<OneOrMany<ScalarTemplate>, InterpolationError> {
+) -> Result<OneOrMany<ResolvedString>, InterpolationError> {
     match values {
-        OneOrMany::One(value) => resolve_scalar_template(value, context)
-            .map(ScalarTemplate::from)
-            .map(OneOrMany::One),
+        OneOrMany::One(value) => resolve_string_expression(value, context).map(OneOrMany::One),
         OneOrMany::Many(values) => values
             .iter()
-            .map(|value| resolve_scalar_template(value, context).map(ScalarTemplate::from))
+            .map(|value| resolve_string_expression(value, context))
             .collect::<Result<_, _>>()
             .map(OneOrMany::Many),
     }
 }
 
-pub fn resolve_provider_install_arg(
-    argument: &ProviderInstallArg,
+fn evaluate_provider_install_args(
+    expression: &ProviderInstallArgs,
     context: &ResolveContext<'_>,
-) -> Result<Vec<String>, InterpolationError> {
-    let parsed = parse_template(argument.as_str())?;
-    validate_template(&parsed, TemplateRole::ProviderInstallArg)?;
-
-    if let [TemplateSegment::Resolver(call)] = parsed.segments() {
-        let resolver = lookup_resolver(&call.name).expect("validated resolver exists");
-        if (resolver.output)() == ListType::<StringType>::schema_type() {
-            let ResolverValue::List(values) = (resolver.resolve)(&call.payload, context)? else {
-                unreachable!("resolver output matches its static definition");
-            };
-            return Ok(values);
+) -> Result<Vec<ResolvedString>, InterpolationError> {
+    let mut values = Vec::new();
+    for part in expression.parts() {
+        match part {
+            FlatListPart::One(expression) => {
+                values.push(evaluate_string_expression(expression, context)?);
+            }
+            FlatListPart::Many(variable) => {
+                values.extend(evaluate_string_list_variable(variable, context)?);
+            }
         }
     }
-
-    Ok(vec![resolve_scalar_segments(&parsed, context)?])
+    Ok(values)
 }
 
-fn resolve_scalar_segments(
-    template: &ParsedTemplate,
+fn evaluate_string_expression(
+    expression: &StringExpression,
     context: &ResolveContext<'_>,
-) -> Result<String, InterpolationError> {
-    let mut result = String::new();
-    for segment in template.segments() {
-        match segment {
-            TemplateSegment::Literal(value) => result.push_str(value),
-            TemplateSegment::Resolver(call) => {
-                let resolver = lookup_resolver(&call.name).expect("validated resolver exists");
-                let ResolverValue::Scalar(value) = (resolver.resolve)(&call.payload, context)?
-                else {
-                    unreachable!("list resolvers cannot appear in a scalar template");
-                };
-                result.push_str(&value);
+) -> Result<ResolvedString, InterpolationError> {
+    match expression {
+        StringExpression::Literal(value) => Ok(ResolvedString::from(value.value())),
+        StringExpression::Variable(variable) => evaluate_string_variable(variable, context),
+        StringExpression::Template(template) => {
+            let mut result = String::new();
+            for part in template.parts() {
+                match part {
+                    StringTemplatePart::Literal(value) => result.push_str(value),
+                    StringTemplatePart::Variable(variable) => {
+                        result.push_str(evaluate_string_variable(variable, context)?.value());
+                    }
+                }
             }
+            Ok(ResolvedString::from(result))
         }
     }
-    Ok(result)
 }
 
-fn parse_template(input: &str) -> Result<ParsedTemplate, InterpolationError> {
-    let mut segments = Vec::new();
-    let mut literal = String::new();
-    let mut cursor = 0;
+fn evaluate_string_variable(
+    variable: &TypedVariable<StringType>,
+    context: &ResolveContext<'_>,
+) -> Result<ResolvedString, InterpolationError> {
+    let reference = variable.reference();
+    let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
+    let ResolverValue::Scalar(value) = (resolver.resolve)(reference.payload(), context)? else {
+        unreachable!("typed string resolver produces a scalar");
+    };
+    Ok(ResolvedString::from(value))
+}
 
-    while cursor < input.len() {
-        let remaining = &input[cursor..];
-
-        if remaining.starts_with(r"\${") {
-            literal.push_str("${");
-            cursor += 3;
-            continue;
-        }
-
-        if remaining.starts_with("${") {
-            if !literal.is_empty() {
-                segments.push(TemplateSegment::Literal(std::mem::take(&mut literal)));
-            }
-
-            let call_offset = cursor;
-            let body_offset = cursor + 2;
-            let body_and_rest = &input[body_offset..];
-            let Some(close_offset) = body_and_rest.find('}') else {
-                return Err(InterpolationError::UnclosedResolver {
-                    offset: call_offset,
-                });
-            };
-            let body = &body_and_rest[..close_offset];
-
-            if let Some(nested_offset) = body.find("${") {
-                return Err(InterpolationError::NestedResolver {
-                    offset: body_offset + nested_offset,
-                });
-            }
-
-            let Some((name, payload)) = body.split_once(':') else {
-                return Err(InterpolationError::MissingPayloadSeparator {
-                    offset: call_offset,
-                });
-            };
-
-            segments.push(TemplateSegment::Resolver(ResolverCall::new(name, payload)));
-            cursor = body_offset + close_offset + 1;
-            continue;
-        }
-
-        let character = remaining
-            .chars()
-            .next()
-            .expect("cursor is before the end of the input");
-        literal.push(character);
-        cursor += character.len_utf8();
-    }
-
-    if !literal.is_empty() {
-        segments.push(TemplateSegment::Literal(literal));
-    }
-
-    Ok(ParsedTemplate { segments })
+fn evaluate_string_list_variable(
+    variable: &TypedVariable<ListType<StringType>>,
+    context: &ResolveContext<'_>,
+) -> Result<Vec<ResolvedString>, InterpolationError> {
+    let reference = variable.reference();
+    let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
+    let ResolverValue::List(values) = (resolver.resolve)(reference.payload(), context)? else {
+        unreachable!("typed string-list resolver produces a list");
+    };
+    Ok(values.into_iter().map(ResolvedString::from).collect())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -916,23 +785,22 @@ mod tests {
 
     use crate::action::ExecutionEnvironment;
     use crate::schema::{
-        EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralString,
-        LiteralStringSource, OneOrMany, ParsedStringForm, ProviderInstallArg,
-        ProviderInstallArgSource, ScalarTemplate, SchemaType, StringExpression,
-        StringExpressionSource, StringTemplatePart, StringType, TypedVariable,
+        EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
+        OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedEnvironmentPatch,
+        ResolvedString, SchemaType, StringExpression, StringExpressionSource, StringTemplatePart,
+        StringType, TypedVariable,
     };
 
     use super::{
-        DotPaths, InterpolationError, PackageContext, ResolveContext, ResolverCall,
-        TemplateSegment, XdgPath, XdgPaths, parse_template, promote_literal_string,
-        promote_provider_install_arg, promote_provider_install_args, promote_string_expression,
-        resolve_environment_patch, resolve_exec_action, resolve_literal_string,
-        resolve_provider_install_action, resolve_provider_install_arg, resolve_scalar_template,
-        validate_provider_install_arg, validate_scalar_template,
+        DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPath, XdgPaths,
+        evaluate_provider_install_args, promote_literal_string, promote_provider_install_arg,
+        promote_provider_install_args, promote_string_expression, resolve_environment_patch,
+        resolve_exec_action, resolve_literal_string, resolve_provider_install_action,
+        resolve_string_expression,
     };
 
     fn environment(variables: &[(&str, &str)]) -> ExecutionEnvironment {
-        let patch = EnvironmentPatch {
+        let patch = ResolvedEnvironmentPatch {
             path_prepend: None,
             path_append: None,
             variables: variables
@@ -940,7 +808,7 @@ mod tests {
                 .map(|(name, value)| {
                     (
                         EnvironmentName::new(*name).expect("test name should be valid"),
-                        ScalarTemplate::from(*value),
+                        ResolvedString::from(*value),
                     )
                 })
                 .collect::<BTreeMap<_, _>>(),
@@ -1144,34 +1012,15 @@ mod tests {
     }
 
     #[test]
-    fn parser_treats_resolver_names_and_payloads_generically() {
-        let parsed =
-            parse_template(r"before-\${literal}-${env:HOME}/${dot:cwd}-${future:anything}-after")
-                .expect("generic resolver syntax should parse");
-
-        assert_eq!(
-            parsed.segments(),
-            &[
-                TemplateSegment::Literal("before-${literal}-".into()),
-                TemplateSegment::Resolver(ResolverCall::new("env", "HOME")),
-                TemplateSegment::Literal("/".into()),
-                TemplateSegment::Resolver(ResolverCall::new("dot", "cwd")),
-                TemplateSegment::Literal("-".into()),
-                TemplateSegment::Resolver(ResolverCall::new("future", "anything")),
-                TemplateSegment::Literal("-after".into()),
-            ]
-        );
-    }
-
-    #[test]
     fn literal_strings_unescape_syntax_but_reject_resolvers() {
         assert_eq!(
-            resolve_literal_string(&LiteralString::from(r"prefix-\${literal}"))
-                .expect("escaped interpolation syntax should be literal"),
-            "prefix-${literal}"
+            resolve_literal_string(&LiteralStringSource::from(r"prefix-\${literal}"))
+                .expect("escaped interpolation syntax should be literal")
+                .value(),
+            "prefix-${literal}",
         );
         assert!(
-            resolve_literal_string(&LiteralString::from("${env:HOME}"))
+            resolve_literal_string(&LiteralStringSource::from("${env:HOME}"))
                 .expect_err("literal strings must reject resolvers")
                 .to_string()
                 .contains("literal string")
@@ -1179,41 +1028,16 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_an_unclosed_resolver_call() {
-        let error = parse_template("prefix-${env:HOME")
-            .expect_err("an unclosed resolver call should fail parsing");
-
-        assert_eq!(error, InterpolationError::UnclosedResolver { offset: 7 });
-    }
-
-    #[test]
-    fn parser_rejects_a_resolver_call_without_a_payload_separator() {
-        let error = parse_template("${env}")
-            .expect_err("a resolver call without a colon should fail parsing");
-
-        assert_eq!(
-            error,
-            InterpolationError::MissingPayloadSeparator { offset: 0 }
-        );
-    }
-
-    #[test]
-    fn parser_rejects_nested_interpolation() {
-        let error = parse_template("${env:${dot:cwd}}")
-            .expect_err("nested interpolation should not be accepted");
-
-        assert_eq!(error, InterpolationError::NestedResolver { offset: 6 });
-    }
-
-    #[test]
     fn dot_resolver_produces_invocation_paths() {
         let environment = environment(&[]);
         let xdg = xdg_paths(&[]);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
-        let template = ScalarTemplate::from("${dot:config}:${dot:config_dir}:${dot:cwd}");
+        let template = StringExpressionSource::from("${dot:config}:${dot:config_dir}:${dot:cwd}");
 
         assert_eq!(
-            resolve_scalar_template(&template, &context).expect("template should resolve"),
+            resolve_string_expression(&template, &context)
+                .expect("template should resolve")
+                .value(),
             "/repo/dot.toml:/repo:/work"
         );
     }
@@ -1248,7 +1072,7 @@ mod tests {
             resolved.path_append,
             Some(OneOrMany::One("/home/tester/.local/bin".into()))
         );
-        assert_eq!(resolved.variables["TOOL_HOME"].as_str(), "/opt/tools");
+        assert_eq!(resolved.variables["TOOL_HOME"].value(), "/opt/tools");
     }
 
     #[test]
@@ -1273,18 +1097,18 @@ mod tests {
 
         let resolved = resolve_exec_action(&action, &context).expect("action should resolve");
 
-        assert_eq!(resolved.program.as_str(), "probe-program");
+        assert_eq!(resolved.program.value(), "probe-program");
         assert_eq!(
             resolved
                 .args
                 .iter()
-                .map(ScalarTemplate::as_str)
+                .map(ResolvedString::value)
                 .collect::<Vec<_>>(),
             vec!["--config=/repo/dot.toml", "/home/tester/Documents"]
         );
-        assert_eq!(resolved.cwd.as_ref().unwrap().as_str(), "/work");
+        assert_eq!(resolved.cwd.as_ref().unwrap().value(), "/work");
         assert_eq!(
-            resolved.env.as_ref().unwrap().variables["TOOL_HOME"].as_str(),
+            resolved.env.as_ref().unwrap().variables["TOOL_HOME"].value(),
             "/opt/tools"
         );
     }
@@ -1298,10 +1122,12 @@ mod tests {
             (XdgPath::Documents, "/home/tester/Documents"),
         ]);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
-        let template = ScalarTemplate::from("${xdg:home}:${xdg:config}:${xdg:documents}");
+        let template = StringExpressionSource::from("${xdg:home}:${xdg:config}:${xdg:documents}");
 
         assert_eq!(
-            resolve_scalar_template(&template, &context).expect("template should resolve"),
+            resolve_string_expression(&template, &context)
+                .expect("template should resolve")
+                .value(),
             "/home/tester:/home/tester/.config:/home/tester/Documents"
         );
     }
@@ -1338,18 +1164,18 @@ mod tests {
             "executable",
             "documents",
         ] {
-            let template = ScalarTemplate::from(format!("${{xdg:{payload}}}"));
-            validate_scalar_template(&template)
+            let template = StringExpressionSource::from(format!("${{xdg:{payload}}}"));
+            promote_string_expression(&template)
                 .unwrap_or_else(|error| panic!("xdg payload `{payload}` should be valid: {error}"));
         }
     }
 
     #[test]
     fn old_path_resolver_is_not_registered() {
-        let template = ScalarTemplate::from("${path:cwd}");
+        let template = StringExpressionSource::from("${path:cwd}");
 
         assert_eq!(
-            validate_scalar_template(&template),
+            promote_string_expression(&template),
             Err(InterpolationError::UnknownResolver {
                 name: "path".into()
             })
@@ -1358,10 +1184,10 @@ mod tests {
 
     #[test]
     fn validation_rejects_unknown_resolvers_without_evaluating_them() {
-        let template = ScalarTemplate::from("${command:output}");
+        let template = StringExpressionSource::from("${command:output}");
 
         assert_eq!(
-            validate_scalar_template(&template),
+            promote_string_expression(&template),
             Err(InterpolationError::UnknownResolver {
                 name: "command".into()
             })
@@ -1370,10 +1196,10 @@ mod tests {
 
     #[test]
     fn resolver_definitions_validate_their_own_payloads() {
-        let template = ScalarTemplate::from("${xdg:repository}");
+        let template = StringExpressionSource::from("${xdg:repository}");
 
         assert_eq!(
-            validate_scalar_template(&template),
+            promote_string_expression(&template),
             Err(InterpolationError::InvalidResolverPayload {
                 resolver: "xdg".into(),
                 payload: "repository".into(),
@@ -1383,16 +1209,16 @@ mod tests {
 
     #[test]
     fn package_resolvers_are_available_only_to_provider_install_arguments() {
-        let scalar = ScalarTemplate::from("${package:names}");
-        let install_arg = ProviderInstallArg::from("${package:names}");
+        let scalar = StringExpressionSource::from("${package:names}");
+        let install_arg = ProviderInstallArgSource::from("${package:names}");
 
         assert_eq!(
-            validate_scalar_template(&scalar),
+            promote_string_expression(&scalar),
             Err(InterpolationError::ResolverUnavailable {
                 resolver: "package".into()
             })
         );
-        validate_provider_install_arg(&install_arg)
+        promote_provider_install_arg(&install_arg)
             .expect("package resolver should be valid for provider install");
     }
 
@@ -1405,18 +1231,20 @@ mod tests {
         let packages = PackageContext::new(&names, &provider_args);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg).with_package(packages);
 
+        let expression = promote_provider_install_args(&[
+            ProviderInstallArgSource::from("${package:names}"),
+            ProviderInstallArgSource::from("${package:provider_args}"),
+        ])
+        .expect("provider arguments should promote");
+        let resolved = evaluate_provider_install_args(&expression, &context)
+            .expect("package values should resolve");
+
         assert_eq!(
-            resolve_provider_install_arg(&ProviderInstallArg::from("${package:names}"), &context,)
-                .expect("package names should resolve"),
-            vec![String::from("ripgrep"), String::from("zoxide")]
-        );
-        assert_eq!(
-            resolve_provider_install_arg(
-                &ProviderInstallArg::from("${package:provider_args}"),
-                &context,
-            )
-            .expect("provider args should resolve"),
-            vec![String::from("--locked")]
+            resolved
+                .iter()
+                .map(ResolvedString::value)
+                .collect::<Vec<_>>(),
+            vec!["ripgrep", "zoxide", "--locked"]
         );
     }
 
@@ -1428,7 +1256,7 @@ mod tests {
         let provider_args = ["--cask".into(), "--force".into()];
         let context = ResolveContext::new(&environment, dot_paths(), &xdg)
             .with_package(PackageContext::new(&names, &provider_args));
-        let action = ExecAction::<ProviderInstallArg> {
+        let action = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
             kind: None,
             program: "${env:PROVIDER}".into(),
             args: vec![
@@ -1444,12 +1272,12 @@ mod tests {
         let resolved =
             resolve_provider_install_action(&action, &context).expect("action should resolve");
 
-        assert_eq!(resolved.program.as_str(), "brew");
+        assert_eq!(resolved.program.value(), "brew");
         assert_eq!(
             resolved
                 .args
                 .iter()
-                .map(ScalarTemplate::as_str)
+                .map(ResolvedString::value)
                 .collect::<Vec<_>>(),
             vec![
                 "install",
@@ -1460,17 +1288,19 @@ mod tests {
                 "font-two",
             ]
         );
-        assert_eq!(resolved.cwd.as_ref().unwrap().as_str(), "/work");
+        assert_eq!(resolved.cwd.as_ref().unwrap().value(), "/work");
     }
 
     #[test]
     fn list_resolvers_cannot_be_embedded_in_an_argument() {
-        let argument = ProviderInstallArg::from("prefix-${package:names}");
+        let argument = ProviderInstallArgSource::from("prefix-${package:names}");
 
         assert_eq!(
-            validate_provider_install_arg(&argument),
-            Err(InterpolationError::ListResolverMustOccupyArgument {
-                resolver: "package".into()
+            promote_provider_install_arg(&argument),
+            Err(InterpolationError::ResolverTypeMismatch {
+                resolver: "package".into(),
+                expected: SchemaType::String,
+                actual: SchemaType::List(Box::new(SchemaType::String)),
             })
         );
     }

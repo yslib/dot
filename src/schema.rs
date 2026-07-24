@@ -268,48 +268,6 @@ impl fmt::Display for EnvironmentNameError {
 
 impl Error for EnvironmentNameError {}
 
-macro_rules! raw_string_type {
-    ($name:ident) => {
-        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
-
-        impl $name {
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(self.as_str())
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(value: String) -> Self {
-                Self(value)
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(value: &str) -> Self {
-                Self(value.to_owned())
-            }
-        }
-    };
-}
-
-raw_string_type!(LiteralString);
-raw_string_type!(ScalarTemplate);
-raw_string_type!(ProviderInstallArg);
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParsedStringForm {
     Literal(StringLiteralSource),
@@ -387,9 +345,9 @@ impl<T> TypedVariable<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidatedLiteralString(String);
+pub struct LiteralString(String);
 
-impl ValidatedLiteralString {
+impl LiteralString {
     pub fn value(&self) -> &str {
         &self.0
     }
@@ -422,7 +380,7 @@ impl<V> StringTemplate<V> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringExpression {
-    Literal(ValidatedLiteralString),
+    Literal(LiteralString),
     Template(StringTemplate<TypedVariable<StringType>>),
     Variable(TypedVariable<StringType>),
 }
@@ -645,7 +603,7 @@ impl ProviderPackage {
         }
     }
 
-    pub fn provider_args(&self) -> Option<&[LiteralString]> {
+    pub fn provider_args(&self) -> Option<&[LiteralStringSource]> {
         match self {
             Self::Single(package) => package.provider_args.as_deref(),
             Self::Batch(package) => package.provider_args.as_deref(),
@@ -657,7 +615,7 @@ impl ProviderPackage {
 #[serde(deny_unknown_fields)]
 pub struct SingleProviderPackage {
     pub provider: Identifier,
-    pub provider_args: Option<Vec<LiteralString>>,
+    pub provider_args: Option<Vec<LiteralStringSource>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -665,7 +623,7 @@ pub struct SingleProviderPackage {
 pub struct BatchProviderPackage {
     pub provider: Identifier,
     pub names: Vec<Identifier>,
-    pub provider_args: Option<Vec<LiteralString>>,
+    pub provider_args: Option<Vec<LiteralStringSource>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -680,29 +638,36 @@ pub struct Provider {
     pub probe: ExecAction,
     pub activate: Option<EnvironmentPatch>,
     pub ensure: Option<OneOrMany<ExecAction>>,
-    pub install: ExecAction<ProviderInstallArg>,
+    pub install: ExecAction<StringExpressionSource, ProviderInstallArgSource>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvironmentPatch {
-    pub path_prepend: Option<OneOrMany<ScalarTemplate>>,
-    pub path_append: Option<OneOrMany<ScalarTemplate>>,
+#[serde(deny_unknown_fields, bound(deserialize = "S: Deserialize<'de>"))]
+pub struct EnvironmentPatch<S = StringExpressionSource> {
+    pub path_prepend: Option<OneOrMany<S>>,
+    pub path_append: Option<OneOrMany<S>>,
     #[serde(default)]
-    pub variables: BTreeMap<EnvironmentName, ScalarTemplate>,
+    pub variables: BTreeMap<EnvironmentName, S>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, bound(deserialize = "A: Deserialize<'de>"))]
-pub struct ExecAction<A = ScalarTemplate> {
+#[serde(
+    deny_unknown_fields,
+    bound(deserialize = "S: Deserialize<'de>, A: Deserialize<'de>")
+)]
+pub struct ExecAction<S = StringExpressionSource, A = S> {
     #[serde(rename = "type")]
     pub kind: Option<ExecActionType>,
-    pub program: ScalarTemplate,
+    pub program: S,
     #[serde(default)]
     pub args: Vec<A>,
-    pub cwd: Option<ScalarTemplate>,
-    pub env: Option<EnvironmentPatch>,
+    pub cwd: Option<S>,
+    pub env: Option<EnvironmentPatch<S>>,
 }
+
+pub type SourceExecAction = ExecAction<StringExpressionSource, StringExpressionSource>;
+pub type ResolvedEnvironmentPatch = EnvironmentPatch<ResolvedString>;
+pub type ResolvedExecAction = ExecAction<ResolvedString, ResolvedString>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -713,8 +678,8 @@ pub enum ExecActionType {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Link {
-    pub source: ScalarTemplate,
-    pub target: ScalarTemplate,
+    pub source: StringExpressionSource,
+    pub target: StringExpressionSource,
     pub on_conflict: Option<LinkConflict>,
     pub on_missing_parent: Option<LinkMissingParent>,
 }
@@ -734,8 +699,14 @@ pub enum LinkMissingParent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Action {
-    pub check: Option<ExecAction>,
-    pub exec: ExecAction,
+#[serde(
+    deny_unknown_fields,
+    bound(deserialize = "S: Deserialize<'de>, A: Deserialize<'de>")
+)]
+pub struct Action<S = StringExpressionSource, A = S> {
+    pub check: Option<ExecAction<S, A>>,
+    pub exec: ExecAction<S, A>,
 }
+
+pub type SourceAction = Action<StringExpressionSource, StringExpressionSource>;
+pub type ResolvedAction = Action<ResolvedString, ResolvedString>;

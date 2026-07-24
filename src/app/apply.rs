@@ -162,8 +162,12 @@ fn provider_items(plan: &ExecutionPlan, readiness: &ProviderReadiness) -> Vec<Re
                 id: provider.id().to_owned(),
                 status,
                 subject: ReportSubject::Provider(ProviderItem {
-                    probe: CommandInfo::from(provider.probe()),
-                    ensure: provider.ensure().iter().map(CommandInfo::from).collect(),
+                    probe: CommandInfo::from_resolved(provider.probe()),
+                    ensure: provider
+                        .ensure()
+                        .iter()
+                        .map(CommandInfo::from_resolved)
+                        .collect(),
                     has_activation: provider.activate().is_some(),
                 }),
                 evidence,
@@ -242,7 +246,7 @@ fn action_items(
                 status,
                 subject: ReportSubject::Package(PackageItem {
                     source: PackageSource::Manual {
-                        install: ActionInfo::from(package.install()),
+                        install: ActionInfo::from_resolved(package.install()),
                     },
                 }),
                 evidence,
@@ -260,7 +264,7 @@ fn action_items(
                     id: action.id().to_owned(),
                     status,
                     subject: ReportSubject::Action(ActionItem {
-                        action: ActionInfo::from(action.action()),
+                        action: ActionInfo::from_resolved(action.action()),
                     }),
                     evidence,
                 }

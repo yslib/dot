@@ -2,10 +2,10 @@ mod support;
 
 use dot::schema::{
     Config, EnvironmentName, ExecAction, ExecActionType, ExpressionParseError, Identifier,
-    LinkConflict, LinkMissingParent, ListType, LiteralString, LiteralStringSource, OneOrMany,
-    Package, ParsedStringForm, ParsedTemplatePart, ProviderInstallArg, ProviderInstallArgSource,
-    ProviderPackage, RecordTypeId, ResolvedString, ScalarTemplate, SchemaType, SchemaTypeMarker,
-    StringExpressionSource, StringKeyType, StringRefinementTypeId, StringType,
+    LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
+    ParsedStringForm, ParsedTemplatePart, ProviderInstallArgSource, ProviderPackage, RecordTypeId,
+    ResolvedString, SchemaType, SchemaTypeMarker, StringExpressionSource, StringKeyType,
+    StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
@@ -208,7 +208,7 @@ fn deserializes_the_complete_schema() {
             .as_ref()
             .expect("provider args exist")
             .iter()
-            .map(LiteralString::as_str)
+            .map(LiteralStringSource::source_spelling)
             .collect::<Vec<_>>(),
         vec!["--cask"]
     );
@@ -247,11 +247,11 @@ fn deserializes_strings_into_their_declared_schema_roles() {
     assert_eq!(target_id.as_str(), "machine");
 
     let provider = &target.providers["brew"];
-    let _: &ScalarTemplate = &provider.probe.program;
-    let _: &ExecAction<ProviderInstallArg> = &provider.install;
-    let _: &ProviderInstallArg = &provider.install.args[1];
+    let _: &StringExpressionSource = &provider.probe.program;
+    let _: &ExecAction<StringExpressionSource, ProviderInstallArgSource> = &provider.install;
+    let _: &ProviderInstallArgSource = &provider.install.args[1];
     assert_eq!(
-        provider.install.args[1].as_str(),
+        provider.install.args[1].source_spelling(),
         "${package:provider_args}"
     );
 
@@ -259,8 +259,9 @@ fn deserializes_strings_into_their_declared_schema_roles() {
     else {
         panic!("application should use a provider");
     };
-    let provider_arg: &LiteralString = &package.provider_args.as_ref().expect("args exist")[0];
-    assert_eq!(provider_arg.as_str(), "--cask");
+    let provider_arg: &LiteralStringSource =
+        &package.provider_args.as_ref().expect("args exist")[0];
+    assert_eq!(provider_arg.source_spelling(), "--cask");
 
     let (name, value) = provider
         .activate
@@ -270,9 +271,9 @@ fn deserializes_strings_into_their_declared_schema_roles() {
         .first_key_value()
         .expect("variable exists");
     let _: &EnvironmentName = name;
-    let _: &ScalarTemplate = value;
+    let _: &StringExpressionSource = value;
     assert_eq!(name.as_str(), "HOMEBREW_PREFIX");
-    assert_eq!(value.as_str(), "${env:HOME}/.homebrew");
+    assert_eq!(value.source_spelling(), "${env:HOME}/.homebrew");
 }
 
 #[test]

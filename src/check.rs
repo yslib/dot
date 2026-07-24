@@ -88,7 +88,7 @@ pub fn build_report(
                     ProviderReadiness::NotReady => ItemStatus::NotReady,
                 },
                 subject: ReportSubject::Provider(ProviderItem {
-                    probe: CommandInfo::from(&provider.probe),
+                    probe: CommandInfo::from_source(&provider.probe),
                     ensure: provider.ensure.as_ref().map(commands).unwrap_or_default(),
                     has_activation: provider.activate.is_some(),
                 }),
@@ -115,10 +115,10 @@ pub fn build_report(
     }
 }
 
-fn commands(actions: &OneOrMany<crate::schema::ExecAction>) -> Vec<CommandInfo> {
+fn commands(actions: &OneOrMany<crate::schema::SourceExecAction>) -> Vec<CommandInfo> {
     match actions {
-        OneOrMany::One(action) => vec![CommandInfo::from(action)],
-        OneOrMany::Many(actions) => actions.iter().map(CommandInfo::from).collect(),
+        OneOrMany::One(action) => vec![CommandInfo::from_source(action)],
+        OneOrMany::Many(actions) => actions.iter().map(CommandInfo::from_source).collect(),
     }
 }
 

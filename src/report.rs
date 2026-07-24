@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use crate::diagnostic::ErrorHint;
 use crate::platform::PlatformInfo;
-use crate::schema::{Action, ExecAction, LinkConflict, LinkMissingParent};
+use crate::schema::{
+    LinkConflict, LinkMissingParent, ResolvedAction, ResolvedExecAction, SourceAction,
+    SourceExecAction,
+};
 
 /// Presentation-independent output produced by one dot command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,25 +132,47 @@ pub struct CommandInfo {
     pub cwd: Option<PathBuf>,
 }
 
-impl From<&ExecAction> for CommandInfo {
-    fn from(command: &ExecAction) -> Self {
+impl CommandInfo {
+    pub fn from_source(command: &SourceExecAction) -> Self {
         Self {
-            program: command.program.as_str().to_owned(),
+            program: command.program.source_spelling().to_owned(),
             args: command
                 .args
                 .iter()
-                .map(|argument| argument.as_str().to_owned())
+                .map(|argument| argument.source_spelling().to_owned())
                 .collect(),
-            cwd: command.cwd.as_ref().map(|cwd| PathBuf::from(cwd.as_str())),
+            cwd: command
+                .cwd
+                .as_ref()
+                .map(|cwd| PathBuf::from(cwd.source_spelling())),
+        }
+    }
+
+    pub fn from_resolved(command: &ResolvedExecAction) -> Self {
+        Self {
+            program: command.program.value().to_owned(),
+            args: command
+                .args
+                .iter()
+                .map(|argument| argument.value().to_owned())
+                .collect(),
+            cwd: command.cwd.as_ref().map(|cwd| PathBuf::from(cwd.value())),
         }
     }
 }
 
-impl From<&Action> for ActionInfo {
-    fn from(action: &Action) -> Self {
+impl ActionInfo {
+    pub fn from_source(action: &SourceAction) -> Self {
         Self {
-            check: action.check.as_ref().map(CommandInfo::from),
-            exec: CommandInfo::from(&action.exec),
+            check: action.check.as_ref().map(CommandInfo::from_source),
+            exec: CommandInfo::from_source(&action.exec),
+        }
+    }
+
+    pub fn from_resolved(action: &ResolvedAction) -> Self {
+        Self {
+            check: action.check.as_ref().map(CommandInfo::from_resolved),
+            exec: CommandInfo::from_resolved(&action.exec),
         }
     }
 }

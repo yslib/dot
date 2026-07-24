@@ -6,14 +6,16 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use dot::action::{ExecutionEnvironment, ExecutionError, IoMode, PreparedCommand, ProcessExecutor};
-use dot::schema::{EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, ScalarTemplate};
+use dot::schema::{
+    EnvironmentName, OneOrMany, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString,
+};
 
 fn patch(
-    prepend: Option<OneOrMany<ScalarTemplate>>,
-    append: Option<OneOrMany<ScalarTemplate>>,
+    prepend: Option<OneOrMany<ResolvedString>>,
+    append: Option<OneOrMany<ResolvedString>>,
     variables: &[(&str, &str)],
-) -> EnvironmentPatch {
-    EnvironmentPatch {
+) -> ResolvedEnvironmentPatch {
+    ResolvedEnvironmentPatch {
         path_prepend: prepend,
         path_append: append,
         variables: variables
@@ -21,15 +23,15 @@ fn patch(
             .map(|(name, value)| {
                 (
                     EnvironmentName::new(*name).expect("test environment name should be valid"),
-                    ScalarTemplate::from(*value),
+                    ResolvedString::from(*value),
                 )
             })
             .collect::<BTreeMap<_, _>>(),
     }
 }
 
-fn helper_action(mode: &str, cwd: Option<&Path>) -> ExecAction {
-    ExecAction {
+fn helper_action(mode: &str, cwd: Option<&Path>) -> ResolvedExecAction {
+    ResolvedExecAction {
         kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
@@ -103,7 +105,7 @@ fn prepared_command_copies_process_fields_and_layers_action_environment() {
         &[("BASE_ONLY", "present"), ("SHARED", "base")],
     ))
     .expect("base environment should be valid");
-    let action = ExecAction {
+    let action = ResolvedExecAction {
         kind: None,
         program: "example-program".into(),
         args: vec!["first".into(), "two words".into(), "".into()],
@@ -232,7 +234,7 @@ fn inherit_returns_only_the_exit_status() {
 
 #[test]
 fn reports_a_program_that_cannot_be_started() {
-    let action = ExecAction {
+    let action = ResolvedExecAction {
         kind: None,
         program: "dot-program-that-must-not-exist-4d02a925".into(),
         args: Vec::new(),
@@ -247,7 +249,7 @@ fn reports_a_program_that_cannot_be_started() {
         .expect_err("missing program should fail to start");
 
     assert!(matches!(error, ExecutionError::Spawn { .. }));
-    assert!(error.to_string().contains(action.program.as_str()));
+    assert!(error.to_string().contains(action.program.value()));
 }
 
 #[test]

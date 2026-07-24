@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dot::action::ExecutionEnvironment;
 use dot::action_runner::{ActionOutcome, ActionRunner, ActionStage};
-use dot::schema::{Action, EnvironmentName, EnvironmentPatch, ExecAction, ScalarTemplate};
+use dot::schema::{
+    EnvironmentName, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString,
+};
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
 
@@ -47,7 +49,7 @@ impl Drop for TempState {
     }
 }
 
-fn helper_action(mode: &str, state: &TempState) -> ExecAction {
+fn helper_action(mode: &str, state: &TempState) -> ResolvedExecAction {
     let variables = [
         ("DOT_ACTION_RUNNER_MODE", mode.to_owned()),
         (
@@ -63,12 +65,12 @@ fn helper_action(mode: &str, state: &TempState) -> ExecAction {
     .map(|(name, value)| {
         (
             EnvironmentName::new(name).expect("test environment name should be valid"),
-            ScalarTemplate::from(value),
+            ResolvedString::from(value),
         )
     })
     .collect::<BTreeMap<_, _>>();
 
-    ExecAction {
+    ResolvedExecAction {
         kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
@@ -81,7 +83,7 @@ fn helper_action(mode: &str, state: &TempState) -> ExecAction {
             "--nocapture".into(),
         ],
         cwd: None,
-        env: Some(EnvironmentPatch {
+        env: Some(ResolvedEnvironmentPatch {
             path_prepend: None,
             path_append: None,
             variables,
@@ -89,8 +91,8 @@ fn helper_action(mode: &str, state: &TempState) -> ExecAction {
     }
 }
 
-fn action(check: Option<ExecAction>, exec: ExecAction) -> Action {
-    Action { check, exec }
+fn action(check: Option<ResolvedExecAction>, exec: ResolvedExecAction) -> ResolvedAction {
+    ResolvedAction { check, exec }
 }
 
 #[test]

@@ -10,15 +10,21 @@ use crate::report::{
 pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
     let mut items = Vec::new();
 
-    items.extend(plan.providers().iter().map(|provider| ReportItem {
-        id: provider.id().to_owned(),
-        status: ItemStatus::Planned,
-        subject: ReportSubject::Provider(ProviderItem {
-            probe: CommandInfo::from(provider.probe()),
-            ensure: provider.ensure().iter().map(CommandInfo::from).collect(),
-            has_activation: provider.activate().is_some(),
-        }),
-        evidence: Vec::new(),
+    items.extend(plan.providers().iter().map(|provider| {
+        ReportItem {
+            id: provider.id().to_owned(),
+            status: ItemStatus::Planned,
+            subject: ReportSubject::Provider(ProviderItem {
+                probe: CommandInfo::from_resolved(provider.probe()),
+                ensure: provider
+                    .ensure()
+                    .iter()
+                    .map(CommandInfo::from_resolved)
+                    .collect(),
+                has_activation: provider.activate().is_some(),
+            }),
+            evidence: Vec::new(),
+        }
     }));
 
     items.extend(plan.provider_installs().iter().map(|install| {
@@ -48,7 +54,7 @@ pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
         status: ItemStatus::Planned,
         subject: ReportSubject::Package(PackageItem {
             source: PackageSource::Manual {
-                install: ActionInfo::from(package.install()),
+                install: ActionInfo::from_resolved(package.install()),
             },
         }),
         evidence: Vec::new(),
@@ -58,7 +64,7 @@ pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
         id: action.id().to_owned(),
         status: ItemStatus::Planned,
         subject: ReportSubject::Action(ActionItem {
-            action: ActionInfo::from(action.action()),
+            action: ActionInfo::from_resolved(action.action()),
         }),
         evidence: Vec::new(),
     }));

@@ -13,8 +13,8 @@ use dot::platform::PlatformInfo;
 use dot::provider::{ProviderInstallError, ProviderInstallOutcome, ProviderRunner};
 use dot::schema::{
     BatchProviderPackage, Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction,
-    Identifier, OneOrMany, Package, PlatformConstraint, Provider, ProviderInstallArg,
-    ProviderPackage, ScalarTemplate, SingleProviderPackage, Target,
+    Identifier, OneOrMany, Package, PlatformConstraint, Provider, ProviderInstallArgSource,
+    ProviderPackage, SingleProviderPackage, StringExpressionSource, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -55,19 +55,19 @@ fn identifier(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
 }
 
-fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, ScalarTemplate> {
+fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, StringExpressionSource> {
     values
         .iter()
         .map(|(name, value)| {
             (
                 EnvironmentName::new(*name).expect("test environment name should be valid"),
-                ScalarTemplate::from(value.clone()),
+                StringExpressionSource::from(value.clone()),
             )
         })
         .collect()
 }
 
-fn helper_action<A>(mode: &str, state: &TempState) -> ExecAction<A>
+fn helper_action<A>(mode: &str, state: &TempState) -> ExecAction<StringExpressionSource, A>
 where
     A: From<&'static str>,
 {
@@ -100,14 +100,14 @@ where
 
 fn provider(state: &TempState, probe_mode: &str, install_mode: &str) -> Provider {
     Provider {
-        probe: helper_action::<ScalarTemplate>(probe_mode, state),
+        probe: helper_action::<StringExpressionSource>(probe_mode, state),
         activate: Some(EnvironmentPatch {
             path_prepend: None,
             path_append: None,
             variables: variables(&[("DOT_PROVIDER_BATCH_ACTIVE", "yes".to_owned())]),
         }),
         ensure: None,
-        install: helper_action::<ProviderInstallArg>(install_mode, state),
+        install: helper_action::<ProviderInstallArgSource>(install_mode, state),
     }
 }
 

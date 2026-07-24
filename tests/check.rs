@@ -10,7 +10,8 @@ use dot::interpolation::{DotPaths, XdgPaths};
 use dot::platform::PlatformInfo;
 use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
 use dot::schema::{
-    Entries, EnvironmentName, EnvironmentPatch, ExecAction, Provider, ProviderInstallArg,
+    Entries, EnvironmentName, EnvironmentPatch, ExecAction, Provider, ProviderInstallArgSource,
+    ResolvedEnvironmentPatch, ResolvedString, StringExpressionSource,
 };
 
 fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
@@ -23,6 +24,22 @@ fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
                 (
                     EnvironmentName::new(*name).expect("test name should be valid"),
                     (*value).into(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>(),
+    }
+}
+
+fn resolved_environment_patch(variables: &[(&str, &str)]) -> ResolvedEnvironmentPatch {
+    ResolvedEnvironmentPatch {
+        path_prepend: None,
+        path_append: None,
+        variables: variables
+            .iter()
+            .map(|(name, value)| {
+                (
+                    EnvironmentName::new(*name).expect("test name should be valid"),
+                    ResolvedString::from(*value),
                 )
             })
             .collect::<BTreeMap<_, _>>(),
@@ -55,7 +72,7 @@ fn provider(mode: &str, value: &str) -> Provider {
             ("PROVIDER_VALUE", value),
         ])),
         ensure: None,
-        install: ExecAction::<ProviderInstallArg> {
+        install: ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
             kind: None,
             program: "unused-install".into(),
             args: Vec::new(),
@@ -68,7 +85,7 @@ fn provider(mode: &str, value: &str) -> Provider {
 fn base_environment() -> ExecutionEnvironment {
     let mut environment = ExecutionEnvironment::empty();
     environment
-        .apply_patch(&environment_patch(&[("BASE_ROOT", "/base")]))
+        .apply_patch(&resolved_environment_patch(&[("BASE_ROOT", "/base")]))
         .expect("base environment should be valid");
     environment
 }

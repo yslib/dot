@@ -7,13 +7,13 @@ use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
     DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPaths,
     resolve_environment_patch, resolve_exec_action, resolve_literal_string,
-    resolve_provider_install_action,
+    resolve_provider_install_action, resolve_string_expression,
 };
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    Action, EnvironmentPatch, ExecAction, LinkConflict, LinkMissingParent, OneOrMany, Package,
-    Provider, ProviderPackage,
+    LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage, ResolvedAction,
+    ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
 };
 
 #[derive(Debug)]
@@ -65,9 +65,9 @@ impl ExecutionPlan {
 #[derive(Debug)]
 pub struct PlannedProvider {
     id: String,
-    activate: Option<EnvironmentPatch>,
-    probe: ExecAction,
-    ensure: Vec<ExecAction>,
+    activate: Option<ResolvedEnvironmentPatch>,
+    probe: ResolvedExecAction,
+    ensure: Vec<ResolvedExecAction>,
 }
 
 impl PlannedProvider {
@@ -75,15 +75,15 @@ impl PlannedProvider {
         &self.id
     }
 
-    pub fn activate(&self) -> Option<&EnvironmentPatch> {
+    pub fn activate(&self) -> Option<&ResolvedEnvironmentPatch> {
         self.activate.as_ref()
     }
 
-    pub fn probe(&self) -> &ExecAction {
+    pub fn probe(&self) -> &ResolvedExecAction {
         &self.probe
     }
 
-    pub fn ensure(&self) -> &[ExecAction] {
+    pub fn ensure(&self) -> &[ResolvedExecAction] {
         &self.ensure
     }
 }
@@ -123,7 +123,7 @@ impl PlannedProviderInstall {
         }
     }
 
-    pub fn install(&self) -> &ExecAction {
+    pub fn install(&self) -> &ResolvedExecAction {
         match self {
             Self::Single(package) => &package.install,
             Self::Batch(package) => &package.install,
@@ -136,7 +136,7 @@ pub struct PlannedSingleProviderPackage {
     id: String,
     provider: String,
     provider_args: Vec<String>,
-    install: ExecAction,
+    install: ResolvedExecAction,
 }
 
 #[derive(Debug)]
@@ -145,13 +145,13 @@ pub struct PlannedProviderPackageBatch {
     provider: String,
     provider_args: Vec<String>,
     names: Vec<String>,
-    install: ExecAction,
+    install: ResolvedExecAction,
 }
 
 #[derive(Debug)]
 pub struct PlannedManualPackage {
     id: String,
-    install: Action,
+    install: ResolvedAction,
 }
 
 impl PlannedManualPackage {
@@ -159,7 +159,7 @@ impl PlannedManualPackage {
         &self.id
     }
 
-    pub fn install(&self) -> &Action {
+    pub fn install(&self) -> &ResolvedAction {
         &self.install
     }
 }
@@ -167,7 +167,7 @@ impl PlannedManualPackage {
 #[derive(Debug)]
 pub struct PlannedAction {
     id: String,
-    action: Action,
+    action: ResolvedAction,
 }
 
 impl PlannedAction {
@@ -175,7 +175,7 @@ impl PlannedAction {
         &self.id
     }
 
-    pub fn action(&self) -> &Action {
+    pub fn action(&self) -> &ResolvedAction {
         &self.action
     }
 }
@@ -346,7 +346,9 @@ impl<'a> ExecutionPlanner<'a> {
                             .install
                             .args
                             .iter()
-                            .filter(|argument| argument.as_str() == "${package:provider_args}")
+                            .filter(|argument| {
+                                argument.source_spelling() == "${package:provider_args}"
+                            })
                             .count();
                         if resolver_count != 1 {
                             return Err(PlanningError::ProviderArgsResolverCount {
@@ -378,6 +380,10 @@ impl<'a> ExecutionPlanner<'a> {
                             names
                         }
                     };
+                    let provider_args = provider_args
+                        .into_iter()
+                        .map(|argument| argument.value().to_owned())
+                        .collect::<Vec<_>>();
                     let package_context = PackageContext::new(&names, &provider_args);
                     let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
                         .with_package(package_context);
@@ -468,19 +474,21 @@ impl<'a> ExecutionPlanner<'a> {
             .links()
             .iter()
             .map(|(link_id, link)| {
-                let source = crate::interpolation::resolve_scalar_template(&link.source, &context)
-                    .map_err(|source| PlanningError::Interpolation {
-                        context: format!("link `{link_id}` source"),
-                        source,
+                let source =
+                    resolve_string_expression(&link.source, &context).map_err(|source| {
+                        PlanningError::Interpolation {
+                            context: format!("link `{link_id}` source"),
+                            source,
+                        }
                     })?;
-                let source = PathBuf::from(source);
+                let source = PathBuf::from(source.value());
                 let source = if source.is_absolute() {
                     source
                 } else {
                     self.dot_paths.config_dir().join(source)
                 };
-                let target = crate::interpolation::resolve_scalar_template(&link.target, &context)
-                    .map(PathBuf::from)
+                let target = resolve_string_expression(&link.target, &context)
+                    .map(|target| PathBuf::from(target.value()))
                     .map_err(|source| PlanningError::Interpolation {
                         context: format!("link `{link_id}` target"),
                         source,
@@ -505,10 +513,10 @@ impl<'a> ExecutionPlanner<'a> {
 }
 
 fn resolve_action(
-    action: &Action,
+    action: &SourceAction,
     context: &ResolveContext<'_>,
-) -> Result<Action, InterpolationError> {
-    Ok(Action {
+) -> Result<ResolvedAction, InterpolationError> {
+    Ok(ResolvedAction {
         check: action
             .check
             .as_ref()
@@ -521,7 +529,7 @@ fn resolve_action(
 fn resolve_ensure(
     provider: &Provider,
     context: &ResolveContext<'_>,
-) -> Result<Vec<ExecAction>, InterpolationError> {
+) -> Result<Vec<ResolvedExecAction>, InterpolationError> {
     match &provider.ensure {
         None => Ok(Vec::new()),
         Some(OneOrMany::One(action)) => Ok(vec![resolve_exec_action(action, context)?]),

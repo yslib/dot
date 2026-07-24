@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
-use crate::schema::{EnvironmentPatch, ExecAction, OneOrMany, ScalarTemplate};
+use crate::schema::{OneOrMany, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExecutionEnvironment {
@@ -36,9 +36,12 @@ impl ExecutionEnvironment {
             .map(|(_, value)| value.as_os_str())
     }
 
-    pub fn apply_patch(&mut self, patch: &EnvironmentPatch) -> Result<(), CommandPreparationError> {
+    pub fn apply_patch(
+        &mut self,
+        patch: &ResolvedEnvironmentPatch,
+    ) -> Result<(), CommandPreparationError> {
         for (name, value) in &patch.variables {
-            self.insert(name.as_str(), value.as_str());
+            self.insert(name.as_str(), value.value());
         }
 
         if patch.path_prepend.is_some() || patch.path_append.is_some() {
@@ -95,12 +98,12 @@ fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
     left == right
 }
 
-fn values(value: &OneOrMany<ScalarTemplate>) -> impl Iterator<Item = &str> {
+fn values(value: &OneOrMany<ResolvedString>) -> impl Iterator<Item = &str> {
     let values = match value {
         OneOrMany::One(value) => std::slice::from_ref(value),
         OneOrMany::Many(values) => values.as_slice(),
     };
-    values.iter().map(ScalarTemplate::as_str)
+    values.iter().map(ResolvedString::value)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,8 +115,30 @@ pub struct PreparedCommand {
 }
 
 impl PreparedCommand {
+    /// Prepares a command only from a resolved action.
+    ///
+    /// Source expressions cannot cross the execution boundary:
+    ///
+    /// ```compile_fail,E0308
+    /// use dot::action::{ExecutionEnvironment, PreparedCommand};
+    /// use dot::schema::{ExecAction, StringExpressionSource};
+    ///
+    /// let source_action =
+    ///     ExecAction::<StringExpressionSource, StringExpressionSource> {
+    ///         kind: None,
+    ///         program: "echo".into(),
+    ///         args: vec!["${env:HOME}".into()],
+    ///         cwd: None,
+    ///         env: None,
+    ///     };
+    ///
+    /// let _ = PreparedCommand::from_exec_action(
+    ///     &source_action,
+    ///     &ExecutionEnvironment::empty(),
+    /// );
+    /// ```
     pub fn from_exec_action(
-        action: &ExecAction,
+        action: &ResolvedExecAction,
         base_environment: &ExecutionEnvironment,
     ) -> Result<Self, CommandPreparationError> {
         let mut environment = base_environment.clone();
@@ -122,16 +147,16 @@ impl PreparedCommand {
         }
 
         Ok(Self {
-            program: OsString::from(action.program.as_str()),
+            program: OsString::from(action.program.value()),
             args: action
                 .args
                 .iter()
-                .map(|argument| OsString::from(argument.as_str()))
+                .map(|argument| OsString::from(argument.value()))
                 .collect(),
             cwd: action
                 .cwd
                 .as_ref()
-                .map(|directory| PathBuf::from(directory.as_str())),
+                .map(|directory| PathBuf::from(directory.value())),
             environment,
         })
     }

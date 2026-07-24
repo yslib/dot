@@ -13,7 +13,8 @@ use dot::report::{
     ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus, ReportSubject,
 };
 use dot::schema::{
-    Config, EnvironmentName, EnvironmentPatch, LinkConflict, LinkMissingParent, ScalarTemplate,
+    Config, EnvironmentName, LinkConflict, LinkMissingParent, ResolvedEnvironmentPatch,
+    ResolvedString,
 };
 use support::fixture;
 
@@ -47,21 +48,21 @@ fn platform() -> PlatformInfo {
 fn environment() -> ExecutionEnvironment {
     let mut environment = ExecutionEnvironment::empty();
     environment
-        .apply_patch(&EnvironmentPatch {
+        .apply_patch(&ResolvedEnvironmentPatch {
             path_prepend: None,
             path_append: None,
             variables: BTreeMap::from([
                 (
                     EnvironmentName::new("HOME").expect("test name should be valid"),
-                    ScalarTemplate::from(TEST_HOME),
+                    ResolvedString::from(TEST_HOME),
                 ),
                 (
                     EnvironmentName::new("ROOT").expect("test name should be valid"),
-                    ScalarTemplate::from("/opt"),
+                    ResolvedString::from("/opt"),
                 ),
                 (
                     EnvironmentName::new("RUNNER").expect("test name should be valid"),
-                    ScalarTemplate::from("bash"),
+                    ResolvedString::from("bash"),
                 ),
             ]),
         })
@@ -109,7 +110,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
     assert_eq!(plan.providers().len(), 1);
     assert_eq!(plan.providers()[0].id(), "brew");
     assert_eq!(
-        plan.providers()[0].probe().program.as_str(),
+        plan.providers()[0].probe().program.value(),
         "/opt/homebrew/bin/brew"
     );
     assert_eq!(plan.providers()[0].ensure().len(), 1);
@@ -127,7 +128,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
             .install()
             .args
             .iter()
-            .map(ScalarTemplate::as_str)
+            .map(ResolvedString::value)
             .collect::<Vec<_>>(),
         vec!["install", "alpha"]
     );
@@ -140,7 +141,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
         beta.install()
             .args
             .iter()
-            .map(ScalarTemplate::as_str)
+            .map(ResolvedString::value)
             .collect::<Vec<_>>(),
         vec!["install", "beta"]
     );
@@ -158,7 +159,7 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
             .install()
             .args
             .iter()
-            .map(ScalarTemplate::as_str)
+            .map(ResolvedString::value)
             .collect::<Vec<_>>(),
         vec!["install", "--cask", "font-one", "font-two"]
     );
@@ -274,18 +275,18 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
             .as_ref()
             .unwrap()
             .program
-            .as_str(),
+            .value(),
         "/opt/bin/manual-tool"
     );
     assert_eq!(
-        plan.manual_packages()[0].install().exec.program.as_str(),
+        plan.manual_packages()[0].install().exec.program.value(),
         "bash"
     );
 
     assert_eq!(plan.actions().len(), 1);
     assert_eq!(plan.actions()[0].id(), "configure");
     assert_eq!(
-        plan.actions()[0].action().exec.args[0].as_str(),
+        plan.actions()[0].action().exec.args[0].value(),
         config_template_path("scripts/configure.sh")
     );
 
