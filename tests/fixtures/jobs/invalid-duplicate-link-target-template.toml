@@ -1,0 +1,13 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.actions.configure]
+exec = __ACTION__
+
+[targets.current.links.first]
+source = "first.txt"
+target = "${dot:config_dir}/future/../linked.txt"
+
+[targets.current.links.second]
+source = "second.txt"
+target = "${dot:config_dir}/linked.txt"

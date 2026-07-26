@@ -31,6 +31,10 @@ impl LinkResult {
     pub fn outcome(&self) -> Result<LinkOutcome, &LinkError> {
         self.outcome.as_ref().copied()
     }
+
+    pub(crate) fn into_parts(self) -> (String, Result<LinkOutcome, LinkError>) {
+        (self.id, self.outcome)
+    }
 }
 
 #[derive(Debug)]
@@ -45,6 +49,10 @@ impl LinkReport {
 
     pub fn all_succeeded(&self) -> bool {
         self.results.iter().all(|result| result.outcome.is_ok())
+    }
+
+    pub(crate) fn into_results(self) -> impl Iterator<Item = LinkResult> {
+        self.results.into_iter()
     }
 }
 
