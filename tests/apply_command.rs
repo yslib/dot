@@ -190,6 +190,36 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
 }
 
 #[test]
+fn apply_projects_a_link_phase_error_as_blocked_items_and_one_diagnostic() {
+    let workspace = TempWorkspace::new();
+    workspace.write_source("first.txt");
+    workspace.write_source("second.txt");
+    let contents = fixture::read("apply/invalid-duplicate-link-target-template.toml")
+        .replace("__ACTION__", &helper_exec("action-ok"));
+    let manifest = workspace.write_manifest(&contents);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["--config"])
+        .arg(&manifest)
+        .output()
+        .expect("dot apply should start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(1), "stdout:\n{stdout}");
+    assert_eq!(workspace.recorded_events(), ["action-ok"]);
+    assert!(stdout.contains("┆ first "), "{stdout}");
+    assert!(stdout.contains("┆ second "), "{stdout}");
+    assert_eq!(stdout.matches("BLOCKED").count(), 2, "{stdout}");
+    assert_eq!(stdout.matches("ERROR: links [").count(), 1, "{stdout}");
+    assert!(stdout.contains("resolve to the same target"), "{stdout}");
+    assert!(stdout.contains("FAILED · 3 items"), "{stdout}");
+    assert!(
+        !workspace.path("linked.txt").exists(),
+        "duplicate-target preflight must not create the normalized target"
+    );
+}
+
+#[test]
 fn helper_process() {
     let Ok(mode) = env::var("DOT_APPLY_HELPER") else {
         return;

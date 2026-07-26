@@ -3,18 +3,23 @@ use std::fmt;
 use std::path::Path;
 
 use super::Selection;
-use crate::action::{ExecutionEnvironment, ExecutionResult};
-use crate::action_runner::{ActionOutcome, ActionRunError, ActionRunner, ActionStage};
+use crate::action::ExecutionResult;
+use crate::action_runner::{ActionOutcome, ActionRunError, ActionStage};
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
-use crate::link::{self, LinkOutcome, LinkPhaseError, LinkReport};
+use crate::job::JobSelection;
+use crate::job_runner::{BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState};
+use crate::link::LinkOutcome;
 use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlan, ExecutionPlanner, PlannedProviderInstall, PlanningError};
+use crate::plan::{
+    ExecutionPlanner, JobSelectionError, PlannedJob, PlannedPackage, PlannedProviderInstall,
+    PlanningError, SelectedExecutionPlan,
+};
 use crate::platform::PlatformInfo;
 use crate::provider::{
-    ProviderError, ProviderInstallExecution, ProviderInstallOutcome, ProviderOutcome,
-    ProviderReadiness, ProviderRunner, ProviderStage,
+    ProviderError, ProviderInstallOutcome, ProviderInstallStatus, ProviderOutcome, ProviderStage,
+    ProviderStatus,
 };
 use crate::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Diagnostic, DiagnosticLevel, Evidence,
@@ -35,88 +40,46 @@ pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> 
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
     let plan = planner.plan(&manifest)?;
-    let result = execute(&plan, loaded.environment());
+    let selected = plan.select(&JobSelection::All)?;
+    let execution = JobRunner::new(loaded.environment()).run(&selected);
 
-    Ok(build_report(loaded.path(), &plan, &result))
+    Ok(build_report(loaded.path(), &selected, &execution))
 }
 
-fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyResult {
-    let provider_runner = ProviderRunner::new(environment);
-    let providers = provider_runner.ensure_all(plan.providers());
-    let provider_installs = provider_runner.install_all(plan.provider_installs(), &providers);
-    let action_runner = ActionRunner::new(environment);
-    let manual_packages = plan
-        .manual_packages()
-        .map(|package| NamedActionResult {
-            id: package.id().to_owned(),
-            outcome: action_runner.run(package.install()),
+fn build_report(
+    config: &Path,
+    selected: &SelectedExecutionPlan<'_>,
+    execution: &JobExecutionReport,
+) -> CommandReport {
+    let source = selected.source();
+    let items = selected
+        .jobs()
+        .map(|job| {
+            let id = job.id();
+            let state = execution
+                .get(&id)
+                .unwrap_or_else(|| panic!("execution report is missing selected job `{id:?}`"));
+            report_item(job, state, &source.platform().os)
         })
         .collect();
-    let actions = plan
-        .actions()
-        .map(|action| NamedActionResult {
-            id: action.id().to_owned(),
-            outcome: action_runner.run(action.action()),
+    let diagnostics = execution
+        .link_phase_error()
+        .map(|error| Diagnostic {
+            level: DiagnosticLevel::Error,
+            message: error.to_string(),
         })
+        .into_iter()
         .collect();
-    let links = link::reconcile(plan.links());
-
-    ApplyResult {
-        providers,
-        provider_installs,
-        manual_packages,
-        actions,
-        links,
-    }
-}
-
-#[derive(Debug)]
-struct NamedActionResult {
-    id: String,
-    outcome: Result<ActionOutcome, ActionRunError>,
-}
-
-#[derive(Debug)]
-struct ApplyResult {
-    providers: ProviderReadiness,
-    provider_installs: ProviderInstallExecution,
-    manual_packages: Vec<NamedActionResult>,
-    actions: Vec<NamedActionResult>,
-    links: Result<LinkReport, LinkPhaseError>,
-}
-
-impl ApplyResult {
-    fn succeeded(&self) -> bool {
-        self.providers.all_ready()
-            && self.provider_installs.all_succeeded()
-            && self
-                .manual_packages
-                .iter()
-                .all(|result| result.outcome.is_ok())
-            && self.actions.iter().all(|result| result.outcome.is_ok())
-            && self
-                .links
-                .as_ref()
-                .is_ok_and(|report| report.all_succeeded())
-    }
-}
-
-fn build_report(config: &Path, plan: &ExecutionPlan, result: &ApplyResult) -> CommandReport {
-    let mut items = provider_items(plan, &result.providers);
-    items.extend(provider_package_items(plan, &result.provider_installs));
-    items.extend(action_items(plan, &result.manual_packages, &result.actions));
-    let (links, diagnostics) = link_items(plan, &result.links);
-    items.extend(links);
 
     CommandReport {
         command: ReportCommand::Apply,
         context: ReportContext {
             config: config.to_owned(),
-            target: plan.target().to_owned(),
-            profile: plan.profile().map(str::to_owned),
-            platform: plan.platform().clone(),
+            target: source.target().to_owned(),
+            profile: source.profile().map(str::to_owned),
+            platform: source.platform().clone(),
         },
-        status: if result.succeeded() {
+        status: if execution.all_succeeded() {
             ReportStatus::Succeeded
         } else {
             ReportStatus::Failed
@@ -126,116 +89,50 @@ fn build_report(config: &Path, plan: &ExecutionPlan, result: &ApplyResult) -> Co
     }
 }
 
-fn provider_items(plan: &ExecutionPlan, readiness: &ProviderReadiness) -> Vec<ReportItem> {
-    plan.providers()
-        .map(|provider| {
-            let result = readiness
-                .get(provider.id())
-                .expect("provider results must match the execution plan");
-            let (status, evidence) = match result.outcome() {
-                Ok(ProviderOutcome::AlreadyReady { probe }) => (
-                    ItemStatus::Ready,
-                    vec![execution_evidence(
-                        EvidenceStage::Probe,
-                        probe,
-                        Some("already available"),
-                    )],
-                ),
-                Ok(ProviderOutcome::Ensured { ensure, probe }) => {
-                    let mut evidence = ensure
-                        .iter()
-                        .map(|result| execution_evidence(EvidenceStage::Ensure, result, None))
-                        .collect::<Vec<_>>();
-                    evidence.push(execution_evidence(
-                        EvidenceStage::Probe,
-                        probe,
-                        Some("installed and verified"),
-                    ));
-                    (ItemStatus::Ready, evidence)
-                }
-                Err(error) => (ItemStatus::NotReady, vec![provider_error_evidence(error)]),
-            };
-            ReportItem {
-                id: provider.id().to_owned(),
-                status,
-                subject: ReportSubject::Provider(ProviderItem {
-                    probe: CommandInfo::from_resolved(provider.probe()),
-                    ensure: provider
-                        .ensure()
-                        .iter()
-                        .map(CommandInfo::from_resolved)
-                        .collect(),
-                    has_activation: provider.activate().is_some(),
-                }),
-                evidence,
-            }
-        })
-        .collect()
-}
-
-fn provider_package_items(
-    plan: &ExecutionPlan,
-    execution: &ProviderInstallExecution,
-) -> Vec<ReportItem> {
-    plan.provider_installs()
-        .zip(execution.statuses())
-        .map(|(install, result)| {
-            debug_assert_eq!(install.id(), result.id());
-            let (status, evidence) = match result.outcome() {
-                Ok(ProviderInstallOutcome::Executed { install }) => (
-                    ItemStatus::Installed,
-                    vec![execution_evidence(EvidenceStage::Install, install, None)],
-                ),
-                Ok(ProviderInstallOutcome::NotRunProviderUnavailable) => (
-                    ItemStatus::Blocked,
-                    vec![message_evidence(
-                        EvidenceStage::Install,
-                        "provider unavailable",
-                    )],
-                ),
-                Err(error) => (
-                    ItemStatus::Failed,
-                    vec![error_evidence(
-                        EvidenceStage::Install,
-                        error.to_string(),
-                        error.exit_result(),
-                    )],
-                ),
-            };
-            let source = match install {
-                PlannedProviderInstall::Single(_) => ProviderPackageSource::Single {
-                    provider: install.provider().to_owned(),
-                    provider_args: install.provider_args().to_owned(),
-                },
-                PlannedProviderInstall::Batch(_) => ProviderPackageSource::Batch {
-                    provider: install.provider().to_owned(),
-                    names: install.names().map(str::to_owned).collect(),
-                    provider_args: install.provider_args().to_owned(),
-                },
-            };
-            ReportItem {
-                id: install.id().to_owned(),
-                status,
-                subject: ReportSubject::Package(PackageItem {
-                    source: PackageSource::Provider(source),
-                }),
-                evidence,
-            }
-        })
-        .collect()
-}
-
-fn action_items(
-    plan: &ExecutionPlan,
-    manual_results: &[NamedActionResult],
-    action_results: &[NamedActionResult],
-) -> Vec<ReportItem> {
-    let mut items = plan
-        .manual_packages()
-        .zip(manual_results)
-        .map(|(package, result)| {
-            debug_assert_eq!(package.id(), result.id);
-            let (status, evidence) = action_result(&result.outcome, ItemStatus::Installed);
+fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportItem {
+    match (job, state) {
+        (PlannedJob::Provider(provider), JobState::Completed(JobOutcome::Provider(status))) => {
+            assert_eq!(
+                provider.id(),
+                status.id(),
+                "provider result identity must match the selected job"
+            );
+            provider_item(provider, status)
+        }
+        (
+            PlannedJob::Package(PlannedPackage::Provider(package)),
+            JobState::Completed(JobOutcome::ProviderPackage(status)),
+        ) => {
+            assert_eq!(
+                package.id(),
+                status.id(),
+                "provider package result identity must match the selected job"
+            );
+            provider_package_item(package, status)
+        }
+        (
+            PlannedJob::Package(PlannedPackage::Provider(package)),
+            JobState::Blocked(BlockReason::ProviderUnavailable { provider }),
+        ) => {
+            assert_eq!(
+                package.provider(),
+                provider.as_str(),
+                "provider block reason must match the selected package"
+            );
+            provider_package_report_item(
+                package,
+                ItemStatus::Blocked,
+                vec![message_evidence(
+                    EvidenceStage::Install,
+                    "provider unavailable",
+                )],
+            )
+        }
+        (
+            PlannedJob::Package(PlannedPackage::Manual(package)),
+            JobState::Completed(JobOutcome::ManualPackage(result)),
+        ) => {
+            let (status, evidence) = action_result(result, ItemStatus::Installed);
             ReportItem {
                 id: package.id().to_owned(),
                 status,
@@ -246,21 +143,150 @@ fn action_items(
                 }),
                 evidence,
             }
-        })
-        .collect::<Vec<_>>();
-    items.extend(plan.actions().zip(action_results).map(|(action, result)| {
-        debug_assert_eq!(action.id(), result.id);
-        let (status, evidence) = action_result(&result.outcome, ItemStatus::Executed);
-        ReportItem {
-            id: action.id().to_owned(),
-            status,
-            subject: ReportSubject::Action(ActionItem {
-                action: ActionInfo::from_resolved(action.action()),
-            }),
-            evidence,
         }
-    }));
-    items
+        (PlannedJob::Action(action), JobState::Completed(JobOutcome::Action(result))) => {
+            let (status, evidence) = action_result(result, ItemStatus::Executed);
+            ReportItem {
+                id: action.id().to_owned(),
+                status,
+                subject: ReportSubject::Action(ActionItem {
+                    action: ActionInfo::from_resolved(action.action()),
+                }),
+                evidence,
+            }
+        }
+        (PlannedJob::Link(link), JobState::Completed(JobOutcome::Link(result))) => {
+            link_item(link, result, platform_os)
+        }
+        (PlannedJob::Link(link), JobState::Blocked(BlockReason::LinkPhase { message })) => {
+            report_link_item(
+                link,
+                ItemStatus::Blocked,
+                vec![message_evidence(EvidenceStage::Link, message.clone())],
+            )
+        }
+        _ => panic!(
+            "execution state does not match selected job: planned {job:?}, execution {state:?}"
+        ),
+    }
+}
+
+fn provider_item(provider: &crate::plan::PlannedProvider, result: &ProviderStatus) -> ReportItem {
+    let (status, evidence) = match result.outcome() {
+        Ok(ProviderOutcome::AlreadyReady { probe }) => (
+            ItemStatus::Ready,
+            vec![execution_evidence(
+                EvidenceStage::Probe,
+                probe,
+                Some("already available"),
+            )],
+        ),
+        Ok(ProviderOutcome::Ensured { ensure, probe }) => {
+            let mut evidence = ensure
+                .iter()
+                .map(|result| execution_evidence(EvidenceStage::Ensure, result, None))
+                .collect::<Vec<_>>();
+            evidence.push(execution_evidence(
+                EvidenceStage::Probe,
+                probe,
+                Some("installed and verified"),
+            ));
+            (ItemStatus::Ready, evidence)
+        }
+        Err(error) => (ItemStatus::NotReady, vec![provider_error_evidence(error)]),
+    };
+    ReportItem {
+        id: provider.id().to_owned(),
+        status,
+        subject: ReportSubject::Provider(ProviderItem {
+            probe: CommandInfo::from_resolved(provider.probe()),
+            ensure: provider
+                .ensure()
+                .iter()
+                .map(CommandInfo::from_resolved)
+                .collect(),
+            has_activation: provider.activate().is_some(),
+        }),
+        evidence,
+    }
+}
+
+fn provider_package_item(
+    package: &PlannedProviderInstall,
+    result: &ProviderInstallStatus,
+) -> ReportItem {
+    let (status, evidence) = match result.outcome() {
+        Ok(ProviderInstallOutcome::Executed { install }) => (
+            ItemStatus::Installed,
+            vec![execution_evidence(EvidenceStage::Install, install, None)],
+        ),
+        Ok(ProviderInstallOutcome::NotRunProviderUnavailable) => (
+            ItemStatus::Blocked,
+            vec![message_evidence(
+                EvidenceStage::Install,
+                "provider unavailable",
+            )],
+        ),
+        Err(error) => (
+            ItemStatus::Failed,
+            vec![error_evidence(
+                EvidenceStage::Install,
+                error.to_string(),
+                error.exit_result(),
+            )],
+        ),
+    };
+    provider_package_report_item(package, status, evidence)
+}
+
+fn provider_package_report_item(
+    package: &PlannedProviderInstall,
+    status: ItemStatus,
+    evidence: Vec<Evidence>,
+) -> ReportItem {
+    let source = match package {
+        PlannedProviderInstall::Single(_) => ProviderPackageSource::Single {
+            provider: package.provider().to_owned(),
+            provider_args: package.provider_args().to_owned(),
+        },
+        PlannedProviderInstall::Batch(_) => ProviderPackageSource::Batch {
+            provider: package.provider().to_owned(),
+            names: package.names().map(str::to_owned).collect(),
+            provider_args: package.provider_args().to_owned(),
+        },
+    };
+    ReportItem {
+        id: package.id().to_owned(),
+        status,
+        subject: ReportSubject::Package(PackageItem {
+            source: PackageSource::Provider(source),
+        }),
+        evidence,
+    }
+}
+
+fn link_item(
+    link: &crate::plan::PlannedLink,
+    result: &Result<LinkOutcome, crate::link::LinkError>,
+    platform_os: &str,
+) -> ReportItem {
+    let (status, evidence) = match result {
+        Ok(LinkOutcome::Satisfied) => (ItemStatus::Satisfied, Vec::new()),
+        Ok(LinkOutcome::Created) => (ItemStatus::Created, Vec::new()),
+        Ok(LinkOutcome::Replaced) => (ItemStatus::Replaced, Vec::new()),
+        Ok(LinkOutcome::SkippedMissingParent) => (
+            ItemStatus::Skipped,
+            vec![message_evidence(
+                EvidenceStage::Link,
+                "target parent is missing",
+            )],
+        ),
+        Err(error) => (
+            ItemStatus::Failed,
+            vec![link_error_evidence(error, platform_os)],
+        ),
+    };
+    report_link_item(link, status, evidence)
 }
 
 fn action_result(
@@ -299,58 +325,6 @@ fn action_result(
                 error.exit_result(),
             )],
         ),
-    }
-}
-
-fn link_items(
-    plan: &ExecutionPlan,
-    result: &Result<LinkReport, LinkPhaseError>,
-) -> (Vec<ReportItem>, Vec<Diagnostic>) {
-    match result {
-        Ok(report) => (
-            plan.links()
-                .zip(report.results())
-                .map(|(link, result)| {
-                    debug_assert_eq!(link.id(), result.id());
-                    let (status, evidence) = match result.outcome() {
-                        Ok(LinkOutcome::Satisfied) => (ItemStatus::Satisfied, Vec::new()),
-                        Ok(LinkOutcome::Created) => (ItemStatus::Created, Vec::new()),
-                        Ok(LinkOutcome::Replaced) => (ItemStatus::Replaced, Vec::new()),
-                        Ok(LinkOutcome::SkippedMissingParent) => (
-                            ItemStatus::Skipped,
-                            vec![message_evidence(
-                                EvidenceStage::Link,
-                                "target parent is missing",
-                            )],
-                        ),
-                        Err(error) => (
-                            ItemStatus::Failed,
-                            vec![link_error_evidence(error, &plan.platform().os)],
-                        ),
-                    };
-                    report_link_item(link, status, evidence)
-                })
-                .collect(),
-            Vec::new(),
-        ),
-        Err(error) => {
-            let message = error.to_string();
-            (
-                plan.links()
-                    .map(|link| {
-                        report_link_item(
-                            link,
-                            ItemStatus::Blocked,
-                            vec![message_evidence(EvidenceStage::Link, message.clone())],
-                        )
-                    })
-                    .collect(),
-                vec![Diagnostic {
-                    level: DiagnosticLevel::Error,
-                    message,
-                }],
-            )
-        }
     }
 }
 
@@ -465,6 +439,7 @@ pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
     Planning(PlanningError),
+    Selection(JobSelectionError),
 }
 
 impl fmt::Display for CommandError {
@@ -473,6 +448,7 @@ impl fmt::Display for CommandError {
             Self::Config(source) => source.fmt(formatter),
             Self::Manifest(source) => source.fmt(formatter),
             Self::Planning(source) => source.fmt(formatter),
+            Self::Selection(source) => source.fmt(formatter),
         }
     }
 }
@@ -483,6 +459,7 @@ impl Error for CommandError {
             Self::Config(source) => Some(source),
             Self::Manifest(source) => Some(source),
             Self::Planning(source) => Some(source),
+            Self::Selection(source) => Some(source),
         }
     }
 }
@@ -505,14 +482,136 @@ impl From<PlanningError> for CommandError {
     }
 }
 
+impl From<JobSelectionError> for CommandError {
+    fn from(source: JobSelectionError) -> Self {
+        Self::Selection(source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
     use std::io;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::process;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::diagnostic::Operation;
     use crate::link::LinkError;
+
+    static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
+
+    struct TempWorkspace {
+        directory: PathBuf,
+    }
+
+    impl TempWorkspace {
+        fn new() -> Self {
+            let sequence = NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
+            let directory =
+                env::temp_dir().join(format!("dot-apply-report-{}-{sequence}", process::id()));
+            fs::create_dir(&directory).expect("temporary workspace should be created");
+            Self { directory }
+        }
+
+        fn write_manifest(&self, contents: &str) -> PathBuf {
+            let path = self.directory.join("dot.toml");
+            fs::write(&path, render_manifest(contents)).expect("test manifest should be written");
+            path
+        }
+
+        fn write_source(&self, name: &str) {
+            fs::write(self.directory.join(name), name).expect("link source should be written");
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.directory.join(name)
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SubjectKind {
+        Provider,
+        ProviderPackageSingle,
+        ProviderPackageBatch,
+        ManualPackage,
+        Action,
+        Link,
+    }
+
+    #[test]
+    fn apply_projects_the_complete_selected_plan_in_typed_job_order() {
+        let workspace = TempWorkspace::new();
+        workspace.write_source("source.txt");
+        let contents = read_fixture("apply/valid-complete-plan-template.toml")
+            .replace("__PROBE__", &helper_exec("probe-ready"))
+            .replace("__INSTALL__", &helper_exec("install-ready"))
+            .replace("__MANUAL__", &helper_exec("manual-ok"))
+            .replace("__ACTION__", &helper_exec("action-ok"));
+        let manifest = workspace.write_manifest(&contents);
+
+        let report = run(&selection(manifest)).expect("complete apply should produce a report");
+
+        assert_eq!(report.status, ReportStatus::Succeeded);
+        assert!(report.diagnostics.is_empty());
+        assert_eq!(
+            item_sequence(&report),
+            [
+                ("ready", SubjectKind::Provider),
+                ("cli-tools", SubjectKind::ProviderPackageBatch),
+                ("tool", SubjectKind::ProviderPackageSingle),
+                ("manual-tool", SubjectKind::ManualPackage),
+                ("configure", SubjectKind::Action),
+                ("config", SubjectKind::Link),
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_projects_a_duplicate_link_phase_to_typed_blocked_items_and_one_diagnostic() {
+        let workspace = TempWorkspace::new();
+        workspace.write_source("first.txt");
+        workspace.write_source("second.txt");
+        let contents = read_fixture("apply/invalid-duplicate-link-target-template.toml")
+            .replace("__ACTION__", &helper_exec("action-ok"));
+        let manifest = workspace.write_manifest(&contents);
+
+        let report = run(&selection(manifest)).expect("link phase failure should produce a report");
+
+        assert_eq!(report.status, ReportStatus::Failed);
+        assert_eq!(
+            item_sequence(&report),
+            [
+                ("configure", SubjectKind::Action),
+                ("first", SubjectKind::Link),
+                ("second", SubjectKind::Link),
+            ]
+        );
+        assert_eq!(report.diagnostics.len(), 1);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+        for item in &report.items[1..] {
+            assert_eq!(item.status, ItemStatus::Blocked);
+            assert_eq!(item.evidence.len(), 1);
+            assert_eq!(item.evidence[0].stage, EvidenceStage::Link);
+            assert_eq!(
+                item.evidence[0].message.as_deref(),
+                Some(diagnostic.message.as_str())
+            );
+        }
+        assert!(
+            !workspace.path("linked.txt").exists(),
+            "duplicate-target preflight must not create the normalized target"
+        );
+    }
 
     #[test]
     fn link_evidence_keeps_the_native_error_and_structured_hint() {
@@ -533,5 +632,97 @@ mod tests {
         );
         assert_eq!(evidence.hints.len(), 1);
         assert_eq!(evidence.hints[0].code, "windows.symlink.privilege-required");
+    }
+
+    #[test]
+    fn helper_process() {
+        let Ok(mode) = env::var("DOT_APPLY_REPORT_HELPER") else {
+            return;
+        };
+
+        if matches!(mode.as_str(), "probe-ready" | "install-ready") {
+            assert_eq!(
+                env::var("DOT_APPLY_PROVIDER_ACTIVE").as_deref(),
+                Ok("yes"),
+                "provider child process should receive activate environment"
+            );
+        } else {
+            assert!(
+                env::var_os("DOT_APPLY_PROVIDER_ACTIVE").is_none(),
+                "manual packages and actions must not receive provider environment"
+            );
+        }
+
+        match mode.as_str() {
+            "probe-ready" | "install-ready" | "manual-ok" => {}
+            "action-ok" => {
+                let link = PathBuf::from(
+                    env::var_os("DOT_APPLY_REPORT_LINK")
+                        .expect("apply report link path should be present"),
+                );
+                assert!(!link.exists(), "links must run after global actions");
+            }
+            unknown => panic!("unknown apply report helper mode: {unknown}"),
+        }
+    }
+
+    fn selection(config: PathBuf) -> Selection {
+        Selection {
+            config,
+            target: None,
+            profile: None,
+        }
+    }
+
+    fn item_sequence(report: &CommandReport) -> Vec<(&str, SubjectKind)> {
+        report
+            .items
+            .iter()
+            .map(|item| {
+                let kind = match &item.subject {
+                    ReportSubject::Provider(_) => SubjectKind::Provider,
+                    ReportSubject::Package(PackageItem {
+                        source: PackageSource::Provider(ProviderPackageSource::Single { .. }),
+                    }) => SubjectKind::ProviderPackageSingle,
+                    ReportSubject::Package(PackageItem {
+                        source: PackageSource::Provider(ProviderPackageSource::Batch { .. }),
+                    }) => SubjectKind::ProviderPackageBatch,
+                    ReportSubject::Package(PackageItem {
+                        source: PackageSource::Manual { .. },
+                    }) => SubjectKind::ManualPackage,
+                    ReportSubject::Action(_) => SubjectKind::Action,
+                    ReportSubject::Link(_) => SubjectKind::Link,
+                };
+                (item.id.as_str(), kind)
+            })
+            .collect()
+    }
+
+    fn read_fixture(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        fs::read_to_string(path).expect("apply fixture should be readable")
+    }
+
+    fn render_manifest(contents: &str) -> String {
+        contents
+            .replace("__OS__", env::consts::OS)
+            .replace("__PROGRAM__", &helper_program_toml())
+    }
+
+    fn helper_program_toml() -> String {
+        format!(
+            "{:?}",
+            env::current_exe()
+                .expect("test executable should have a path")
+                .to_string_lossy()
+        )
+    }
+
+    fn helper_exec(mode: &str) -> String {
+        format!(
+            r#"{{ program = __PROGRAM__, args = ["--exact", "app::apply::tests::helper_process", "--nocapture"], env = {{ variables = {{ DOT_APPLY_REPORT_HELPER = "{mode}", DOT_APPLY_REPORT_LINK = "${{dot:config_dir}}/linked.txt" }} }} }}"#
+        )
     }
 }
