@@ -18,8 +18,7 @@ use crate::plan::{
 };
 use crate::platform::PlatformInfo;
 use crate::provider::{
-    ProviderError, ProviderInstallOutcome, ProviderInstallStatus, ProviderOutcome, ProviderStage,
-    ProviderStatus,
+    ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStage,
 };
 use crate::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, Diagnostic, DiagnosticLevel, Evidence,
@@ -91,25 +90,13 @@ fn build_report(
 
 fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportItem {
     match (job, state) {
-        (PlannedJob::Provider(provider), JobState::Completed(JobOutcome::Provider(status))) => {
-            assert_eq!(
-                provider.id(),
-                status.id(),
-                "provider result identity must match the selected job"
-            );
-            provider_item(provider, status)
+        (PlannedJob::Provider(provider), JobState::Completed(JobOutcome::Provider(result))) => {
+            provider_item(provider, result)
         }
         (
             PlannedJob::Package(PlannedPackage::Provider(package)),
-            JobState::Completed(JobOutcome::ProviderPackage(status)),
-        ) => {
-            assert_eq!(
-                package.id(),
-                status.id(),
-                "provider package result identity must match the selected job"
-            );
-            provider_package_item(package, status)
-        }
+            JobState::Completed(JobOutcome::ProviderPackage(result)),
+        ) => provider_package_item(package, result),
         (
             PlannedJob::Package(PlannedPackage::Provider(package)),
             JobState::Blocked(BlockReason::ProviderUnavailable { provider }),
@@ -171,8 +158,11 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
     }
 }
 
-fn provider_item(provider: &crate::plan::PlannedProvider, result: &ProviderStatus) -> ReportItem {
-    let (status, evidence) = match result.outcome() {
+fn provider_item(
+    provider: &crate::plan::PlannedProvider,
+    result: &Result<ProviderOutcome, ProviderError>,
+) -> ReportItem {
+    let (status, evidence) = match result {
         Ok(ProviderOutcome::AlreadyReady { probe }) => (
             ItemStatus::Ready,
             vec![execution_evidence(
@@ -213,9 +203,9 @@ fn provider_item(provider: &crate::plan::PlannedProvider, result: &ProviderStatu
 
 fn provider_package_item(
     package: &PlannedProviderInstall,
-    result: &ProviderInstallStatus,
+    result: &Result<ProviderInstallOutcome, ProviderInstallError>,
 ) -> ReportItem {
-    let (status, evidence) = match result.outcome() {
+    let (status, evidence) = match result {
         Ok(ProviderInstallOutcome::Executed { install }) => (
             ItemStatus::Installed,
             vec![execution_evidence(EvidenceStage::Install, install, None)],

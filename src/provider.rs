@@ -67,6 +67,10 @@ impl ProviderStatus {
     pub fn error(&self) -> Option<&ProviderError> {
         self.outcome.as_ref().err()
     }
+
+    pub(crate) fn into_outcome(self) -> Result<ProviderOutcome, ProviderError> {
+        self.outcome
+    }
 }
 
 #[derive(Debug, Default)]
@@ -115,6 +119,10 @@ impl ProviderInstallStatus {
 
     pub fn is_succeeded(&self) -> bool {
         matches!(self.outcome, Ok(ProviderInstallOutcome::Executed { .. }))
+    }
+
+    pub(crate) fn into_outcome(self) -> Result<ProviderInstallOutcome, ProviderInstallError> {
+        self.outcome
     }
 }
 

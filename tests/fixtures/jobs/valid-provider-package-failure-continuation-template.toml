@@ -1,0 +1,15 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.ready]
+activate = { variables = { DOT_JOB_PROVIDER_ACTIVE = "yes" } }
+probe = __PROBE__
+install = { program = __PROGRAM__, args = ["--exact", "${package:provider_args}", "--nocapture"], env = { variables = { DOT_JOB_EVENTS = "${dot:config_dir}/events", DOT_JOB_PROVIDER_PACKAGE_HELPER = "yes" } } }
+
+[targets.current.packages.first-tool]
+provider = "ready"
+provider_args = ["provider_package_first_fails"]
+
+[targets.current.packages.second-tool]
+provider = "ready"
+provider_args = ["provider_package_second_succeeds"]

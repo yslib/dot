@@ -15,6 +15,7 @@ use dot::link::{LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
 use dot::platform::PlatformInfo;
+use dot::provider::ProviderInstallOutcome;
 use dot::schema::{Config, Identifier};
 use support::fixture;
 
@@ -151,12 +152,13 @@ fn runs_all_selected_jobs_in_stable_serial_order() {
     assert!(report.link_phase_error().is_none());
     assert!(matches!(
         report.get(&JobId::Provider(identifier("ready"))),
-        Some(JobState::Completed(JobOutcome::Provider(status))) if status.is_ready()
+        Some(JobState::Completed(JobOutcome::Provider(Ok(_))))
     ));
     assert!(matches!(
         report.get(&JobId::Package(identifier("provider-tool"))),
-        Some(JobState::Completed(JobOutcome::ProviderPackage(status)))
-            if status.is_succeeded()
+        Some(JobState::Completed(JobOutcome::ProviderPackage(Ok(
+            ProviderInstallOutcome::Executed { .. }
+        ))))
     ));
     assert!(matches!(
         report.get(&JobId::Package(identifier("manual-tool"))),
@@ -219,7 +221,7 @@ fn provider_failure_blocks_its_package_but_continues_unrelated_work() {
     assert!(report.link_phase_error().is_none());
     assert!(matches!(
         report.get(&JobId::Provider(identifier("ready"))),
-        Some(JobState::Completed(JobOutcome::Provider(status))) if !status.is_ready()
+        Some(JobState::Completed(JobOutcome::Provider(Err(_))))
     ));
     assert!(matches!(
         report.get(&JobId::Package(identifier("provider-tool"))),
@@ -244,6 +246,39 @@ fn provider_failure_blocks_its_package_but_continues_unrelated_work() {
         fs::canonicalize(workspace.path("linked.txt")).expect("link should resolve"),
         fs::canonicalize(source).expect("source should resolve")
     );
+}
+
+#[test]
+fn provider_package_failure_does_not_block_the_next_package_for_that_provider() {
+    let workspace = TempWorkspace::new();
+    let plan = plan_fixture(
+        &workspace,
+        "jobs/valid-provider-package-failure-continuation-template.toml",
+        &[("__PROBE__", helper_exec("probe"))],
+    );
+    let selected = plan
+        .select(&JobSelection::All)
+        .expect("all jobs should select");
+    let environment = ExecutionEnvironment::empty();
+
+    let report = JobRunner::new(&environment).run(&selected);
+
+    assert_eq!(
+        workspace.recorded_events(),
+        ["probe", "first-fail", "second-success"]
+    );
+    assert_eq!(report.len(), 3);
+    assert!(!report.all_succeeded());
+    assert!(matches!(
+        report.get(&JobId::Package(identifier("first-tool"))),
+        Some(JobState::Completed(JobOutcome::ProviderPackage(Err(_))))
+    ));
+    assert!(matches!(
+        report.get(&JobId::Package(identifier("second-tool"))),
+        Some(JobState::Completed(JobOutcome::ProviderPackage(Ok(
+            ProviderInstallOutcome::Executed { .. }
+        ))))
+    ));
 }
 
 #[test]
@@ -324,6 +359,42 @@ fn helper_process() {
         }
         unknown => panic!("unknown job helper mode: {unknown}"),
     }
+}
+
+#[test]
+fn provider_package_first_fails() {
+    let Some(events) = provider_package_events() else {
+        return;
+    };
+    assert_eq!(
+        env::var("DOT_JOB_PROVIDER_ACTIVE").as_deref(),
+        Ok("yes"),
+        "provider install should receive activation environment"
+    );
+    record(&events, "first-fail");
+    process::exit(1);
+}
+
+#[test]
+fn provider_package_second_succeeds() {
+    let Some(events) = provider_package_events() else {
+        return;
+    };
+    assert_eq!(
+        env::var("DOT_JOB_PROVIDER_ACTIVE").as_deref(),
+        Ok("yes"),
+        "provider install should receive activation environment"
+    );
+    record(&events, "second-success");
+}
+
+fn provider_package_events() -> Option<PathBuf> {
+    if env::var("DOT_JOB_PROVIDER_PACKAGE_HELPER").as_deref() != Ok("yes") {
+        return None;
+    }
+    Some(PathBuf::from(
+        env::var_os("DOT_JOB_EVENTS").expect("provider package event path should be present"),
+    ))
 }
 
 fn record(path: &Path, event: &str) {
