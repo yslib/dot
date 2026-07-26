@@ -5,8 +5,9 @@ use super::Selection;
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::dry_run::build_report;
 use crate::interpolation::{DotPaths, XdgPaths};
+use crate::job::JobSelection;
 use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlanner, PlanningError};
+use crate::plan::{ExecutionPlanner, JobSelectionError, PlanningError};
 use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
@@ -28,8 +29,9 @@ pub(super) fn run(
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
     let plan = planner.plan(&manifest)?;
+    let selected = plan.select(&JobSelection::All)?;
 
-    Ok(build_report(loaded.path(), &plan))
+    Ok(build_report(loaded.path(), &selected))
 }
 
 #[derive(Debug)]
@@ -37,6 +39,7 @@ pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
     Planning(PlanningError),
+    Selection(JobSelectionError),
 }
 
 impl fmt::Display for CommandError {
@@ -45,6 +48,7 @@ impl fmt::Display for CommandError {
             Self::Config(source) => source.fmt(formatter),
             Self::Manifest(source) => source.fmt(formatter),
             Self::Planning(source) => source.fmt(formatter),
+            Self::Selection(source) => source.fmt(formatter),
         }
     }
 }
@@ -55,6 +59,7 @@ impl Error for CommandError {
             Self::Config(source) => Some(source),
             Self::Manifest(source) => Some(source),
             Self::Planning(source) => Some(source),
+            Self::Selection(source) => Some(source),
         }
     }
 }
@@ -74,5 +79,11 @@ impl From<ManifestError> for CommandError {
 impl From<PlanningError> for CommandError {
     fn from(source: PlanningError) -> Self {
         Self::Planning(source)
+    }
+}
+
+impl From<JobSelectionError> for CommandError {
+    fn from(source: JobSelectionError) -> Self {
+        Self::Selection(source)
     }
 }

@@ -9,7 +9,7 @@ use crate::interpolation::{
     promote_provider_install_args, resolve_environment_patch, resolve_exec_action,
     resolve_literal_string, resolve_provider_install_action_with_args, resolve_string_expression,
 };
-use crate::job::JobId;
+use crate::job::{JobId, JobSelection, JobSelector};
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
@@ -40,6 +40,52 @@ impl ExecutionPlan {
 
     pub fn jobs(&self) -> &[PlannedJob] {
         &self.jobs
+    }
+
+    pub fn select(
+        &self,
+        selection: &JobSelection,
+    ) -> Result<SelectedExecutionPlan<'_>, JobSelectionError> {
+        let mut selected = BTreeSet::new();
+
+        match selection {
+            JobSelection::All => {
+                selected.extend(self.jobs.iter().map(PlannedJob::id));
+            }
+            JobSelection::Only(selectors) => {
+                for selector in selectors {
+                    let job = self
+                        .jobs
+                        .iter()
+                        .find(|job| job.matches_selector(selector))
+                        .ok_or_else(|| JobSelectionError::Unknown(selector.clone()))?;
+
+                    if let PlannedJob::Package(PlannedPackage::Provider(package)) = job {
+                        let provider = package.provider_id();
+                        if !self.jobs.iter().any(
+                            |job| matches!(job, PlannedJob::Provider(job) if job.id() == provider.as_str()),
+                        ) {
+                            let package_id = match package {
+                                PlannedProviderInstall::Single(package) => &package.id,
+                                PlannedProviderInstall::Batch(package) => &package.id,
+                            };
+                            return Err(JobSelectionError::MissingProvider {
+                                package: package_id.clone(),
+                                provider: provider.clone(),
+                            });
+                        }
+                        selected.insert(JobId::Provider(provider.clone()));
+                    }
+
+                    selected.insert(selector.job_id());
+                }
+            }
+        }
+
+        Ok(SelectedExecutionPlan {
+            source: self,
+            selected,
+        })
     }
 
     pub fn providers(&self) -> impl Iterator<Item = &PlannedProvider> {
@@ -79,6 +125,29 @@ impl ExecutionPlan {
 }
 
 #[derive(Debug)]
+pub struct SelectedExecutionPlan<'a> {
+    source: &'a ExecutionPlan,
+    selected: BTreeSet<JobId>,
+}
+
+impl SelectedExecutionPlan<'_> {
+    pub const fn source(&self) -> &ExecutionPlan {
+        self.source
+    }
+
+    pub fn jobs(&self) -> impl Iterator<Item = &PlannedJob> {
+        let all_selected = self.selected.len() == self.source.jobs().len();
+        self.source.jobs().iter().filter(move |job| {
+            all_selected
+                || self
+                    .selected
+                    .iter()
+                    .any(|selected| job.matches_id(selected))
+        })
+    }
+}
+
+#[derive(Debug)]
 pub enum PlannedJob {
     Provider(PlannedProvider),
     Package(PlannedPackage),
@@ -95,6 +164,25 @@ impl PlannedJob {
             Self::Link(link) => link.job_id(),
         }
     }
+
+    fn matches_id(&self, id: &JobId) -> bool {
+        match (self, id) {
+            (Self::Provider(provider), JobId::Provider(id)) => provider.id() == id.as_str(),
+            (Self::Package(package), JobId::Package(id)) => package.id() == id.as_str(),
+            (Self::Action(action), JobId::Action(id)) => action.id() == id.as_str(),
+            (Self::Link(link), JobId::Link(id)) => link.id() == id.as_str(),
+            _ => false,
+        }
+    }
+
+    fn matches_selector(&self, selector: &JobSelector) -> bool {
+        match (self, selector) {
+            (Self::Package(package), JobSelector::Package(id)) => package.id() == id.as_str(),
+            (Self::Action(action), JobSelector::Action(id)) => action.id() == id.as_str(),
+            (Self::Link(link), JobSelector::Link(id)) => link.id() == id.as_str(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -104,6 +192,13 @@ pub enum PlannedPackage {
 }
 
 impl PlannedPackage {
+    fn id(&self) -> &str {
+        match self {
+            Self::Provider(package) => package.id(),
+            Self::Manual(package) => package.id(),
+        }
+    }
+
     pub(crate) fn job_id(&self) -> JobId {
         match self {
             Self::Provider(package) => package.job_id(),
@@ -733,3 +828,34 @@ impl Error for PlanningError {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum JobSelectionError {
+    Unknown(JobSelector),
+    MissingProvider {
+        package: Identifier,
+        provider: Identifier,
+    },
+}
+
+impl fmt::Display for JobSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(JobSelector::Package(id)) => {
+                write!(formatter, "unknown package job `{id}`")
+            }
+            Self::Unknown(JobSelector::Action(id)) => {
+                write!(formatter, "unknown action job `{id}`")
+            }
+            Self::Unknown(JobSelector::Link(id)) => {
+                write!(formatter, "unknown link job `{id}`")
+            }
+            Self::MissingProvider { package, provider } => write!(
+                formatter,
+                "package job `{package}` references missing provider job `{provider}`"
+            ),
+        }
+    }
+}
+
+impl Error for JobSelectionError {}
