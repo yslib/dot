@@ -272,11 +272,15 @@ does not add a generic dependency container or a second task graph. Links use a
 phase method because duplicate-target validation must inspect the complete
 selected link set before mutation.
 
-A successful provider job produces an in-memory output containing its activated
-child environment. A dependent package receives that status directly from the
-runner's typed result map. This data exists only for the current invocation and
-is not persisted. `ProviderRunner::install` rejects a provider status whose
-provider ID differs from the install job's declared provider.
+A successful provider job produces an in-memory `ProviderStatus` containing its
+activated child environment. `JobRunner` keeps that status only in a typed
+transient dependency-output map for the current run, and dependent packages
+borrow it from there. `ProviderRunner::install` rejects a provider status whose
+provider ID differs from the install job's declared provider. After ordinary
+jobs and links finish, the runner consumes each status into its ID-free
+`Result<ProviderOutcome, ProviderError>` payload; the activated environment and
+the status's provider ID are dropped rather than persisted in the execution
+report.
 
 Provider and action runners continue to use the existing blocking
 `ProcessExecutor`. Link jobs continue to use Rust filesystem APIs.
@@ -303,8 +307,8 @@ enum JobState {
 }
 
 enum JobOutcome {
-    Provider(ProviderStatus),
-    ProviderPackage(ProviderInstallStatus),
+    Provider(Result<ProviderOutcome, ProviderError>),
+    ProviderPackage(Result<ProviderInstallOutcome, ProviderInstallError>),
     ManualPackage(Result<ActionOutcome, ActionRunError>),
     Action(Result<ActionOutcome, ActionRunError>),
     Link(Result<LinkOutcome, LinkError>),
@@ -376,8 +380,16 @@ struct JobExecutionReport {
 }
 ```
 
-The result map does not store a second copy of job order. Its key is the sole
-stored job identity; `JobState` does not repeat it.
+The result map does not store a second copy of job order. Its typed `JobId` key
+is the sole stored report identity; `JobState` stores only ID-free domain
+outcomes and does not repeat it. `ProviderStatus`, including the activated
+environment needed by provider-package jobs, is transient dependency output
+and is never stored in `JobExecutionReport`.
+
+Every result insertion enforces key uniqueness in debug and release builds.
+Before returning a report, `JobRunner` also verifies that the result count
+equals the selected-job count. A duplicate or incomplete report is an internal
+contract violation and fails fast.
 
 Because execution is serial, live child output remains naturally grouped by
 command. The final report retains the existing typed statuses such as READY,
@@ -415,7 +427,9 @@ Tests verify:
 4. Unknown selectors fail before execution.
 5. A provider failure blocks only its dependent packages.
 6. Package, action, and link failures do not stop later unrelated jobs.
-7. A failed package does not block the next package using the same provider.
+7. A real runner test proves that a failed package does not block the next
+   package using the same provider and that both installs receive the activated
+   provider environment.
 8. Provider output supplies the activated environment to its packages.
 9. Dry-run and apply consume the same selected job data.
 10. Report order is stable.

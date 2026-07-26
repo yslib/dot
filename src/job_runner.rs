@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
+use std::fmt::Debug;
 
 use crate::action::ExecutionEnvironment;
 use crate::action_runner::{ActionOutcome, ActionRunError};
@@ -6,7 +7,9 @@ use crate::job::JobId;
 use crate::job_executor::JobExecutor;
 use crate::link::{LinkError, LinkOutcome, LinkPhaseError};
 use crate::plan::{PlannedJob, PlannedPackage, SelectedExecutionPlan};
-use crate::provider::{ProviderInstallStatus, ProviderStatus};
+use crate::provider::{
+    ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStatus,
+};
 use crate::schema::Identifier;
 
 #[derive(Debug)]
@@ -17,8 +20,8 @@ pub enum BlockReason {
 
 #[derive(Debug)]
 pub enum JobOutcome {
-    Provider(ProviderStatus),
-    ProviderPackage(ProviderInstallStatus),
+    Provider(Result<ProviderOutcome, ProviderError>),
+    ProviderPackage(Result<ProviderInstallOutcome, ProviderInstallError>),
     ManualPackage(Result<ActionOutcome, ActionRunError>),
     Action(Result<ActionOutcome, ActionRunError>),
     Link(Result<LinkOutcome, LinkError>),
@@ -34,14 +37,37 @@ impl JobState {
     fn is_succeeded(&self) -> bool {
         match self {
             Self::Completed(outcome) => match outcome {
-                JobOutcome::Provider(status) => status.is_ready(),
-                JobOutcome::ProviderPackage(status) => status.is_succeeded(),
+                JobOutcome::Provider(outcome) => outcome.is_ok(),
+                JobOutcome::ProviderPackage(outcome) => {
+                    matches!(outcome, Ok(ProviderInstallOutcome::Executed { .. }))
+                }
                 JobOutcome::ManualPackage(outcome) | JobOutcome::Action(outcome) => outcome.is_ok(),
                 JobOutcome::Link(outcome) => outcome.is_ok(),
             },
             Self::Blocked(_) => false,
         }
     }
+}
+
+fn insert_unique_result<K, V>(results: &mut BTreeMap<K, V>, id: K, state: V)
+where
+    K: Debug + Ord,
+{
+    match results.entry(id) {
+        Entry::Vacant(entry) => {
+            entry.insert(state);
+        }
+        Entry::Occupied(entry) => {
+            panic!("duplicate job result for `{:?}`", entry.key());
+        }
+    }
+}
+
+fn assert_result_count(expected: usize, actual: usize) {
+    assert_eq!(
+        expected, actual,
+        "job result count mismatch: expected {expected} selected jobs, got {actual} results"
+    );
 }
 
 fn assert_link_projection(expected: &[&str], actual: &[&str]) {
@@ -102,24 +128,31 @@ impl<'a> JobRunner<'a> {
 
     pub fn run(&self, selected: &SelectedExecutionPlan<'_>) -> JobExecutionReport {
         let jobs = selected.jobs().collect::<Vec<_>>();
+        let expected_result_count = jobs.len();
         let mut results = BTreeMap::new();
+        let mut provider_outputs = BTreeMap::<JobId, ProviderStatus>::new();
         let mut links = Vec::new();
 
         for job in jobs {
             let job_id = job.id();
             let state = match job {
-                PlannedJob::Provider(provider) => Some(JobState::Completed(JobOutcome::Provider(
-                    self.executor.ensure_provider(provider),
-                ))),
+                PlannedJob::Provider(provider) => {
+                    insert_unique_result(
+                        &mut provider_outputs,
+                        job_id.clone(),
+                        self.executor.ensure_provider(provider),
+                    );
+                    None
+                }
                 PlannedJob::Package(PlannedPackage::Provider(package)) => {
                     let provider_id = package.provider_id().clone();
                     let provider_job_id = JobId::Provider(provider_id.clone());
-                    let state = match results.get(&provider_job_id) {
-                        Some(JobState::Completed(JobOutcome::Provider(status)))
-                            if status.is_ready() =>
-                        {
+                    let state = match provider_outputs.get(&provider_job_id) {
+                        Some(status) if status.is_ready() => {
                             JobState::Completed(JobOutcome::ProviderPackage(
-                                self.executor.install_provider_package(package, status),
+                                self.executor
+                                    .install_provider_package(package, status)
+                                    .into_outcome(),
                             ))
                         }
                         _ => JobState::Blocked(BlockReason::ProviderUnavailable {
@@ -141,8 +174,7 @@ impl<'a> JobRunner<'a> {
             };
 
             if let Some(state) = state {
-                let previous = results.insert(job_id, state);
-                debug_assert!(previous.is_none());
+                insert_unique_result(&mut results, job_id, state);
             }
         }
 
@@ -166,27 +198,38 @@ impl<'a> JobRunner<'a> {
                     let link_results = report.into_results();
                     for ((job_id, _), result) in links.into_iter().zip(link_results) {
                         let (_, outcome) = result.into_parts();
-                        let previous =
-                            results.insert(job_id, JobState::Completed(JobOutcome::Link(outcome)));
-                        debug_assert!(previous.is_none());
+                        insert_unique_result(
+                            &mut results,
+                            job_id,
+                            JobState::Completed(JobOutcome::Link(outcome)),
+                        );
                     }
                 }
                 Err(error) => {
                     let message = error.to_string();
                     for (job_id, _) in links {
-                        let previous = results.insert(
+                        insert_unique_result(
+                            &mut results,
                             job_id,
                             JobState::Blocked(BlockReason::LinkPhase {
                                 message: message.clone(),
                             }),
                         );
-                        debug_assert!(previous.is_none());
                     }
                     link_phase_error = Some(error);
                 }
             }
         }
 
+        for (job_id, status) in provider_outputs {
+            insert_unique_result(
+                &mut results,
+                job_id,
+                JobState::Completed(JobOutcome::Provider(status.into_outcome())),
+            );
+        }
+
+        assert_result_count(expected_result_count, results.len());
         JobExecutionReport {
             results,
             link_phase_error,
@@ -196,7 +239,9 @@ impl<'a> JobRunner<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::assert_link_projection;
+    use std::collections::BTreeMap;
+
+    use super::{assert_link_projection, assert_result_count, insert_unique_result};
 
     #[test]
     #[should_panic(expected = "link result count mismatch")]
@@ -208,5 +253,20 @@ mod tests {
     #[should_panic(expected = "link result identity mismatch at index 0")]
     fn link_projection_rejects_results_in_the_wrong_order() {
         assert_link_projection(&["first", "second"], &["second", "first"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate job result")]
+    fn unique_result_insertion_rejects_a_duplicate_key() {
+        let mut results = BTreeMap::new();
+
+        insert_unique_result(&mut results, "duplicate", 1);
+        insert_unique_result(&mut results, "duplicate", 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "job result count mismatch")]
+    fn result_count_rejects_an_incomplete_report() {
+        assert_result_count(2, 1);
     }
 }

@@ -859,3 +859,55 @@ impl fmt::Display for JobSelectionError {
 }
 
 impl Error for JobSelectionError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ExecutionPlan, JobSelectionError, PlannedJob, PlannedPackage, PlannedProviderInstall,
+        PlannedSingleProviderPackage,
+    };
+    use crate::job::{JobSelection, JobSelector};
+    use crate::platform::PlatformInfo;
+    use crate::schema::{Identifier, ResolvedExecAction};
+
+    fn identifier(value: &str) -> Identifier {
+        Identifier::new(value).expect("test identifier should be valid")
+    }
+
+    #[test]
+    fn exact_provider_package_reports_its_missing_provider_job() {
+        let package = identifier("orphan");
+        let provider = identifier("missing");
+        let plan = ExecutionPlan {
+            target: String::from("test"),
+            profile: None,
+            platform: PlatformInfo::detect(),
+            jobs: vec![PlannedJob::Package(PlannedPackage::Provider(
+                PlannedProviderInstall::Single(PlannedSingleProviderPackage {
+                    id: package.clone(),
+                    provider: provider.clone(),
+                    provider_args: Vec::new(),
+                    install: ResolvedExecAction {
+                        kind: None,
+                        program: "unused".into(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: None,
+                    },
+                }),
+            ))],
+        };
+
+        let error = plan
+            .select(&JobSelection::only(JobSelector::Package(package.clone())))
+            .expect_err("selection should reject the missing provider job");
+
+        assert!(matches!(
+            error,
+            JobSelectionError::MissingProvider {
+                package: actual_package,
+                provider: actual_provider,
+            } if actual_package == package && actual_provider == provider
+        ));
+    }
+}
