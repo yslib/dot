@@ -7,6 +7,7 @@ pub mod config;
 pub mod diagnostic;
 pub mod dry_run;
 pub mod interpolation;
+pub mod job;
 pub mod link;
 pub mod manifest;
 pub mod output;
