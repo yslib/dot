@@ -45,6 +45,16 @@ pub enum JobSelector {
     Link(Identifier),
 }
 
+impl JobSelector {
+    pub(crate) fn job_id(&self) -> JobId {
+        match self {
+            Self::Package(id) => JobId::Package(id.clone()),
+            Self::Action(id) => JobId::Action(id.clone()),
+            Self::Link(id) => JobId::Link(id.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobSelection {
     All,

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use dot::action::ExecutionEnvironment;
 use dot::dry_run;
 use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
-use dot::job::JobKind;
+use dot::job::{JobKind, JobSelection};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
@@ -365,8 +365,11 @@ fn projects_one_dry_run_item_per_provider_install_unit() {
     let platform = platform();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
     let plan = planner.plan(&manifest).expect("execution should plan");
+    let selected = plan
+        .select(&JobSelection::All)
+        .expect("all jobs should select");
 
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &selected);
 
     assert_eq!(report.items.len(), 4);
     assert_eq!(report.items[1].id, "alpha");
@@ -514,7 +517,10 @@ fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let plan = planner.plan(&manifest).expect("execution should plan");
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+    let selected = plan
+        .select(&JobSelection::All)
+        .expect("all jobs should select");
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &selected);
 
     assert_eq!(report.command, ReportCommand::DryRun);
     assert_eq!(report.status, ReportStatus::Planned);
