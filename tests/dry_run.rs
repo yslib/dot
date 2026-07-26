@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use dot::action::ExecutionEnvironment;
 use dot::dry_run;
 use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
+use dot::job::JobKind;
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
@@ -102,6 +103,34 @@ fn select_named_fixture(name: &str, target: &str, profile: Option<&str>) -> Effe
 }
 
 #[test]
+fn execution_plan_exposes_one_ordered_typed_job_sequence() {
+    let manifest = select_fixture("dry-run/valid-human-readable-plan.toml");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let platform = platform();
+    let plan = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform)
+        .plan(&manifest)
+        .expect("execution should plan");
+
+    let ids = plan
+        .jobs()
+        .iter()
+        .map(|job| (job.id().kind(), job.id().name().to_owned()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ids,
+        [
+            (JobKind::Provider, "system".into()),
+            (JobKind::Package, "alpha".into()),
+            (JobKind::Package, "manual".into()),
+            (JobKind::Action, "configure".into()),
+            (JobKind::Link, "gitconfig".into()),
+        ]
+    );
+}
+
+#[test]
 fn plans_only_selected_effective_records_and_defers_unused_provider_installs() {
     let manifest = select_named_fixture(
         "dry-run/valid-deferred-expression-errors.toml",
@@ -119,54 +148,46 @@ fn plans_only_selected_effective_records_and_defers_unused_provider_installs() {
 
     assert_eq!(plan.target(), "selected");
     assert_eq!(plan.profile(), Some("chosen"));
+    let providers = plan.providers().collect::<Vec<_>>();
     assert_eq!(
-        plan.providers()
+        providers
             .iter()
             .map(|provider| provider.id())
             .collect::<Vec<_>>(),
         ["shared", "unused-broken"]
     );
+    assert_eq!(providers[0].probe().program.value(), "selected-probe");
+    assert!(providers[0].activate().is_none());
+    assert!(providers[0].ensure().is_empty());
+    assert_eq!(providers[1].probe().program.value(), "unused-probe");
+    let provider_installs = plan.provider_installs().collect::<Vec<_>>();
     assert_eq!(
-        plan.providers()[0].probe().program.value(),
-        "selected-probe"
-    );
-    assert!(plan.providers()[0].activate().is_none());
-    assert!(plan.providers()[0].ensure().is_empty());
-    assert_eq!(plan.providers()[1].probe().program.value(), "unused-probe");
-    assert_eq!(
-        plan.provider_installs()
+        provider_installs
             .iter()
-            .map(PlannedProviderInstall::id)
+            .map(|install| install.id())
             .collect::<Vec<_>>(),
         ["shared-package"]
     );
     assert_eq!(
-        plan.provider_installs()[0].install().program.value(),
+        provider_installs[0].install().program.value(),
         "selected-install"
     );
-    assert!(plan.manual_packages().is_empty());
+    assert!(plan.manual_packages().next().is_none());
+    let actions = plan.actions().collect::<Vec<_>>();
     assert_eq!(
-        plan.actions()
-            .iter()
-            .map(|action| action.id())
-            .collect::<Vec<_>>(),
+        actions.iter().map(|action| action.id()).collect::<Vec<_>>(),
         ["shared-action"]
     );
+    assert_eq!(actions[0].action().exec.program.value(), "selected-action");
+    assert!(actions[0].action().check.is_none());
+    let links = plan.links().collect::<Vec<_>>();
     assert_eq!(
-        plan.actions()[0].action().exec.program.value(),
-        "selected-action"
-    );
-    assert!(plan.actions()[0].action().check.is_none());
-    assert_eq!(
-        plan.links()
-            .iter()
-            .map(|link| link.id())
-            .collect::<Vec<_>>(),
+        links.iter().map(|link| link.id()).collect::<Vec<_>>(),
         ["shared-link"]
     );
-    assert_eq!(plan.links()[0].source(), config_path("selected-source"));
+    assert_eq!(links[0].source(), config_path("selected-source"));
     assert_eq!(
-        plan.links()[0].target(),
+        links[0].target(),
         Path::new(&format!("{TEST_HOME}/selected-target"))
     );
 }
@@ -277,22 +298,24 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
 
     let plan = planner.plan(&manifest).expect("execution should plan");
 
-    assert_eq!(plan.providers().len(), 1);
-    assert_eq!(plan.providers()[0].id(), "brew");
+    let providers = plan.providers().collect::<Vec<_>>();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].id(), "brew");
     assert_eq!(
-        plan.providers()[0].probe().program.value(),
+        providers[0].probe().program.value(),
         "/opt/homebrew/bin/brew"
     );
-    assert_eq!(plan.providers()[0].ensure().len(), 1);
+    assert_eq!(providers[0].ensure().len(), 1);
 
-    assert_eq!(plan.provider_installs().len(), 3);
+    let provider_installs = plan.provider_installs().collect::<Vec<_>>();
+    assert_eq!(provider_installs.len(), 3);
 
-    let alpha = &plan.provider_installs()[0];
+    let alpha = provider_installs[0];
     assert!(matches!(alpha, PlannedProviderInstall::Single(_)));
     assert_eq!(alpha.id(), "alpha");
     assert_eq!(alpha.provider(), "brew");
     assert_eq!(alpha.provider_args(), &[] as &[String]);
-    assert_eq!(alpha.names(), &[String::from("alpha")]);
+    assert_eq!(alpha.names().collect::<Vec<_>>(), ["alpha"]);
     assert_eq!(
         alpha
             .install()
@@ -303,10 +326,10 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
         vec!["before", "middle", "alpha", "after"]
     );
 
-    let beta = &plan.provider_installs()[1];
+    let beta = provider_installs[1];
     assert!(matches!(beta, PlannedProviderInstall::Single(_)));
     assert_eq!(beta.id(), "beta");
-    assert_eq!(beta.names(), &[String::from("beta")]);
+    assert_eq!(beta.names().collect::<Vec<_>>(), ["beta"]);
     assert_eq!(
         beta.install()
             .args
@@ -316,14 +339,11 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
         vec!["before", "middle", "beta", "after"]
     );
 
-    let fonts = &plan.provider_installs()[2];
+    let fonts = provider_installs[2];
     assert!(matches!(fonts, PlannedProviderInstall::Batch(_)));
     assert_eq!(fonts.id(), "fonts");
     assert_eq!(fonts.provider_args(), &[String::from("--cask")]);
-    assert_eq!(
-        fonts.names(),
-        &[String::from("font-one"), "font-two".into()]
-    );
+    assert_eq!(fonts.names().collect::<Vec<_>>(), ["font-one", "font-two"]);
     assert_eq!(
         fonts
             .install()
@@ -452,10 +472,11 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
 
     let plan = planner.plan(&manifest).expect("execution should plan");
 
-    assert_eq!(plan.manual_packages().len(), 1);
-    assert_eq!(plan.manual_packages()[0].id(), "manual-tool");
+    let manual_packages = plan.manual_packages().collect::<Vec<_>>();
+    assert_eq!(manual_packages.len(), 1);
+    assert_eq!(manual_packages[0].id(), "manual-tool");
     assert_eq!(
-        plan.manual_packages()[0]
+        manual_packages[0]
             .install()
             .check
             .as_ref()
@@ -464,20 +485,19 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
             .value(),
         "/opt/bin/manual-tool"
     );
-    assert_eq!(
-        plan.manual_packages()[0].install().exec.program.value(),
-        "bash"
-    );
+    assert_eq!(manual_packages[0].install().exec.program.value(), "bash");
 
-    assert_eq!(plan.actions().len(), 1);
-    assert_eq!(plan.actions()[0].id(), "configure");
+    let actions = plan.actions().collect::<Vec<_>>();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id(), "configure");
     assert_eq!(
-        plan.actions()[0].action().exec.args[0].value(),
+        actions[0].action().exec.args[0].value(),
         config_template_path("scripts/configure.sh")
     );
 
-    assert_eq!(plan.links().len(), 1);
-    let link = &plan.links()[0];
+    let links = plan.links().collect::<Vec<_>>();
+    assert_eq!(links.len(), 1);
+    let link = links[0];
     assert_eq!(link.id(), "gitconfig");
     assert_eq!(link.source(), config_path("home/.gitconfig"));
     assert_eq!(link.target(), gitconfig_target());

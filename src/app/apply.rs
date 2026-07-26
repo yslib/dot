@@ -47,7 +47,6 @@ fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyRes
     let action_runner = ActionRunner::new(environment);
     let manual_packages = plan
         .manual_packages()
-        .iter()
         .map(|package| NamedActionResult {
             id: package.id().to_owned(),
             outcome: action_runner.run(package.install()),
@@ -55,7 +54,6 @@ fn execute(plan: &ExecutionPlan, environment: &ExecutionEnvironment) -> ApplyRes
         .collect();
     let actions = plan
         .actions()
-        .iter()
         .map(|action| NamedActionResult {
             id: action.id().to_owned(),
             outcome: action_runner.run(action.action()),
@@ -130,7 +128,6 @@ fn build_report(config: &Path, plan: &ExecutionPlan, result: &ApplyResult) -> Co
 
 fn provider_items(plan: &ExecutionPlan, readiness: &ProviderReadiness) -> Vec<ReportItem> {
     plan.providers()
-        .iter()
         .map(|provider| {
             let result = readiness
                 .get(provider.id())
@@ -181,7 +178,6 @@ fn provider_package_items(
     execution: &ProviderInstallExecution,
 ) -> Vec<ReportItem> {
     plan.provider_installs()
-        .iter()
         .zip(execution.statuses())
         .map(|(install, result)| {
             debug_assert_eq!(install.id(), result.id());
@@ -213,7 +209,7 @@ fn provider_package_items(
                 },
                 PlannedProviderInstall::Batch(_) => ProviderPackageSource::Batch {
                     provider: install.provider().to_owned(),
-                    names: install.names().to_owned(),
+                    names: install.names().map(str::to_owned).collect(),
                     provider_args: install.provider_args().to_owned(),
                 },
             };
@@ -236,7 +232,6 @@ fn action_items(
 ) -> Vec<ReportItem> {
     let mut items = plan
         .manual_packages()
-        .iter()
         .zip(manual_results)
         .map(|(package, result)| {
             debug_assert_eq!(package.id(), result.id);
@@ -253,23 +248,18 @@ fn action_items(
             }
         })
         .collect::<Vec<_>>();
-    items.extend(
-        plan.actions()
-            .iter()
-            .zip(action_results)
-            .map(|(action, result)| {
-                debug_assert_eq!(action.id(), result.id);
-                let (status, evidence) = action_result(&result.outcome, ItemStatus::Executed);
-                ReportItem {
-                    id: action.id().to_owned(),
-                    status,
-                    subject: ReportSubject::Action(ActionItem {
-                        action: ActionInfo::from_resolved(action.action()),
-                    }),
-                    evidence,
-                }
+    items.extend(plan.actions().zip(action_results).map(|(action, result)| {
+        debug_assert_eq!(action.id(), result.id);
+        let (status, evidence) = action_result(&result.outcome, ItemStatus::Executed);
+        ReportItem {
+            id: action.id().to_owned(),
+            status,
+            subject: ReportSubject::Action(ActionItem {
+                action: ActionInfo::from_resolved(action.action()),
             }),
-    );
+            evidence,
+        }
+    }));
     items
 }
 
@@ -319,7 +309,6 @@ fn link_items(
     match result {
         Ok(report) => (
             plan.links()
-                .iter()
                 .zip(report.results())
                 .map(|(link, result)| {
                     debug_assert_eq!(link.id(), result.id());
@@ -348,7 +337,6 @@ fn link_items(
             let message = error.to_string();
             (
                 plan.links()
-                    .iter()
                     .map(|link| {
                         report_link_item(
                             link,

@@ -145,9 +145,12 @@ impl<'a> ProviderRunner<'a> {
         Self { base_environment }
     }
 
-    pub fn ensure_all(&self, providers: &[PlannedProvider]) -> ProviderReadiness {
+    pub fn ensure_all<'p>(
+        &self,
+        providers: impl IntoIterator<Item = &'p PlannedProvider>,
+    ) -> ProviderReadiness {
         let statuses = providers
-            .iter()
+            .into_iter()
             .map(|provider| {
                 let (environment, outcome) = match self.ensure_one(provider) {
                     Ok((environment, outcome)) => (Some(environment), Ok(outcome)),
@@ -163,16 +166,16 @@ impl<'a> ProviderRunner<'a> {
         ProviderReadiness { statuses }
     }
 
-    pub fn install_all(
+    pub fn install_all<'p>(
         &self,
-        installs: &[PlannedProviderInstall],
+        installs: impl IntoIterator<Item = &'p PlannedProviderInstall>,
         readiness: &ProviderReadiness,
     ) -> ProviderInstallExecution {
         let statuses = installs
-            .iter()
+            .into_iter()
             .map(|install| {
                 let outcome = match readiness
-                    .get(install.provider())
+                    .get(install.provider_id().as_str())
                     .and_then(ProviderStatus::environment)
                 {
                     Some(environment) => self.install_one(install, environment),

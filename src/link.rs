@@ -48,7 +48,10 @@ impl LinkReport {
     }
 }
 
-pub fn reconcile(links: &[PlannedLink]) -> Result<LinkReport, LinkPhaseError> {
+pub fn reconcile<'a>(
+    links: impl IntoIterator<Item = &'a PlannedLink>,
+) -> Result<LinkReport, LinkPhaseError> {
+    let links = links.into_iter().collect::<Vec<_>>();
     let targets = links
         .iter()
         .map(|link| {

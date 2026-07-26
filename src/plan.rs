@@ -9,11 +9,12 @@ use crate::interpolation::{
     promote_provider_install_args, resolve_environment_patch, resolve_exec_action,
     resolve_literal_string, resolve_provider_install_action_with_args, resolve_string_expression,
 };
+use crate::job::JobId;
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    FlatListPart, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage,
-    ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
+    FlatListPart, Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider,
+    ProviderPackage, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
 };
 
 #[derive(Debug)]
@@ -21,11 +22,7 @@ pub struct ExecutionPlan {
     target: String,
     profile: Option<String>,
     platform: PlatformInfo,
-    providers: Vec<PlannedProvider>,
-    provider_installs: Vec<PlannedProviderInstall>,
-    manual_packages: Vec<PlannedManualPackage>,
-    actions: Vec<PlannedAction>,
-    links: Vec<PlannedLink>,
+    jobs: Vec<PlannedJob>,
 }
 
 impl ExecutionPlan {
@@ -41,30 +38,83 @@ impl ExecutionPlan {
         &self.platform
     }
 
-    pub fn providers(&self) -> &[PlannedProvider] {
-        &self.providers
+    pub fn jobs(&self) -> &[PlannedJob] {
+        &self.jobs
     }
 
-    pub fn provider_installs(&self) -> &[PlannedProviderInstall] {
-        &self.provider_installs
+    pub fn providers(&self) -> impl Iterator<Item = &PlannedProvider> {
+        self.jobs.iter().filter_map(|job| match job {
+            PlannedJob::Provider(provider) => Some(provider),
+            _ => None,
+        })
     }
 
-    pub fn manual_packages(&self) -> &[PlannedManualPackage] {
-        &self.manual_packages
+    pub fn provider_installs(&self) -> impl Iterator<Item = &PlannedProviderInstall> {
+        self.jobs.iter().filter_map(|job| match job {
+            PlannedJob::Package(PlannedPackage::Provider(package)) => Some(package),
+            _ => None,
+        })
     }
 
-    pub fn actions(&self) -> &[PlannedAction] {
-        &self.actions
+    pub fn manual_packages(&self) -> impl Iterator<Item = &PlannedManualPackage> {
+        self.jobs.iter().filter_map(|job| match job {
+            PlannedJob::Package(PlannedPackage::Manual(package)) => Some(package),
+            _ => None,
+        })
     }
 
-    pub fn links(&self) -> &[PlannedLink] {
-        &self.links
+    pub fn actions(&self) -> impl Iterator<Item = &PlannedAction> {
+        self.jobs.iter().filter_map(|job| match job {
+            PlannedJob::Action(action) => Some(action),
+            _ => None,
+        })
+    }
+
+    pub fn links(&self) -> impl Iterator<Item = &PlannedLink> {
+        self.jobs.iter().filter_map(|job| match job {
+            PlannedJob::Link(link) => Some(link),
+            _ => None,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum PlannedJob {
+    Provider(PlannedProvider),
+    Package(PlannedPackage),
+    Action(PlannedAction),
+    Link(PlannedLink),
+}
+
+impl PlannedJob {
+    pub fn id(&self) -> JobId {
+        match self {
+            Self::Provider(provider) => provider.job_id(),
+            Self::Package(package) => package.job_id(),
+            Self::Action(action) => action.job_id(),
+            Self::Link(link) => link.job_id(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum PlannedPackage {
+    Provider(PlannedProviderInstall),
+    Manual(PlannedManualPackage),
+}
+
+impl PlannedPackage {
+    pub(crate) fn job_id(&self) -> JobId {
+        match self {
+            Self::Provider(package) => package.job_id(),
+            Self::Manual(package) => package.job_id(),
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct PlannedProvider {
-    id: String,
+    id: Identifier,
     activate: Option<ResolvedEnvironmentPatch>,
     probe: ResolvedExecAction,
     ensure: Vec<ResolvedExecAction>,
@@ -72,7 +122,11 @@ pub struct PlannedProvider {
 
 impl PlannedProvider {
     pub fn id(&self) -> &str {
-        &self.id
+        self.id.as_str()
+    }
+
+    pub(crate) fn job_id(&self) -> JobId {
+        JobId::Provider(self.id.clone())
     }
 
     pub fn activate(&self) -> Option<&ResolvedEnvironmentPatch> {
@@ -97,12 +151,26 @@ pub enum PlannedProviderInstall {
 impl PlannedProviderInstall {
     pub fn id(&self) -> &str {
         match self {
-            Self::Single(package) => &package.id,
-            Self::Batch(package) => &package.id,
+            Self::Single(package) => package.id.as_str(),
+            Self::Batch(package) => package.id.as_str(),
         }
     }
 
     pub fn provider(&self) -> &str {
+        match self {
+            Self::Single(package) => package.provider.as_str(),
+            Self::Batch(package) => package.provider.as_str(),
+        }
+    }
+
+    pub(crate) fn job_id(&self) -> JobId {
+        match self {
+            Self::Single(package) => JobId::Package(package.id.clone()),
+            Self::Batch(package) => JobId::Package(package.id.clone()),
+        }
+    }
+
+    pub(crate) fn provider_id(&self) -> &Identifier {
         match self {
             Self::Single(package) => &package.provider,
             Self::Batch(package) => &package.provider,
@@ -116,11 +184,12 @@ impl PlannedProviderInstall {
         }
     }
 
-    pub fn names(&self) -> &[String] {
-        match self {
-            Self::Single(package) => std::slice::from_ref(&package.id),
-            Self::Batch(package) => &package.names,
-        }
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        let (single, batch): (Option<&str>, &[String]) = match self {
+            Self::Single(package) => (Some(package.id.as_str()), &[]),
+            Self::Batch(package) => (None, &package.names),
+        };
+        single.into_iter().chain(batch.iter().map(String::as_str))
     }
 
     pub fn install(&self) -> &ResolvedExecAction {
@@ -133,16 +202,16 @@ impl PlannedProviderInstall {
 
 #[derive(Debug)]
 pub struct PlannedSingleProviderPackage {
-    id: String,
-    provider: String,
+    id: Identifier,
+    provider: Identifier,
     provider_args: Vec<String>,
     install: ResolvedExecAction,
 }
 
 #[derive(Debug)]
 pub struct PlannedProviderPackageBatch {
-    id: String,
-    provider: String,
+    id: Identifier,
+    provider: Identifier,
     provider_args: Vec<String>,
     names: Vec<String>,
     install: ResolvedExecAction,
@@ -150,13 +219,17 @@ pub struct PlannedProviderPackageBatch {
 
 #[derive(Debug)]
 pub struct PlannedManualPackage {
-    id: String,
+    id: Identifier,
     install: ResolvedAction,
 }
 
 impl PlannedManualPackage {
     pub fn id(&self) -> &str {
-        &self.id
+        self.id.as_str()
+    }
+
+    pub(crate) fn job_id(&self) -> JobId {
+        JobId::Package(self.id.clone())
     }
 
     pub fn install(&self) -> &ResolvedAction {
@@ -166,13 +239,17 @@ impl PlannedManualPackage {
 
 #[derive(Debug)]
 pub struct PlannedAction {
-    id: String,
+    id: Identifier,
     action: ResolvedAction,
 }
 
 impl PlannedAction {
     pub fn id(&self) -> &str {
-        &self.id
+        self.id.as_str()
+    }
+
+    pub(crate) fn job_id(&self) -> JobId {
+        JobId::Action(self.id.clone())
     }
 
     pub fn action(&self) -> &ResolvedAction {
@@ -182,7 +259,7 @@ impl PlannedAction {
 
 #[derive(Debug)]
 pub struct PlannedLink {
-    id: String,
+    id: Identifier,
     source: PathBuf,
     target: PathBuf,
     on_conflict: LinkConflict,
@@ -191,7 +268,11 @@ pub struct PlannedLink {
 
 impl PlannedLink {
     pub fn id(&self) -> &str {
-        &self.id
+        self.id.as_str()
+    }
+
+    pub(crate) fn job_id(&self) -> JobId {
+        JobId::Link(self.id.clone())
     }
 
     pub fn source(&self) -> &Path {
@@ -241,15 +322,28 @@ impl<'a> ExecutionPlanner<'a> {
         let actions = self.plan_actions(manifest)?;
         let links = self.plan_links(manifest)?;
 
+        let mut jobs = Vec::new();
+        jobs.extend(providers.into_iter().map(PlannedJob::Provider));
+        jobs.extend(
+            provider_installs
+                .into_iter()
+                .map(PlannedPackage::Provider)
+                .map(PlannedJob::Package),
+        );
+        jobs.extend(
+            manual_packages
+                .into_iter()
+                .map(PlannedPackage::Manual)
+                .map(PlannedJob::Package),
+        );
+        jobs.extend(actions.into_iter().map(PlannedJob::Action));
+        jobs.extend(links.into_iter().map(PlannedJob::Link));
+
         Ok(ExecutionPlan {
             target: manifest.target().to_owned(),
             profile: manifest.profile().map(str::to_owned),
             platform: self.platform.clone(),
-            providers,
-            provider_installs,
-            manual_packages,
-            actions,
-            links,
+            jobs,
         })
     }
 
@@ -299,7 +393,7 @@ impl<'a> ExecutionPlanner<'a> {
 
             environments.insert(provider_id.to_string(), environment);
             plans.push(PlannedProvider {
-                id: provider_id.to_string(),
+                id: provider_id.clone(),
                 activate,
                 probe,
                 ensure,
@@ -323,14 +417,16 @@ impl<'a> ExecutionPlanner<'a> {
                 };
 
                 Some((|| {
-                    let provider_id = package.provider().as_str();
-                    let provider = manifest.providers().get(provider_id).ok_or_else(|| {
-                        PlanningError::UnknownProvider {
-                            package: package_id.to_string(),
-                            provider: provider_id.to_owned(),
-                        }
-                    })?;
-                    let environment = &environments[provider_id];
+                    let provider_id = package.provider();
+                    let provider =
+                        manifest
+                            .providers()
+                            .get(provider_id.as_str())
+                            .ok_or_else(|| PlanningError::UnknownProvider {
+                                package: package_id.to_string(),
+                                provider: provider_id.to_string(),
+                            })?;
+                    let environment = &environments[provider_id.as_str()];
                     let provider_args = package
                         .provider_args()
                         .unwrap_or_default()
@@ -385,7 +481,7 @@ impl<'a> ExecutionPlanner<'a> {
                             .count();
                         if resolver_count != 1 {
                             return Err(PlanningError::ProviderArgsResolverCount {
-                                provider: provider_id.to_owned(),
+                                provider: provider_id.to_string(),
                                 actual: resolver_count,
                             });
                         }
@@ -410,16 +506,16 @@ impl<'a> ExecutionPlanner<'a> {
                     Ok(match package {
                         ProviderPackage::Single(_) => {
                             PlannedProviderInstall::Single(PlannedSingleProviderPackage {
-                                id: package_id.to_string(),
-                                provider: provider_id.to_owned(),
+                                id: package_id.clone(),
+                                provider: provider_id.clone(),
                                 provider_args,
                                 install,
                             })
                         }
                         ProviderPackage::Batch(_) => {
                             PlannedProviderInstall::Batch(PlannedProviderPackageBatch {
-                                id: package_id.to_string(),
-                                provider: provider_id.to_owned(),
+                                id: package_id.clone(),
+                                provider: provider_id.clone(),
                                 provider_args,
                                 names,
                                 install,
@@ -446,7 +542,7 @@ impl<'a> ExecutionPlanner<'a> {
                 Some(
                     resolve_action(&package.install, &context)
                         .map(|install| PlannedManualPackage {
-                            id: package_id.to_string(),
+                            id: package_id.clone(),
                             install,
                         })
                         .map_err(|source| PlanningError::Interpolation {
@@ -469,7 +565,7 @@ impl<'a> ExecutionPlanner<'a> {
             .map(|(action_id, action)| {
                 resolve_action(action, &context)
                     .map(|action| PlannedAction {
-                        id: action_id.to_string(),
+                        id: action_id.clone(),
                         action,
                     })
                     .map_err(|source| PlanningError::Interpolation {
@@ -513,7 +609,7 @@ impl<'a> ExecutionPlanner<'a> {
                 }
 
                 Ok(PlannedLink {
-                    id: link_id.to_string(),
+                    id: link_id.clone(),
                     source,
                     target,
                     on_conflict: link.on_conflict.unwrap_or(LinkConflict::ReplaceLink),
