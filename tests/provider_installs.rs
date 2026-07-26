@@ -99,12 +99,21 @@ where
 }
 
 fn provider(state: &TempState, probe_mode: &str, install_mode: &str) -> Provider {
+    provider_with_activation(state, probe_mode, install_mode, "yes")
+}
+
+fn provider_with_activation(
+    state: &TempState,
+    probe_mode: &str,
+    install_mode: &str,
+    active: &str,
+) -> Provider {
     Provider {
         probe: helper_action::<StringExpressionSource>(probe_mode, state),
         activate: Some(EnvironmentPatch {
             path_prepend: None,
             path_append: None,
-            variables: variables(&[("DOT_PROVIDER_BATCH_ACTIVE", "yes".to_owned())]),
+            variables: variables(&[("DOT_PROVIDER_BATCH_ACTIVE", active.to_owned())]),
         }),
         ensure: None,
         install: helper_action::<ProviderInstallArgSource>(install_mode, state),
@@ -189,6 +198,96 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) ->
     )
     .plan(&manifest)
     .expect("provider install plan should build")
+}
+
+#[test]
+fn install_uses_the_environment_from_one_ready_provider_status() {
+    let state = TempState::new();
+    let plan = plan_for(
+        vec![("ready", provider(&state, "probe-ready", "install-ready"))],
+        vec![TestPackage::Single {
+            id: "tool",
+            provider: "ready",
+        }],
+    );
+    let provider = plan
+        .providers()
+        .next()
+        .expect("planned provider should exist");
+    let install = plan
+        .provider_installs()
+        .next()
+        .expect("planned provider install should exist");
+    let environment = ExecutionEnvironment::empty();
+    let runner = ProviderRunner::new(&environment);
+    let readiness = runner.ensure(provider);
+
+    let status = runner.install(install, &readiness);
+
+    assert_eq!(status.id(), install.id());
+    assert!(status.is_succeeded());
+    assert_eq!(state.recorded_events(), ["probe", "install-ready"]);
+}
+
+#[test]
+fn install_rejects_a_status_from_a_different_provider_before_execution() {
+    let provider_a = TempState::new();
+    let provider_b = TempState::new();
+    let plan = plan_for(
+        vec![
+            (
+                "provider-a",
+                provider_with_activation(
+                    &provider_a,
+                    "probe-provider-a",
+                    "install-provider-a",
+                    "provider-a",
+                ),
+            ),
+            (
+                "provider-b",
+                provider_with_activation(
+                    &provider_b,
+                    "probe-provider-b",
+                    "install-unexpected",
+                    "provider-b",
+                ),
+            ),
+        ],
+        vec![TestPackage::Single {
+            id: "tool",
+            provider: "provider-a",
+        }],
+    );
+    let planned_provider_a = plan
+        .providers()
+        .find(|provider| provider.id() == "provider-a")
+        .expect("provider A should exist");
+    let planned_provider_b = plan
+        .providers()
+        .find(|provider| provider.id() == "provider-b")
+        .expect("provider B should exist");
+    let install = plan
+        .provider_installs()
+        .next()
+        .expect("provider A install should exist");
+    let environment = ExecutionEnvironment::empty();
+    let runner = ProviderRunner::new(&environment);
+    let readiness_a = runner.ensure(planned_provider_a);
+    let readiness_b = runner.ensure(planned_provider_b);
+    assert!(readiness_a.is_ready());
+    assert!(readiness_b.is_ready());
+
+    let status = runner.install(install, &readiness_b);
+
+    assert_eq!(status.id(), install.id());
+    assert!(matches!(
+        status.error(),
+        Some(ProviderInstallError::ProviderMismatch { expected, actual })
+            if expected == "provider-a" && actual == "provider-b"
+    ));
+    assert_eq!(provider_a.recorded_events(), ["probe-provider-a"]);
+    assert_eq!(provider_b.recorded_events(), ["probe-provider-b"]);
 }
 
 #[test]
@@ -332,22 +431,33 @@ fn helper_process() {
     let Ok(mode) = env::var("DOT_PROVIDER_BATCH_MODE") else {
         return;
     };
-    assert_eq!(
-        env::var("DOT_PROVIDER_BATCH_ACTIVE").as_deref(),
-        Ok("yes"),
-        "provider activate should be present during probe and install"
-    );
     let events = PathBuf::from(
         env::var_os("DOT_PROVIDER_BATCH_EVENTS").expect("provider events path should be set"),
+    );
+    if mode == "install-provider-a" {
+        record(&events, "install-provider-a-started");
+    }
+    let expected_active = match mode.as_str() {
+        "probe-provider-a" | "install-provider-a" => "provider-a",
+        "probe-provider-b" => "provider-b",
+        _ => "yes",
+    };
+    assert_eq!(
+        env::var("DOT_PROVIDER_BATCH_ACTIVE").as_deref(),
+        Ok(expected_active),
+        "provider activate should be present during probe and install"
     );
 
     match mode.as_str() {
         "probe-ready" => record(&events, "probe"),
+        "probe-provider-a" => record(&events, "probe-provider-a"),
+        "probe-provider-b" => record(&events, "probe-provider-b"),
         "probe-missing" => {
             record(&events, "probe-missing");
             process::exit(1);
         }
         "install-ready" => record(&events, "install-ready"),
+        "install-provider-a" => record(&events, "install-provider-a"),
         "install-fail" => {
             record(&events, "install-fail");
             process::exit(23);
