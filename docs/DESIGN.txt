@@ -213,9 +213,12 @@ resolved only from the final effective provider map.
 
 A profile may add or completely replace a provider. This allows a specialized
 profile to introduce a capability without making it part of sibling profiles.
-Every effective provider is eagerly activated, probed, and ensured before any
-provider package install unit is executed, even when that provider has no
-packages. Provider install is never called with an empty names list.
+Every selected provider is eagerly activated, probed, and ensured before any
+selected provider-package install unit is executed. The current full apply uses
+JobSelection::All, so it selects every effective provider, including providers
+with no packages. An exact selection includes a provider only when it is
+required by a selected provider-backed package. Provider install is never
+called with an empty names list.
 
 
 ### provider lifecycle
@@ -371,10 +374,12 @@ Path identity is based on normalized native paths rather than raw strings:
   parent;
 - Windows separator and case equivalence are respected.
 
-All effective link paths are resolved before link mutation starts. Two links
-that resolve to the same target are a declaration conflict and prevent the
-link phase from starting. Other link failures are isolated but contribute to
-the final non-zero result.
+All selected link paths are resolved before link mutation starts. Two selected
+links that resolve to the same target are a declaration conflict and prevent
+the selected link phase from starting. A phase error reports every selected
+link as blocked. Other per-link failures are isolated, do not prevent later
+links from being reconciled, and contribute to the final non-zero result. Link
+reconciliation uses Rust filesystem APIs rather than child commands.
 
 The filesystem is authoritative. dot stores no persistent link state. Removing
 a link declaration does not remove an existing link. v0.0.1 has no unlink,
@@ -473,29 +478,38 @@ no implicit meaning, and resolved values are never reinterpreted by a shell.
 
 ### execution plan and dry-run
 
-After target and profile selection, dot resolves the effective manifest into
-one internal ExecutionPlan. The plan is the single source of truth shared by
-real execution and dry-run. It contains the resolved providers,
-strongly typed provider-package install units, manual packages, global actions,
-and links needed by the executor. There is no separate DryRunPlan. The plan
-preserves the single-versus-batch distinction instead of immediately reducing
-both forms to an untyped name list.
+After target and profile selection, manifest merging, validation, and
+interpolation, dot constructs one internal ExecutionPlan. Its sole job storage
+is one stable ordered sequence of typed Provider, Package, Action, and Link
+jobs. Phase-specific accessors are projections over that sequence, not parallel
+aggregate storage. The plan is the single source of truth shared by real
+execution and dry-run. There is no separate DryRunPlan. Provider-backed package
+jobs preserve the single-versus-batch distinction instead of immediately
+reducing both forms to an untyped name list.
 
 ExecutionPlan is an internal Rust data model, not a serialized configuration
 format or public compatibility boundary. Runtime observations such as probe or
 check results, provider readiness, and filesystem state are execution state and
 are not stored in the plan.
 
-Dry-run projects the ExecutionPlan into a presentation-independent
+A SelectedExecutionPlan is a view over its source ExecutionPlan and retains the
+source job facts and order rather than copying or re-resolving them. Current
+dry-run and apply both construct JobSelection::All. The internal selection
+model also supports exact package, action, and link selections for future use.
+An exact provider-backed package selection adds only its required provider; it
+does not add other packages using that provider.
+
+Dry-run projects the selected job facts into a presentation-independent
 CommandReport. This is a report view, not another executable plan: it may omit,
 regroup, or explain plan fields according to dry-run's human-facing purpose.
-Real execution interprets the same plan, records runtime outcomes, and then
-builds an apply CommandReport from the plan and those outcomes.
+Apply passes the same selected view to JobRunner, records runtime outcomes, and
+then builds its CommandReport from those selected facts and outcomes.
 
 Dry-run selects and validates exactly the same effective manifest used by real
-execution, constructs the same ExecutionPlan, then renders it without invoking
-the executor. This is a permanent command contract: --dry-run never executes
-an exec_action and never reconciles or inspects runtime resource state.
+execution, constructs the same ExecutionPlan and All-selected view, then renders
+it without invoking JobRunner. This is a permanent command contract: --dry-run
+never executes an exec_action and never reconciles or inspects runtime resource
+state.
 
 For an invocation conceptually equivalent to:
 
@@ -512,8 +526,9 @@ dry-run performs only these operations:
 7. Resolve each provider package declaration as one install unit without
    regrouping separate declarations, resolve non-executing interpolation, and
    construct the internal ExecutionPlan.
-8. Project that plan into one logical report item per provider, provider-package
-   install unit, manual package, global action, and link, then render the report.
+8. Select all planned jobs, project that view into one logical report item per
+   provider, provider-package install unit, manual package, global action, and
+   link, then render the report.
 
 For each provider, dry-run resolves and applies activate only to an in-memory
 child environment, then uses that environment to resolve the provider's probe,
@@ -593,6 +608,11 @@ state after an ensure, resolve or inspect package install units, run
 manual-package or global action check/exec, or inspect/reconcile links. v0.0.1
 defines no link, action, package, or aggregate check command.
 
+Provider check remains an independent probe-only path. It does not construct a
+complete ExecutionPlan or invoke JobRunner. Because it resolves only activate
+and probe, expression errors in ensure, provider install, manual-package,
+action, or link fields remain outside this diagnostic command.
+
 
 ### command surface
 
@@ -647,6 +667,11 @@ and DETAIL columns followed by aggregate counts. It colors status cells only
 when stdout is a terminal. Child commands using inherited I/O may write before
 the final apply table.
 
+JobExecutionReport stores outcomes in a typed JobId-to-JobState map and does not
+store a second copy of execution or report order. Apply constructs CommandReport
+by traversing the selected jobs in their stable source-plan order and looking up
+each typed result.
+
 Configuration loading, selection, compatibility, and planning failures happen
 before a CommandReport can be constructed. They are written directly to stderr
 and exit non-zero. A constructed report controls the process exit status:
@@ -660,32 +685,31 @@ public data contract.
 
 ### apply pipeline
 
-1. Parse all TOML records structurally.
-2. Select one globally named target, using the sole target when --target is
-   omitted and exactly one exists.
-3. Detect the platform and fail if it violates target.platform.
-4. Resolve zero or one globally unique profile node inside that target and
-   derive its ancestor path.
-5. Overlay providers, packages, links, and actions from root to the selected
-   profile, replacing whole records by id.
-6. Validate and interpolate each effective provider package as one strongly
-   typed single or batch install unit, without regrouping declarations, and
-   construct ExecutionPlan.
-7. For each effective provider, apply activate and probe it; when the failure is
-   ensureable, run its ensure list, reapply activate, and probe once more.
-8. Run each ready provider's install once for every declared provider-package
-   install unit. Units assigned to an unavailable provider are reported as
-   BLOCKED.
-9. Apply every manual-package install action.
-10. Apply every effective global action.
-11. Preflight and reconcile every effective link.
-12. Build and render a complete CommandReport. Persist no package, action, or
-    link state.
+1. Load the configuration and parse all TOML records structurally.
+2. Detect the platform, select one target and zero or one profile, and validate
+   target compatibility.
+3. Overlay target and profile declarations from root to the selected node,
+   replacing whole records by id.
+4. Validate and interpolate the effective manifest and construct the stable
+   typed ExecutionPlan.
+5. Construct a SelectedExecutionPlan with JobSelection::All.
+6. Pass that view to JobRunner for strictly synchronous serial execution in
+   provider, package, action, and link order.
+7. Project the typed JobExecutionReport into CommandReport by traversing the
+   selected jobs in their source-plan order.
+8. Render the complete CommandReport. Persist no package, action, or link state.
 
-An individual runtime failure does not stop unrelated work. The final process
-exits non-zero when any effective provider cannot be ensured, any provider
-install unit fails, any manual package fails, any global action fails, or any
-link fails.
+An individual runtime failure does not stop unrelated work. A provider failure
+blocks only its dependent packages. Before any link mutation, JobRunner
+preflights the complete selected link set for duplicate targets; a link phase
+error blocks every selected link, while a per-link failure does not stop later
+links. The final process exits non-zero when any selected job fails or is
+blocked.
+
+Execution uses the existing blocking ProcessExecutor. Child commands retain
+their current inherited or captured standard-I/O behavior. Ctrl-C and process
+termination use normal operating-system foreground-process behavior; dot adds
+no signal handling, process supervision, or platform-specific kill mechanism.
 
 
 ### explicit non-goals for v0.0.1
@@ -698,13 +722,18 @@ link fails.
 - Field-level merge, deletion, disabling, tombstones, or removal from inherited
   declarations.
 - Per-item when predicates or a general-purpose condition language.
+- Concurrent or parallel execution, lanes, schedulers, worker pools, async
+  runtimes, or scheduling resource declarations.
+- A general dependency graph or dependency DSL, topological scheduling, or
+  dependency-cycle system.
 - Cross-target package identity, provider lists, all-of, fallback, priority, or
   provider-specific package-name maps.
 - Package dependency resolution, repository access, search, versions, updates,
-  uninstall, or installed-state detection.
+  uninstall, installed-state detection, or other package-manager semantics.
 - Download, GitHub-release selection, checksum, archive, extraction, or build
   logic implemented by dot.
 - Persistent receipts or other managed-state databases.
+- Persisted job state, retry, resume, or rollback.
 - Provider dependency resolution.
 - Named provider variants, provider-specific parameter schemas, or parameter
   transforms. provider_args is only an ordered list of literal argv values.
@@ -715,4 +744,8 @@ link fails.
 - Link, action, package, or aggregate readiness checks.
 - Link removal, garbage collection, hard links, directory junctions, copies,
   or link fallback strategies.
-- Action dependency DAGs, action ordering, or service management.
+- User-defined action dependency DAGs or semantic action ordering beyond the
+  guaranteed stable serial job order, or service management.
+- Process supervision, platform-specific kill APIs, custom signal handling, or
+  recursive process-tree termination.
+- A package, action, or link selector in the current CLI.

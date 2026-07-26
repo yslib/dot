@@ -2,12 +2,12 @@
 
 ## Status
 
-This document records the approved internal design for replacing dot's
-phase-specific apply loops with one typed, serial job model.
+`DESIGN.txt` is the canonical definition of runtime semantics. This document
+records the implemented internal job model and its module boundaries.
 
-The first implementation does not change the CLI. It prepares the execution
-model for a later CLI revision that can select one package, action, or link by
-ID.
+The current CLI does not expose job selection. Its apply and dry-run paths
+construct `JobSelection::All`, while the internal model supports exact package,
+action, and link selection.
 
 ## Goals
 
@@ -15,8 +15,7 @@ ID.
 - Represent providers, packages, actions, and links as typed jobs.
 - Execute a complete apply serially in provider, package, action, and link
   order.
-- Allow a future request to select one package, action, or link without adding
-  another execution path.
+- Keep exact package, action, and link selection in the same execution path.
 - Automatically include the required provider when a provider-backed package
   is selected.
 - Continue unrelated jobs after an ordinary runtime failure.
@@ -31,12 +30,14 @@ ID.
 - Runtime job registration or plugins.
 - Signal handling, process-tree supervision, Job Objects, or recursive kill.
 - Persisted job state, retry, resume, rollback, or receipts.
-- New task-selection CLI syntax in the first implementation.
+- New job-selection syntax in the current CLI.
 
 dot continues to rely on normal operating-system foreground-process behavior
-for Ctrl-C. Commands continue to inherit stdin, stdout, and stderr as they do
-today. Processes that detach, change their process group/session, or ignore
-normal interruption are outside dot's guarantees.
+for Ctrl-C. Provider probes and action checks capture stdout and stderr with
+stdin connected to null. Provider ensure and install commands, action exec, and
+manual-package exec inherit terminal stdin, stdout, and stderr. Processes that
+detach, change their process group/session, or ignore normal interruption are
+outside dot's guarantees.
 
 ## Why execution is serial
 
@@ -52,15 +53,17 @@ multiple package names in one provider invocation.
 
 ## Architecture
 
-`ExecutionPlan` becomes a single typed job collection. There is no additional
+`ExecutionPlan` is a single typed job collection. There is no additional
 job IR.
 
 ```text
 dot.toml
    |
+   | parse, select, merge
    v
 EffectiveManifest
-   | select, merge, validate, resolve
+   |
+   | validate, resolve, plan
    v
 ExecutionPlan { jobs: Vec<PlannedJob> }
    |
@@ -71,23 +74,24 @@ ExecutionPlan { jobs: Vec<PlannedJob> }
                  v
         SelectedExecutionPlan
                  |
-        +--------+--------+
-        |                 |
-        v                 v
-   DryRunRenderer      JobRunner
-                         |
-                         v
-                    JobExecutor
-                         |
-                         v
-                    JobOutcome
-                         |
-                         v
-                   CommandReport
+          +-----------+-----------+
+          |                       |
+          v                       v
+ dry_run::build_report         JobRunner
+          |                       |
+          v                       v
+    CommandReport         JobExecutionReport
+                                  |
+                                  v
+                     apply report projection
+                                  |
+                                  v
+                            CommandReport
 ```
 
-`SelectedExecutionPlan` is a view over the source plan. It retains references or
-indices into the plan rather than copying and re-resolving job data:
+`SelectedExecutionPlan` is a view over the source plan. It stores a source-plan
+reference and an owned set of selected typed job IDs. Job access filters the
+source sequence without copying or re-resolving job data:
 
 ```rust
 struct SelectedExecutionPlan<'a> {
@@ -102,10 +106,10 @@ The job model is closed:
 
 ```rust
 enum PlannedJob {
-    Provider(PlannedProviderJob),
-    Package(PlannedPackageJob),
-    Action(PlannedActionJob),
-    Link(PlannedLinkJob),
+    Provider(PlannedProvider),
+    Package(PlannedPackage),
+    Action(PlannedAction),
+    Link(PlannedLink),
 }
 
 enum JobId {
@@ -120,7 +124,7 @@ The enum variant scopes the declaration ID. A package, action, and link may use
 the same textual key without becoming the same job.
 
 Provider-backed package singles and batches remain distinct strong variants
-inside `PlannedPackageJob`. Manual packages are also package jobs but have no
+inside `PlannedPackage`. Manual packages are also package jobs but have no
 provider requirement.
 
 Provider and action command lifecycles remain internal to one job:
@@ -137,8 +141,8 @@ Those command stages are not separate selectable jobs.
 
 ## Selection
 
-The internal selection model supports a set so it does not constrain a future
-CLI, although the first future CLI revision accepts only one selector:
+The internal selection model supports a set independently of any request
+surface:
 
 ```rust
 enum JobSelector {
@@ -180,8 +184,7 @@ profile merging replaces values by key, and planning creates exactly one job
 from each effective entry. `JobId` adds the domain variant, so equal spelling in
 different domains remains unambiguous.
 
-The first CLI always constructs `JobSelection::All`. Adding CLI selectors later
-only changes request construction.
+The current dry-run and apply paths always construct `JobSelection::All`.
 
 ## Serial execution order
 
@@ -195,7 +198,8 @@ all selected providers
 ```
 
 Within each kind, jobs retain the deterministic order assigned by planning.
-Every planned job has a stable ordinal used by execution and reporting.
+Every planned job has a stable position in the single sequence used by
+execution and reporting.
 
 An exact selection runs only its minimum closure:
 
@@ -223,29 +227,43 @@ closed variant dispatch, requirement checks, and result collection. It does not
 contain provider, action, or link lifecycle implementation details.
 
 ```rust
-struct JobRunner<'a> {
+pub struct JobRunner<'a> {
     executor: JobExecutor<'a>,
 }
 
 impl JobRunner<'_> {
-    fn run(&self, plan: &SelectedExecutionPlan<'_>) -> JobExecutionReport;
+    pub fn run(&self, plan: &SelectedExecutionPlan<'_>) -> JobExecutionReport;
 }
 ```
 
-`JobExecutor` is a closed domain adapter. Its methods delegate to existing
-provider, action, and link runners:
+`JobExecutor` is a crate-private closed domain adapter. Its type and methods are
+not public; they delegate to existing provider, action, and link runners:
 
 ```rust
+pub(crate) struct JobExecutor<'a> {
+    provider_runner: ProviderRunner<'a>,
+    action_runner: ActionRunner<'a>,
+}
+
 impl JobExecutor<'_> {
-    fn ensure_provider(&self, job: &PlannedProvider) -> ProviderStatus;
-    fn install_provider_package(
+    pub(crate) fn ensure_provider(&self, job: &PlannedProvider) -> ProviderStatus;
+    pub(crate) fn install_provider_package(
         &self,
         job: &PlannedProviderInstall,
         provider: &ProviderStatus,
     ) -> ProviderInstallStatus;
-    fn install_manual_package(&self, job: &PlannedManualPackage) -> ActionResult;
-    fn run_action(&self, job: &PlannedAction) -> ActionResult;
-    fn reconcile_links(&self, jobs: &[&PlannedLink]) -> LinkPhaseResult;
+    pub(crate) fn install_manual_package(
+        &self,
+        job: &PlannedManualPackage,
+    ) -> Result<ActionOutcome, ActionRunError>;
+    pub(crate) fn run_action(
+        &self,
+        job: &PlannedAction,
+    ) -> Result<ActionOutcome, ActionRunError>;
+    pub(crate) fn reconcile_links<'p>(
+        &self,
+        jobs: impl IntoIterator<Item = &'p PlannedLink>,
+    ) -> Result<LinkReport, LinkPhaseError>;
 }
 ```
 
@@ -257,7 +275,8 @@ selected link set before mutation.
 A successful provider job produces an in-memory output containing its activated
 child environment. A dependent package receives that status directly from the
 runner's typed result map. This data exists only for the current invocation and
-is not persisted.
+is not persisted. `ProviderRunner::install` rejects a provider status whose
+provider ID differs from the install job's declared provider.
 
 Provider and action runners continue to use the existing blocking
 `ProcessExecutor`. Link jobs continue to use Rust filesystem APIs.
@@ -284,10 +303,11 @@ enum JobState {
 }
 
 enum JobOutcome {
-    Provider(ProviderOutcome),
-    Package(PackageOutcome),
-    Action(ActionOutcome),
-    Link(LinkOutcome),
+    Provider(ProviderStatus),
+    ProviderPackage(ProviderInstallStatus),
+    ManualPackage(Result<ActionOutcome, ActionRunError>),
+    Action(Result<ActionOutcome, ActionRunError>),
+    Link(Result<LinkOutcome, LinkError>),
 }
 ```
 
@@ -308,14 +328,20 @@ without adding partial recovery.
 
 Each prepared link is then reconciled as one `PlannedJob::Link` in stable order.
 
+Before associating link results with jobs, `JobRunner` unconditionally verifies
+the complete result count and each result ID in order. These checks remain
+active in release builds. A mismatch is an internal contract violation and
+fails fast; it is not disguised as a link phase error.
+
 ## Apply, dry-run, and provider check
 
-The initially exposed operations remain unchanged:
+The current operations are:
 
 ```text
 dot
     select All
-    execute serially
+    pass the selected view to JobRunner for serial execution
+    project the typed results in selected/source order
 
 dot --dry-run
     select All
@@ -341,15 +367,18 @@ projects planned report items.
 ## Reporting
 
 `JobRunner` records results by typed `JobId`. `CommandReport` projects them in
-the stable ordinal order from `ExecutionPlan`.
+the stable selected/source order from `ExecutionPlan`.
 
 ```rust
 struct JobExecutionReport {
     results: BTreeMap<JobId, JobState>,
+    link_phase_error: Option<LinkPhaseError>,
 }
 ```
 
-The map key is the sole stored job identity; `JobState` does not repeat it.
+The result map does not store a second copy of job order. Its key is the sole
+stored job identity; `JobState` does not repeat it.
+
 Because execution is serial, live child output remains naturally grouped by
 command. The final report retains the existing typed statuses such as READY,
 INSTALLED, EXECUTED, CREATED, BLOCKED, and FAILED.
@@ -357,17 +386,19 @@ INSTALLED, EXECUTED, CREATED, BLOCKED, and FAILED.
 Ctrl-C uses the operating system's default termination behavior. An interrupted
 dot process does not construct or render a final report.
 
-## Suggested module boundaries
+## Module boundaries
 
 ```text
 plan.rs          ExecutionPlan and typed PlannedJob values
-job.rs           JobId, selector, selection, state, and outcomes
-job_runner.rs    serial traversal, closed dispatch, requirements, and results
-job_executor.rs  closed domain adapter
+job.rs           JobId, JobKind, JobSelector, and JobSelection identity vocabulary
+job_runner.rs    BlockReason, JobOutcome, JobState, JobExecutionReport, and serial traversal
+job_executor.rs  crate-private closed domain adapter
 provider.rs      provider lifecycle
 action_runner.rs action lifecycle
 link.rs          link preparation and one-link reconciliation
-report.rs        deterministic report projection
+report.rs        report types
+app/apply.rs     deterministic typed result projection
+dry_run.rs       deterministic selected-plan projection
 check.rs         existing provider-only diagnostic path
 ```
 
@@ -376,7 +407,7 @@ channel, or async-runtime module is required.
 
 ## Verification
 
-Tests should verify:
+Tests verify:
 
 1. Full selection preserves provider, package, action, and link order.
 2. Exact provider-backed package selection adds only its provider.
