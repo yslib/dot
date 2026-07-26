@@ -172,6 +172,26 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
 }
 
 #[test]
+fn ensure_returns_one_typed_provider_status() {
+    let state = TempState::new();
+    fs::write(state.marker(), "ready").expect("ready marker should be written");
+    let plan = plan_for(vec![(
+        "ready",
+        provider(helper_action("probe-state", &state), Vec::new()),
+    )]);
+    let provider = plan
+        .providers()
+        .next()
+        .expect("planned provider should exist");
+    let environment = ExecutionEnvironment::empty();
+    let runner = ProviderRunner::new(&environment);
+
+    let status = runner.ensure(provider);
+
+    assert_eq!(status.id(), provider.id());
+}
+
+#[test]
 fn reports_an_already_ready_provider_without_running_ensure() {
     let state = TempState::new();
     fs::write(state.marker(), "ready").expect("ready marker should be written");

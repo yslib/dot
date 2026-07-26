@@ -145,25 +145,49 @@ impl<'a> ProviderRunner<'a> {
         Self { base_environment }
     }
 
+    pub fn ensure(&self, provider: &PlannedProvider) -> ProviderStatus {
+        let (environment, outcome) = match self.ensure_one(provider) {
+            Ok((environment, outcome)) => (Some(environment), Ok(outcome)),
+            Err(error) => (None, Err(error)),
+        };
+        ProviderStatus {
+            id: provider.id().to_owned(),
+            environment,
+            outcome,
+        }
+    }
+
     pub fn ensure_all<'p>(
         &self,
         providers: impl IntoIterator<Item = &'p PlannedProvider>,
     ) -> ProviderReadiness {
         let statuses = providers
             .into_iter()
-            .map(|provider| {
-                let (environment, outcome) = match self.ensure_one(provider) {
-                    Ok((environment, outcome)) => (Some(environment), Ok(outcome)),
-                    Err(error) => (None, Err(error)),
-                };
-                ProviderStatus {
-                    id: provider.id().to_owned(),
-                    environment,
-                    outcome,
-                }
-            })
+            .map(|provider| self.ensure(provider))
             .collect();
         ProviderReadiness { statuses }
+    }
+
+    pub fn install(
+        &self,
+        install: &PlannedProviderInstall,
+        provider: &ProviderStatus,
+    ) -> ProviderInstallStatus {
+        let outcome = if provider.id() != install.provider() {
+            Err(ProviderInstallError::ProviderMismatch {
+                expected: install.provider().to_owned(),
+                actual: provider.id().to_owned(),
+            })
+        } else {
+            match provider.environment() {
+                Some(environment) => self.install_one(install, environment),
+                None => Ok(ProviderInstallOutcome::NotRunProviderUnavailable),
+            }
+        };
+        ProviderInstallStatus {
+            id: install.id().to_owned(),
+            outcome,
+        }
     }
 
     pub fn install_all<'p>(
@@ -173,19 +197,15 @@ impl<'a> ProviderRunner<'a> {
     ) -> ProviderInstallExecution {
         let statuses = installs
             .into_iter()
-            .map(|install| {
-                let outcome = match readiness
-                    .get(install.provider_id().as_str())
-                    .and_then(ProviderStatus::environment)
-                {
-                    Some(environment) => self.install_one(install, environment),
-                    None => Ok(ProviderInstallOutcome::NotRunProviderUnavailable),
-                };
-                ProviderInstallStatus {
-                    id: install.id().to_owned(),
-                    outcome,
-                }
-            })
+            .map(
+                |install| match readiness.get(install.provider_id().as_str()) {
+                    Some(provider) => self.install(install, provider),
+                    None => ProviderInstallStatus {
+                        id: install.id().to_owned(),
+                        outcome: Ok(ProviderInstallOutcome::NotRunProviderUnavailable),
+                    },
+                },
+            )
             .collect();
         ProviderInstallExecution { statuses }
     }
@@ -368,6 +388,7 @@ impl Error for ProviderError {
 
 #[derive(Debug)]
 pub enum ProviderInstallError {
+    ProviderMismatch { expected: String, actual: String },
     Preparation { source: CommandPreparationError },
     Execution { source: ExecutionError },
     UnsuccessfulExit { result: ExecutionResult },
@@ -377,7 +398,9 @@ impl ProviderInstallError {
     pub const fn exit_result(&self) -> Option<&ExecutionResult> {
         match self {
             Self::UnsuccessfulExit { result } => Some(result),
-            Self::Preparation { .. } | Self::Execution { .. } => None,
+            Self::ProviderMismatch { .. } | Self::Preparation { .. } | Self::Execution { .. } => {
+                None
+            }
         }
     }
 }
@@ -385,6 +408,12 @@ impl ProviderInstallError {
 impl fmt::Display for ProviderInstallError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProviderMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "provider install expects provider `{expected}`, but received status for `{actual}`"
+                )
+            }
             Self::Preparation { source } => {
                 write!(formatter, "failed to prepare provider install: {source}")
             }
@@ -401,6 +430,7 @@ impl fmt::Display for ProviderInstallError {
 impl Error for ProviderInstallError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ProviderMismatch { .. } => None,
             Self::Preparation { source } => Some(source),
             Self::Execution { source } => Some(source),
             Self::UnsuccessfulExit { .. } => None,
