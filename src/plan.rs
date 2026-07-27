@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
-    DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPaths,
-    promote_provider_install_args, provider_args_resolver_count, resolve_environment_patch,
-    resolve_literal_string, resolve_provider_install_action_with_args, resolve_string_expression,
+    DotPaths, InterpolationError, PackageContext, ProviderInstallResolutionError, ResolveContext,
+    XdgPaths, promote_provider_install_args, provider_args_resolver_count,
+    resolve_environment_patch, resolve_literal_string, resolve_provider_install_action_with_args,
+    resolve_string_expression,
 };
 use crate::job::{JobId, JobSelection, JobSelector};
 use crate::manifest::{EffectiveManifest, ManifestJobRef};
@@ -557,10 +558,8 @@ impl<'a> ExecutionPlanner<'a> {
                         &install_args,
                         &context,
                     )
-                    .map_err(|source| PlanningError::Interpolation {
-                        context: selected_field_context(&job_id, "provider.install"),
-                        source,
-                    })?;
+                    .map_err(provider_install_field_error)
+                    .map_err(|error| selected_interpolation_error(&job_id, error))?;
 
                     Ok(match package {
                         ProviderPackage::Single(_) => {
@@ -706,6 +705,20 @@ fn selected_interpolation_error(job: &JobId, error: FieldInterpolationError) -> 
         context: selected_field_context(job, &error.field),
         source: error.source,
     }
+}
+
+fn provider_install_field_error(error: ProviderInstallResolutionError) -> FieldInterpolationError {
+    let (field, source) = match error {
+        ProviderInstallResolutionError::Program(source) => {
+            ("provider.install.program".to_owned(), source)
+        }
+        ProviderInstallResolutionError::Argument { index, source } => {
+            (format!("provider.install.args[{index}]"), source)
+        }
+        ProviderInstallResolutionError::Cwd(source) => ("provider.install.cwd".to_owned(), source),
+        ProviderInstallResolutionError::Env(source) => ("provider.install.env".to_owned(), source),
+    };
+    FieldInterpolationError { field, source }
 }
 
 fn resolve_action_fields(
