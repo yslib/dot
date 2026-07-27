@@ -72,49 +72,6 @@ pub struct EffectiveManifest {
 }
 
 impl EffectiveManifest {
-    pub fn select(
-        config: &Config,
-        actual_platform: &PlatformInfo,
-        requested_target: Option<&str>,
-        requested_profile: Option<&str>,
-    ) -> Result<Self, ManifestError> {
-        let target = requested_target
-            .map(SelectorIdentifier::try_from)
-            .transpose()
-            .map_err(|_| ManifestError::UnknownTarget {
-                requested: requested_target
-                    .expect("conversion only fails for a supplied target")
-                    .to_owned(),
-                available: available_targets(config),
-            })?;
-
-        let profile = match requested_profile
-            .map(SelectorIdentifier::try_from)
-            .transpose()
-        {
-            Ok(profile) => profile,
-            Err(_) => {
-                let selected =
-                    Self::select_for_execution(config, actual_platform, target.as_ref(), None)?;
-                let target_id = config
-                    .targets
-                    .get_key_value(selected.target())
-                    .expect("the selected target came from this configuration")
-                    .0;
-                let profiles = index_profiles(target_id, &config.targets[target_id].profiles)?;
-                return Err(ManifestError::UnknownProfile {
-                    target: target_id.to_string(),
-                    requested: requested_profile
-                        .expect("conversion only fails for a supplied profile")
-                        .to_owned(),
-                    available: profiles.keys().map(ToString::to_string).collect(),
-                });
-            }
-        };
-
-        Self::select_for_execution(config, actual_platform, target.as_ref(), profile.as_ref())
-    }
-
     pub fn select_for_execution(
         config: &Config,
         actual_platform: &PlatformInfo,

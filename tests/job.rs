@@ -87,7 +87,8 @@ fn plan_named_fixture(name: &str, selection: &JobSelection) -> ExecutionPlan {
     let input = fixture::read(name);
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = platform();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+    let target = selector_id("machine");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
@@ -201,8 +202,10 @@ fn selected_link_does_not_resolve_an_unselected_action() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
     let platform = platform();
-    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    let target = selector_id("machine");
+    let manifest =
+        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
+            .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
@@ -300,7 +303,8 @@ fn unknown_typed_selector_fails_before_planning() {
     let input = fixture::read("dry-run/valid-human-readable-plan.toml");
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = platform();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+    let target = selector_id("machine");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
@@ -336,8 +340,10 @@ fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
     let platform = platform();
-    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    let target = selector_id("machine");
+    let manifest =
+        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
+            .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
@@ -366,7 +372,8 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
     let input = fixture::read("dry-run/invalid-unknown-provider-before-args.toml");
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = platform();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+    let target = selector_id("machine");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
@@ -402,8 +409,10 @@ fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
     let platform = platform();
-    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    let target = selector_id("machine");
+    let manifest =
+        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
+            .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
@@ -437,7 +446,8 @@ fn multiple_unknown_selectors_report_the_first_in_btree_order() {
     let input = fixture::read("dry-run/valid-human-readable-plan.toml");
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = platform();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+    let target = selector_id("machine");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();

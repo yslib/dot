@@ -100,7 +100,8 @@ fn plan_fixture(
 
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = PlatformInfo::detect();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("current"), None)
+    let target = selector_id("current");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::empty();
     let xdg = XdgPaths::detect();
