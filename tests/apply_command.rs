@@ -219,6 +219,37 @@ fn apply_projects_a_link_phase_error_as_blocked_items_and_one_diagnostic() {
     );
 }
 
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn apply_warns_that_the_platform_override_is_ignored() {
+    let workspace = TempWorkspace::new();
+    let manifest = workspace.write_manifest(
+        r#"
+[targets.current]
+platform = { os = "__OS__" }
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args([
+            "apply",
+            "--platform",
+            r#"{ os = "never-os", arch = "never-arch" }"#,
+            "--config",
+        ])
+        .arg(&manifest)
+        .output()
+        .expect("dot apply should start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("--platform is ignored by apply"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("detected host PlatformInfo"), "{stderr}");
+}
+
 #[test]
 fn helper_process() {
     let Ok(mode) = env::var("DOT_APPLY_HELPER") else {

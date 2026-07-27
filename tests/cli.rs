@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::process::Command;
 
 use clap::error::ErrorKind;
 use dot::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
@@ -120,6 +121,53 @@ fn rejects_duplicate_job_selectors_during_dispatch_conversion() {
 
     assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     assert!(error.to_string().contains("package:ripgrep"));
+}
+
+#[test]
+fn duplicate_job_errors_use_the_leaf_clap_stderr_format() {
+    for leaf in ["apply", "dry-run"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+            .args([leaf, "--job", "package:ripgrep", "--job", "package:ripgrep"])
+            .output()
+            .expect("dot should start");
+        let stderr = String::from_utf8(output.stderr).expect("clap stderr should be UTF-8");
+
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            stderr.starts_with(
+                "error: job selector `package:ripgrep` was supplied more than once\n\n"
+            ),
+            "{stderr:?}"
+        );
+        assert!(
+            stderr.contains(&format!("Usage: dot {leaf} [OPTIONS]\n")),
+            "{stderr:?}"
+        );
+        assert!(
+            stderr.ends_with("For more information, try '--help'.\n"),
+            "{stderr:?}"
+        );
+        assert!(stderr.ends_with('\n'), "{stderr:?}");
+    }
+}
+
+#[test]
+fn profile_selections_parse_and_display_with_one_canonical_spelling() {
+    for (input, canonical) in [("@root", "@root"), ("laptop", "laptop")] {
+        let selection = ProfileSelection::from_cli(Some(input)).expect("profile should parse");
+
+        assert_eq!(selection.to_string(), canonical);
+        assert_eq!(
+            ProfileSelection::from_cli(Some(&selection.to_string())).unwrap(),
+            selection
+        );
+    }
+
+    assert_eq!(
+        ProfileSelection::from_cli(None).unwrap().to_string(),
+        "@root"
+    );
 }
 
 #[test]

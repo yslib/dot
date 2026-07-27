@@ -121,8 +121,16 @@ fn render_report(report: &CommandReport) -> ExitCode {
 }
 
 fn render_list<R: TsvRecord>(records: Vec<R>) -> ExitCode {
+    let prepared = match TsvRenderer.prepare(&records) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("dot: failed to prepare list output: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let stdout = io::stdout();
-    match normalize_list_output(TsvRenderer.render(&records, &mut stdout.lock())) {
+    match normalize_list_output(prepared.render(&mut stdout.lock())) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("dot: failed to write list output: {error}");

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::job::JobSelection;
@@ -8,6 +9,15 @@ use crate::schema::{SelectorIdentifier, SelectorIdentifierError};
 pub enum ProfileSelection {
     Root,
     Named(SelectorIdentifier),
+}
+
+impl fmt::Display for ProfileSelection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Root => formatter.write_str("@root"),
+            Self::Named(profile) => profile.fmt(formatter),
+        }
+    }
 }
 
 impl ProfileSelection {
