@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
-use dot::app::{Dispatch, Operation, Selection};
+use dot::app::{Dispatch, Operation, ProfileSelection, Selection};
 use dot::cli;
 #[cfg(feature = "dev-platform-override")]
 use dot::platform::PlatformInfo;
+use dot::schema::SelectorIdentifier;
 
 #[test]
 fn defaults_to_apply_with_the_current_directory_dotfile() {
@@ -185,6 +186,31 @@ fn rejects_profile_paths_and_empty_profile_names() {
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
     }
+}
+
+#[test]
+fn profile_selection_normalizes_root_inputs() {
+    assert_eq!(
+        ProfileSelection::from_cli(None).unwrap(),
+        ProfileSelection::Root
+    );
+    assert_eq!(
+        ProfileSelection::from_cli(Some("@root")).unwrap(),
+        ProfileSelection::Root
+    );
+}
+
+#[test]
+fn profile_selection_normalizes_named_profiles() {
+    assert_eq!(
+        ProfileSelection::from_cli(Some("laptop")).unwrap(),
+        ProfileSelection::Named(SelectorIdentifier::new("laptop").unwrap())
+    );
+}
+
+#[test]
+fn profile_selection_rejects_invalid_selector_identifiers() {
+    assert!(ProfileSelection::from_cli(Some("desktop/laptop")).is_err());
 }
 
 #[test]
