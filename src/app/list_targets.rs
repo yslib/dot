@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::config::LoadedConfig;
+use crate::config::LoadedConfigDocument;
 use crate::manifest::target_entries;
 use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
@@ -9,13 +9,13 @@ use crate::schema::{Identifier, OneOrMany, PlatformConstraint, SelectorIdentifie
 use super::ListCommandError;
 
 pub(super) struct Catalog {
-    loaded: LoadedConfig,
+    loaded: LoadedConfigDocument,
 }
 
 impl Catalog {
     pub(super) fn load(config: &std::path::Path) -> Result<Self, ListCommandError> {
         Ok(Self {
-            loaded: LoadedConfig::load(config)?,
+            loaded: LoadedConfigDocument::load(config)?,
         })
     }
 

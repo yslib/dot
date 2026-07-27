@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::config::LoadedConfig;
+use crate::config::LoadedConfigDocument;
 use crate::manifest::{EffectiveManifest, profile_entries};
 use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
@@ -9,7 +9,7 @@ use crate::schema::SelectorIdentifier;
 use super::{ListCommandError, ProfileSelection};
 
 pub(super) struct Catalog {
-    loaded: LoadedConfig,
+    loaded: LoadedConfigDocument,
     target: SelectorIdentifier,
 }
 
@@ -19,7 +19,7 @@ impl Catalog {
         platform: &PlatformInfo,
         requested_target: Option<&SelectorIdentifier>,
     ) -> Result<Self, ListCommandError> {
-        let loaded = LoadedConfig::load(config)?;
+        let loaded = LoadedConfigDocument::load(config)?;
         let selected = EffectiveManifest::select_for_inspection(
             loaded.config(),
             platform,
