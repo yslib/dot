@@ -50,6 +50,41 @@ impl Write for FailingWriter {
     }
 }
 
+struct PartialThenFailWriter {
+    accepted: Vec<u8>,
+    retried_with: Option<Vec<u8>>,
+    kind: io::ErrorKind,
+}
+
+impl Write for PartialThenFailWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if self.accepted.is_empty() {
+            let prefix_length = buffer.len().min(4);
+            self.accepted.extend_from_slice(&buffer[..prefix_length]);
+            return Ok(prefix_length);
+        }
+
+        self.retried_with = Some(buffer.to_vec());
+        Err(io::Error::new(self.kind, "failure after partial write"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn renders_an_empty_record_slice_as_empty_output() {
+    let records: [ExampleRow; 0] = [];
+    let mut output = Vec::new();
+
+    TsvRenderer
+        .render(&records, &mut output)
+        .expect("empty input should render");
+
+    assert!(output.is_empty());
+}
+
 #[test]
 fn renders_headerless_rows_with_only_later_fields_escaped() {
     let records = [ExampleRow {
@@ -63,6 +98,21 @@ fn renders_headerless_rows_with_only_later_fields_escaped() {
         .expect("TSV should render");
 
     assert_eq!(output, b"link:nvim\ta\\\\b\\tc\\r\\nd\n");
+}
+
+#[test]
+fn preserves_multibyte_utf8_adjacent_to_every_escaped_byte() {
+    let records = [ExampleRow {
+        selector: "selector".to_owned(),
+        detail: "é\\中\t🙂\rø\nß".to_owned(),
+    }];
+    let mut output = Vec::new();
+
+    TsvRenderer
+        .render(&records, &mut output)
+        .expect("TSV should render");
+
+    assert_eq!(output, "selector\té\\\\中\\t🙂\\rø\\nß\n".as_bytes());
 }
 
 #[test]
@@ -125,4 +175,25 @@ fn preserves_other_errors_from_the_writer() {
         .expect_err("writer should fail");
 
     assert_eq!(error.kind(), io::ErrorKind::Other);
+}
+
+#[test]
+fn retries_after_a_partial_write_and_preserves_the_eventual_error() {
+    let records = [ExampleRow {
+        selector: "link:nvim".to_owned(),
+        detail: "detail".to_owned(),
+    }];
+    let mut output = PartialThenFailWriter {
+        accepted: Vec::new(),
+        retried_with: None,
+        kind: io::ErrorKind::PermissionDenied,
+    };
+
+    let error = TsvRenderer
+        .render(&records, &mut output)
+        .expect_err("writer should fail after accepting a prefix");
+
+    assert_eq!(output.accepted, b"link");
+    assert_eq!(output.retried_with.as_deref(), Some(b":nvim".as_slice()));
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }

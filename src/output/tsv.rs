@@ -2,12 +2,25 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 
 pub trait TsvRecord {
+    /// Returns at least one field, with a canonical TSV-safe selector first.
+    ///
+    /// The renderer emits the first field verbatim and escapes backslash, tab,
+    /// carriage return, and line feed only in later fields.
     fn fields(&self) -> Vec<Cow<'_, str>>;
 }
 
 pub struct TsvRenderer;
 
 impl TsvRenderer {
+    /// Renders headerless records with one newline after each record.
+    ///
+    /// The first field is emitted verbatim; later fields escape backslash, tab,
+    /// carriage return, and line feed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] for a record without fields and
+    /// propagates writer errors unchanged.
     pub fn render<R: TsvRecord>(&self, records: &[R], output: &mut dyn Write) -> io::Result<()> {
         for record in records {
             let fields = record.fields();
