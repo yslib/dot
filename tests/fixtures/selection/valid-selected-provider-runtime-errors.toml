@@ -1,0 +1,24 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.program]
+probe = { program = "program-provider" }
+install = { program = "${env:DOT_INTENTIONALLY_MISSING_PROGRAM}", args = ["${package:names}"] }
+
+[targets.machine.providers.argument]
+probe = { program = "argument-provider" }
+install = { program = "argument-provider", args = ["literal", "${package:names}", "${env:DOT_INTENTIONALLY_MISSING_ARGUMENT}"] }
+
+[targets.machine.providers.cwd]
+probe = { program = "cwd-provider" }
+install = { program = "cwd-provider", args = ["${package:names}"], cwd = "${env:DOT_INTENTIONALLY_MISSING_CWD}" }
+
+[targets.machine.providers.env]
+probe = { program = "env-provider" }
+install = { program = "env-provider", args = ["${package:names}"], env = { variables = { BROKEN = "${env:DOT_INTENTIONALLY_MISSING_ENV}" } } }
+
+[targets.machine.packages]
+program-package = { provider = "program" }
+argument-package = { provider = "argument" }
+cwd-package = { provider = "cwd" }
+env-package = { provider = "env" }

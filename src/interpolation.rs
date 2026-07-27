@@ -449,29 +449,55 @@ pub fn resolve_provider_install_action(
 ) -> Result<ResolvedExecAction, InterpolationError> {
     let args = promote_provider_install_args(&action.args)?;
     resolve_provider_install_action_with_args(action, &args, context)
+        .map_err(ProviderInstallResolutionError::into_source)
+}
+
+#[derive(Debug)]
+pub(crate) enum ProviderInstallResolutionError {
+    Program(InterpolationError),
+    Argument {
+        index: usize,
+        source: InterpolationError,
+    },
+    Cwd(InterpolationError),
+    Env(InterpolationError),
+}
+
+impl ProviderInstallResolutionError {
+    fn into_source(self) -> InterpolationError {
+        match self {
+            Self::Program(source)
+            | Self::Argument { source, .. }
+            | Self::Cwd(source)
+            | Self::Env(source) => source,
+        }
+    }
 }
 
 pub(crate) fn resolve_provider_install_action_with_args(
     action: &ExecAction<StringExpressionSource, ProviderInstallArgSource>,
     args: &ProviderInstallArgs,
     context: &ResolveContext<'_>,
-) -> Result<ResolvedExecAction, InterpolationError> {
+) -> Result<ResolvedExecAction, ProviderInstallResolutionError> {
     let args = evaluate_provider_install_args(args, context)?;
 
     Ok(ResolvedExecAction {
         kind: action.kind,
-        program: resolve_string_expression(&action.program, context)?,
+        program: resolve_string_expression(&action.program, context)
+            .map_err(ProviderInstallResolutionError::Program)?,
         args,
         cwd: action
             .cwd
             .as_ref()
             .map(|cwd| resolve_string_expression(cwd, context))
-            .transpose()?,
+            .transpose()
+            .map_err(ProviderInstallResolutionError::Cwd)?,
         env: action
             .env
             .as_ref()
             .map(|patch| resolve_environment_patch(patch, context))
-            .transpose()?,
+            .transpose()
+            .map_err(ProviderInstallResolutionError::Env)?,
     })
 }
 
@@ -492,15 +518,21 @@ fn resolve_string_values(
 fn evaluate_provider_install_args(
     expression: &ProviderInstallArgs,
     context: &ResolveContext<'_>,
-) -> Result<Vec<ResolvedString>, InterpolationError> {
+) -> Result<Vec<ResolvedString>, ProviderInstallResolutionError> {
     let mut values = Vec::new();
-    for part in expression.parts() {
+    for (index, part) in expression.parts().iter().enumerate() {
         match part {
             FlatListPart::One(expression) => {
-                values.push(evaluate_string_expression(expression, context)?);
+                values.push(
+                    evaluate_string_expression(expression, context).map_err(|source| {
+                        ProviderInstallResolutionError::Argument { index, source }
+                    })?,
+                );
             }
             FlatListPart::Many(variable) => {
-                values.extend(evaluate_string_list_variable(variable, context)?);
+                values.extend(evaluate_string_list_variable(variable, context).map_err(
+                    |source| ProviderInstallResolutionError::Argument { index, source },
+                )?);
             }
         }
     }

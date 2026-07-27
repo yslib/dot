@@ -304,6 +304,71 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
 }
 
 #[test]
+fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
+    let path = fixture::path("selection/valid-selected-provider-runtime-errors.toml");
+    let loaded =
+        dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let config_dir = path.parent().expect("fixture path should have a parent");
+    let planner = ExecutionPlanner::new(
+        &environment,
+        DotPaths::new(&path, config_dir, Path::new(TEST_CWD)),
+        &xdg,
+        &platform,
+    );
+
+    for (package, field, missing_name) in [
+        (
+            "program-package",
+            "provider.install.program",
+            "DOT_INTENTIONALLY_MISSING_PROGRAM",
+        ),
+        (
+            "argument-package",
+            "provider.install.args[2]",
+            "DOT_INTENTIONALLY_MISSING_ARGUMENT",
+        ),
+        (
+            "cwd-package",
+            "provider.install.cwd",
+            "DOT_INTENTIONALLY_MISSING_CWD",
+        ),
+        (
+            "env-package",
+            "provider.install.env",
+            "DOT_INTENTIONALLY_MISSING_ENV",
+        ),
+    ] {
+        let selector = JobSelector::Package(
+            package
+                .try_into()
+                .expect("test package selector should be valid"),
+        );
+        let error = planner
+            .plan(&manifest, &JobSelection::only(selector))
+            .expect_err("the selected provider install should fail resolution");
+        let ExecutionPlanError::Planning(PlanningError::Interpolation { context, source }) = error
+        else {
+            panic!("unexpected planning error for package `{package}`: {error}");
+        };
+
+        assert_eq!(
+            context,
+            format!("selected job `package:{package}` field `{field}`")
+        );
+        assert!(matches!(
+            source,
+            InterpolationError::MissingEnvironmentVariable { name }
+                if name == missing_name
+        ));
+    }
+}
+
+#[test]
 fn rejects_an_unknown_provider_before_invalid_literal_provider_args() {
     let manifest = select_fixture("dry-run/invalid-unknown-provider-before-args.toml");
     let environment = environment();
