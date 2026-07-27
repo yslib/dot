@@ -398,7 +398,7 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
 }
 
 #[test]
-fn selected_interpolation_failure_identifies_the_canonical_job_and_field() {
+fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
     let platform = platform();
@@ -410,11 +410,12 @@ fn selected_interpolation_failure_identifies_the_canonical_job_and_field() {
     let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
 
+    let selection = JobSelection::Only(BTreeSet::from([
+        JobSelector::Package(selector_id("editor")),
+        JobSelector::Action(selector_id("setup-editor")),
+    ]));
     let error = planner
-        .plan(
-            &manifest,
-            &JobSelection::only(JobSelector::Action(selector_id("setup-editor"))),
-        )
+        .plan(&manifest, &selection)
         .expect_err("the selected runtime value should fail atomically");
 
     assert!(
@@ -429,4 +430,40 @@ fn selected_interpolation_failure_identifies_the_canonical_job_and_field() {
         error.to_string(),
         "failed to resolve selected job `action:setup-editor` field `exec.program`: environment variable `DOT_INTENTIONALLY_MISSING` is not defined"
     );
+}
+
+#[test]
+fn multiple_unknown_selectors_report_the_first_in_btree_order() {
+    let input = fixture::read("dry-run/valid-human-readable-plan.toml");
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let planner = ExecutionPlanner::new(
+        &environment,
+        DotPaths::new(
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
+            Path::new(TEST_CWD),
+        ),
+        &xdg,
+        &platform,
+    );
+    let selection = JobSelection::Only(BTreeSet::from([
+        JobSelector::Action(selector_id("z-missing")),
+        JobSelector::Action(selector_id("a-missing")),
+    ]));
+
+    let error = planner
+        .plan(&manifest, &selection)
+        .expect_err("the complete selection should be rejected");
+
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Selection(JobSelectionError::Unknown(
+            JobSelector::Action(ref id)
+        )) if id.as_str() == "a-missing"
+    ));
 }

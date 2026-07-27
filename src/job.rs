@@ -140,25 +140,4 @@ impl JobSelection {
     pub fn only(selector: JobSelector) -> Self {
         Self::Only(BTreeSet::from([selector]))
     }
-
-    pub(crate) fn includes_package(&self, id: &SelectorIdentifier) -> bool {
-        match self {
-            Self::All => true,
-            Self::Only(selectors) => selectors.contains(&JobSelector::Package(id.clone())),
-        }
-    }
-
-    pub(crate) fn includes_action(&self, id: &SelectorIdentifier) -> bool {
-        match self {
-            Self::All => true,
-            Self::Only(selectors) => selectors.contains(&JobSelector::Action(id.clone())),
-        }
-    }
-
-    pub(crate) fn includes_link(&self, id: &SelectorIdentifier) -> bool {
-        match self {
-            Self::All => true,
-            Self::Only(selectors) => selectors.contains(&JobSelector::Link(id.clone())),
-        }
-    }
 }

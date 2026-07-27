@@ -127,13 +127,12 @@ impl<'a> JobRunner<'a> {
     }
 
     pub fn run(&self, plan: &ExecutionPlan) -> JobExecutionReport {
-        let jobs = plan.jobs().iter().collect::<Vec<_>>();
-        let expected_result_count = jobs.len();
+        let expected_result_count = plan.jobs().len();
         let mut results = BTreeMap::new();
         let mut provider_outputs = BTreeMap::<JobId, ProviderStatus>::new();
         let mut links = Vec::new();
 
-        for job in jobs {
+        for job in plan.jobs() {
             let job_id = job.id();
             let state = match job {
                 PlannedJob::Provider(provider) => {

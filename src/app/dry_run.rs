@@ -7,7 +7,7 @@ use crate::dry_run::build_report;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::job::JobSelection;
 use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlanningError};
+use crate::plan::{ExecutionPlanError, ExecutionPlanner};
 use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
@@ -37,8 +37,7 @@ pub(super) fn run(
 pub(super) enum CommandError {
     Config(ConfigLoadError),
     Manifest(ManifestError),
-    Planning(PlanningError),
-    Selection(JobSelectionError),
+    Plan(ExecutionPlanError),
 }
 
 impl fmt::Display for CommandError {
@@ -46,8 +45,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::Config(source) => source.fmt(formatter),
             Self::Manifest(source) => source.fmt(formatter),
-            Self::Planning(source) => source.fmt(formatter),
-            Self::Selection(source) => source.fmt(formatter),
+            Self::Plan(source) => source.fmt(formatter),
         }
     }
 }
@@ -57,8 +55,7 @@ impl Error for CommandError {
         match self {
             Self::Config(source) => Some(source),
             Self::Manifest(source) => Some(source),
-            Self::Planning(source) => Some(source),
-            Self::Selection(source) => Some(source),
+            Self::Plan(source) => Some(source),
         }
     }
 }
@@ -75,23 +72,8 @@ impl From<ManifestError> for CommandError {
     }
 }
 
-impl From<PlanningError> for CommandError {
-    fn from(source: PlanningError) -> Self {
-        Self::Planning(source)
-    }
-}
-
-impl From<JobSelectionError> for CommandError {
-    fn from(source: JobSelectionError) -> Self {
-        Self::Selection(source)
-    }
-}
-
 impl From<ExecutionPlanError> for CommandError {
     fn from(source: ExecutionPlanError) -> Self {
-        match source {
-            ExecutionPlanError::Selection(source) => Self::Selection(source),
-            ExecutionPlanError::Planning(source) => Self::Planning(source),
-        }
+        Self::Plan(source)
     }
 }
