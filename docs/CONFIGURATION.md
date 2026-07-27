@@ -779,8 +779,9 @@ Validation and evaluation have four distinct boundaries:
 1. **Parsing and deserialization** check TOML structure, field types, required
    fields, broad and selector identifier rules, environment-name rules, and
    fixed literals. All object shapes reject unknown fields. String-bearing
-   source roles retain both their TOML spelling and a recoverable literal,
-   template, exact-variable, or malformed parsed form.
+   source roles retain both their deserialized TOML string value and a
+   recoverable literal, template, exact-variable, or malformed parsed form.
+   They do not retain lexical TOML quoting or escape spelling.
 2. **Complete static validation** promotes every source expression in every
    target and profile declaration, including unselected branches and records
    that a deeper merge could replace. Promotion checks expression syntax,

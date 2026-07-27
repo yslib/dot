@@ -390,10 +390,12 @@ Path identity is based on normalized native paths rather than raw strings:
 
 All selected link paths are resolved before link mutation starts. Two selected
 links that resolve to the same target are a declaration conflict and prevent
-the selected link phase from starting. A phase error reports every selected
-link as blocked. Other per-link failures are isolated, do not prevent later
-links from being reconciled, and contribute to the final non-zero result. Link
-reconciliation uses Rust filesystem APIs rather than child commands.
+the selected link phase from starting. Only this duplicate-target conflict is
+a phase error that reports every selected link as blocked. Target
+normalization, source preparation, and other per-link failures are isolated,
+do not prevent later nonblocked links from being reconciled, and contribute to
+the final non-zero result. Link reconciliation uses Rust filesystem APIs rather
+than child commands.
 
 The filesystem is authoritative. dot stores no persistent link state. Removing
 a link declaration does not remove an existing link. v0.0.1 has no unlink,
@@ -586,9 +588,9 @@ Provider check is a separate, explicitly active diagnostic command:
 dot check providers --target arch --profile laptop
 
 It is intended for developing and debugging provider declarations against the
-current environment. Unlike `dot dry-run`, it executes external probe commands and
-therefore cannot guarantee freedom from side effects. The configuration author
-owns the observational behavior of every probe.
+current environment. Unlike `dot dry-run`, it may execute external probe
+commands and therefore cannot guarantee freedom from side effects. The
+configuration author owns the observational behavior of every launched probe.
 
 Provider check performs these operations:
 
@@ -598,22 +600,25 @@ Provider check performs these operations:
    compatible target when the target is omitted.
 3. Resolve the requested inline profile node and its ancestor path.
 4. Overlay target and profile nodes from root to the selected node.
-5. Resolve only the runtime values needed by each effective provider's activate
-   and probe, then build its child environment by applying activate to the
-   current dot process environment.
-6. Execute every effective provider's probe once.
+5. Independently attempt each effective provider: resolve and apply activate,
+   then resolve and prepare its probe. A provider-local failure at any of these
+   stages records NOT_READY before process launch and does not stop the next
+   provider.
+6. When preparation succeeds, execute that provider's probe process at most
+   once.
 7. Build one report item per provider and render its readiness. Exit codes and
    captured stdout/stderr remain structured evidence; the current table shows a
    compact message or exit code rather than dumping captured streams.
 
-Every effective provider is checked, including a provider with no assigned
-packages. A failed or unstartable probe does not stop unrelated providers from
-being checked.
+Every effective provider is attempted, including a provider with no assigned
+packages. Activation, probe resolution/preparation, process-launch, and probe
+result failures do not stop unrelated providers from being attempted.
 
 The result model has two readiness states:
 
-- READY: probe exits with code 0;
-- NOT_READY: probe exits non-zero or cannot be started.
+- READY: a prepared probe process exits with code 0;
+- NOT_READY: activation, probe resolution/preparation, process launch, or the
+  executed probe fails.
 
 If no effective providers exist, provider check reports an empty result and
 exits 0. Otherwise it exits 0 only when every provider is READY and exits
@@ -629,8 +634,8 @@ Provider check remains an independent probe-only path. It does not construct a
 complete ExecutionPlan or invoke JobRunner. All declarations have already
 passed static expression promotion, but missing runtime values in ensure,
 provider install, manual-package, action, or link fields remain unevaluated.
-Runtime activation, interpolation, preparation, execution, and probe failures
-remain provider-local and do not stop later provider checks.
+Runtime activation, interpolation, preparation, process-launch, and probe
+failures remain provider-local and do not stop later provider attempts.
 
 
 ### command surface
@@ -793,10 +798,11 @@ separate list-command TSV format is the stable machine-facing catalog contract.
 
 An individual runtime failure does not stop unrelated work. A provider failure
 blocks only its dependent packages. Before any link mutation, JobRunner
-preflights the complete selected link set for duplicate targets; a link phase
-error blocks every selected link, while a per-link failure does not stop later
-links. The final process exits non-zero when any selected job fails or is
-blocked.
+preflights the complete selected link set for duplicate targets; this
+duplicate-target phase error blocks every selected link, while normalization,
+source preparation, and reconciliation failures remain per-link and do not
+stop later nonblocked links. The final process exits non-zero when any selected
+job fails or is blocked.
 
 Execution uses the existing blocking ProcessExecutor. Child commands retain
 their current inherited or captured standard-I/O behavior. Ctrl-C and process

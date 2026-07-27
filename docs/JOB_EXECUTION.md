@@ -233,8 +233,10 @@ subphases rather than one mixed package-ID order.
    provider.
 3. Selected manual-package actions run.
 4. Selected global actions run.
-5. The complete selected link set is prepared as one phase, then links are
-   reconciled in canonical order.
+5. Selected link targets are normalized first so duplicate resolved targets
+   can be detected. Without a duplicate, target-normalization and source
+   preparation errors remain attached to their individual links, and later
+   nonblocked links reconcile in canonical order.
 
 `ProviderStatus` is transient dependency output. It carries readiness and the
 activated child environment needed by provider installs; it is not persisted
@@ -256,10 +258,10 @@ Runtime failures remain local where execution can continue safely:
 - failure of one provider install unit does not block later install units,
   including another unit using the same provider;
 - manual-package and action failures do not stop unrelated later jobs;
-- duplicate selected link targets or another link preparation error block the
-  complete selected link phase before link mutation;
-- after successful link preparation, a per-link failure does not stop later
-  links.
+- only duplicate resolved targets block the complete selected link phase before
+  link mutation;
+- target-normalization, source-preparation, and reconciliation failures fail
+  only that link and do not stop later nonblocked links.
 
 Every planned job receives exactly one completed or blocked result. Apply
 returns a failed report when any selected job fails or is blocked.
@@ -287,13 +289,13 @@ run checks or exec actions, inspect link state, or mutate the filesystem.
 
 `dot check providers` is a separate diagnostic path. It does not accept job
 selectors, construct an `ExecutionPlan`, or invoke `JobRunner`. After complete
-static validation and target/profile selection, it resolves only each
-effective provider's activation and probe at runtime, applies activation to an
-in-memory child environment, and probes the provider once.
-
-A runtime activation, interpolation, preparation, execution, or probe failure
-becomes that provider's local `NOT_READY` result. Checking continues with later
-providers. Provider check does not runtime-resolve or execute ensure, install,
+static validation and target/profile selection, it independently attempts
+every effective provider. Activation resolution/application or probe
+resolution/preparation can produce that provider's `NOT_READY` result before
+process launch. When preparation succeeds, the probe process executes at most
+once. Any provider-local activation, interpolation, preparation,
+process-launch, or probe failure does not stop later providers from being
+attempted. Provider check does not runtime-resolve or execute ensure, install,
 packages, actions, or links.
 
 The structural list commands also do not construct an `ExecutionPlan`.
@@ -308,10 +310,12 @@ while a selected manual package, action, or link appears alone.
 
 The presentation-independent report vocabulary remains:
 
-- provider results: ready or not ready;
-- provider-package results: installed, failed, or blocked;
-- manual-package/action results: satisfied, executed, or failed;
-- link results: satisfied, created, replaced, skipped, failed, or blocked.
+- provider results: `READY` or `NOT_READY`;
+- provider-package results: `INSTALLED`, `FAILED`, or `BLOCKED`;
+- manual-package results: `SATISFIED`, `INSTALLED`, or `FAILED`;
+- global-action results: `SATISFIED`, `EXECUTED`, or `FAILED`;
+- link results: `SATISFIED`, `CREATED`, `REPLACED`, `SKIPPED`, `FAILED`, or
+  `BLOCKED`.
 
 The human table renderer is not a stable serialized interface. The stable
 machine-facing selection interface is the headerless TSV emitted by the list
