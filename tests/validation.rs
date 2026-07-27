@@ -210,7 +210,7 @@ fn validates_package_batch_structure_during_load() {
 }
 
 #[test]
-fn checks_provider_args_against_each_effective_provider_definition() {
+fn checks_nested_provider_args_against_the_inherited_ancestor_provider_override() {
     let input = r#"
 [targets.machine]
 platform = { os = "linux" }
@@ -219,16 +219,12 @@ platform = { os = "linux" }
 probe = { program = "brew" }
 install = { program = "brew", args = ["${package:provider_args}", "${package:names}"] }
 
-[targets.machine.packages]
-app = { provider = "brew", provider_args = ["--cask"] }
-
 [targets.machine.profiles.workstation.providers.brew]
 probe = { program = "workstation-brew" }
-install = { program = "workstation-brew", args = ["${package:provider_args}", "${package:names}"] }
+install = { program = "workstation-brew", args = ["${package:names}"] }
 
-[targets.machine.profiles.workstation.profiles.leaf.providers.brew]
-probe = { program = "leaf-brew" }
-install = { program = "leaf-brew", args = ["${package:names}"] }
+[targets.machine.profiles.workstation.profiles.leaf.packages]
+app = { provider = "brew", provider_args = ["--cask"] }
 "#;
     let config: Config = toml::from_str(input).expect("test config should deserialize");
 
