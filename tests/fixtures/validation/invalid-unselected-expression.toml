@@ -1,0 +1,11 @@
+[targets.selected]
+platform = { os = "linux" }
+
+[targets.selected.actions.working]
+exec = { program = "working" }
+
+[targets.unselected]
+platform = { os = "other" }
+
+[targets.unselected.actions.broken]
+exec = { program = "${unknown:value}" }

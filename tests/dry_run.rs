@@ -131,7 +131,7 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
 }
 
 #[test]
-fn plans_only_selected_effective_records_and_defers_unused_provider_installs() {
+fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
     let manifest = select_named_fixture(
         "dry-run/valid-deferred-expression-errors.toml",
         "selected",
@@ -144,7 +144,7 @@ fn plans_only_selected_effective_records_and_defers_unused_provider_installs() {
 
     let plan = planner
         .plan(&manifest)
-        .expect("deferred source expression errors must not affect the selected plan");
+        .expect("deferred runtime values must not affect the selected plan");
 
     assert_eq!(plan.target(), "selected");
     assert_eq!(plan.profile(), Some("chosen"));

@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
     DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPaths,
-    promote_provider_install_args, resolve_environment_patch, resolve_exec_action,
-    resolve_literal_string, resolve_provider_install_action_with_args, resolve_string_expression,
+    promote_provider_install_args, provider_args_resolver_count, resolve_environment_patch,
+    resolve_exec_action, resolve_literal_string, resolve_provider_install_action_with_args,
+    resolve_string_expression,
 };
 use crate::job::{JobId, JobSelection, JobSelector};
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    FlatListPart, Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider,
-    ProviderPackage, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction,
-    SelectorIdentifier, SourceAction,
+    Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage,
+    ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SelectorIdentifier, SourceAction,
 };
 
 #[derive(Debug)]
@@ -563,18 +563,7 @@ impl<'a> ExecutionPlanner<'a> {
                             source,
                         })?;
                     if !provider_args.is_empty() {
-                        let resolver_count = install_args
-                            .parts()
-                            .iter()
-                            .filter(|part| {
-                                matches!(
-                                    part,
-                                    FlatListPart::Many(variable)
-                                        if variable.reference().resolver() == "package"
-                                            && variable.reference().payload() == "provider_args"
-                                )
-                            })
-                            .count();
+                        let resolver_count = provider_args_resolver_count(&install_args);
                         if resolver_count != 1 {
                             return Err(PlanningError::ProviderArgsResolverCount {
                                 provider: provider_id.to_string(),

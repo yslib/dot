@@ -2,31 +2,31 @@
 platform = { os = "linux" }
 
 [targets.unselected.actions.unselected-target]
-exec = { program = "${unclosed" }
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING_UNSELECTED_TARGET}" }
 
 [targets.selected]
 platform = { os = "linux" }
 
 [targets.selected.providers.shared]
-activate = { variables = { BROKEN = "${root-provider-activate" } }
+activate = { variables = { BROKEN = "${env:DOT_INTENTIONALLY_MISSING_ROOT_PROVIDER_ACTIVATE}" } }
 probe = { program = "root-probe" }
-ensure = { program = "${root-provider-ensure" }
+ensure = { program = "${env:DOT_INTENTIONALLY_MISSING_ROOT_PROVIDER_ENSURE}" }
 install = { program = "root-install" }
 
 [targets.selected.providers.unused-broken]
 probe = { program = "unused-probe" }
-install = { program = "${unknown:program}", args = ["${unclosed", "prefix-${package:names}"] }
+install = { program = "${env:DOT_INTENTIONALLY_MISSING_UNUSED_INSTALL}", args = ["${env:DOT_INTENTIONALLY_MISSING_UNUSED_ARG}", "${package:names}"] }
 
 [targets.selected.packages.shared-package]
-install = { check = { program = "${root-package-check" }, exec = { program = "root-package" } }
+install = { check = { program = "${env:DOT_INTENTIONALLY_MISSING_ROOT_PACKAGE_CHECK}" }, exec = { program = "root-package" } }
 
 [targets.selected.actions.shared-action]
-check = { program = "${root-action-check" }
+check = { program = "${env:DOT_INTENTIONALLY_MISSING_ROOT_ACTION_CHECK}" }
 exec = { program = "root-action" }
 
 [targets.selected.links.shared-link]
-source = "${root-link"
-target = "${root-target"
+source = "${env:DOT_INTENTIONALLY_MISSING_ROOT_LINK_SOURCE}"
+target = "${env:DOT_INTENTIONALLY_MISSING_ROOT_LINK_TARGET}"
 
 [targets.selected.profiles.chosen.providers.shared]
 probe = { program = "selected-probe" }
@@ -43,7 +43,7 @@ source = "selected-source"
 target = "${env:HOME}/selected-target"
 
 [targets.selected.profiles.sibling.actions.unselected-sibling]
-exec = { program = "${unknown:sibling}" }
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING_SIBLING}" }
 
 [targets.selected.profiles.other.profiles.descendant.actions.unselected-descendant]
-exec = { program = "${package:names}" }
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING_DESCENDANT}" }

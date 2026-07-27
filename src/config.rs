@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::action::ExecutionEnvironment;
 use crate::schema::Config;
+use crate::validation::{ConfigValidationError, validate_config};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedConfig {
@@ -30,6 +31,10 @@ impl LoadedConfig {
         let config = toml::from_str(&source).map_err(|source| ConfigLoadError::Parse {
             path: path.clone(),
             source,
+        })?;
+        validate_config(&config).map_err(|source| ConfigLoadError::Validation {
+            path: path.clone(),
+            source: Box::new(source),
         })?;
         let directory = path
             .parent()
@@ -87,6 +92,10 @@ pub enum ConfigLoadError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    Validation {
+        path: PathBuf,
+        source: Box<ConfigValidationError>,
+    },
 }
 
 impl fmt::Display for ConfigLoadError {
@@ -112,6 +121,13 @@ impl fmt::Display for ConfigLoadError {
                     path.display()
                 )
             }
+            Self::Validation { path, source } => {
+                write!(
+                    formatter,
+                    "failed to validate configuration `{}`: {source}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -121,6 +137,7 @@ impl Error for ConfigLoadError {
         match self {
             Self::CurrentDirectory { source } | Self::Read { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
+            Self::Validation { source, .. } => Some(source.as_ref()),
         }
     }
 }

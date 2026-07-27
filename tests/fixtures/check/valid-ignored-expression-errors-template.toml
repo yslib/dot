@@ -5,23 +5,23 @@ platform = { os = "__OS__" }
 activate = { variables = { PROVIDER_VALUE = "${dot:config_dir}/ready" } }
 probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_CHECK_COMMAND_HELPER = "ready" } } }
 ensure = [
-  { program = "${ensure-program" },
-  { program = "${unknown:ensure}" },
-  { program = "${package:names}" },
+  { program = "${env:DOT_INTENTIONALLY_MISSING_ENSURE_PROGRAM}" },
+  { program = "ensure", args = ["${env:DOT_INTENTIONALLY_MISSING_ENSURE_ARG}"] },
+  { program = "ensure", cwd = "${env:DOT_INTENTIONALLY_MISSING_ENSURE_CWD}" },
 ]
-install = { program = "${install-program", args = ["${unknown:install}", "prefix-${package:names}"], cwd = "${package:names}" }
+install = { program = "${env:DOT_INTENTIONALLY_MISSING_INSTALL_PROGRAM}", args = ["${env:DOT_INTENTIONALLY_MISSING_INSTALL_ARG}", "${package:provider_args}", "${package:names}"], cwd = "${env:DOT_INTENTIONALLY_MISSING_INSTALL_CWD}" }
 
 [targets.current.packages.provider-package]
 provider = "ignored-fields"
-provider_args = ["${env:HOME}"]
+provider_args = ["--deferred"]
 
 [targets.current.packages.manual-package]
-install = { check = { program = "${manual-check-program" }, exec = { program = "${unknown:manual-install}" } }
+install = { check = { program = "${env:DOT_INTENTIONALLY_MISSING_MANUAL_CHECK}" }, exec = { program = "${env:DOT_INTENTIONALLY_MISSING_MANUAL_INSTALL}" } }
 
 [targets.current.actions.invalid-action]
-check = { program = "${package:names}" }
-exec = { program = "${action-program" }
+check = { program = "${env:DOT_INTENTIONALLY_MISSING_ACTION_CHECK}" }
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING_ACTION_EXEC}" }
 
 [targets.current.links.invalid-link]
-source = "${link-source"
-target = "${unknown:link-target}"
+source = "${env:DOT_INTENTIONALLY_MISSING_LINK_SOURCE}"
+target = "${env:DOT_INTENTIONALLY_MISSING_LINK_TARGET}"
