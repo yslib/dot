@@ -267,12 +267,14 @@ packages that require it; unrelated selected work continues. Planning is
 atomic, and the final report exits non-zero if any selected item failed or was
 blocked.
 
-`check providers` is separate from job selection. It applies each effective
-provider's in-memory activation patch and runs its probe once. It does not run
-ensure or install, process packages or actions, or inspect links. Runtime
-failures remain local to a provider, so later providers are still checked.
-Because probes are arbitrary external commands, provider check is diagnostic,
-not a side-effect-free simulation.
+`check providers` is separate from job selection and independently attempts
+every effective provider. Activation resolution/application or probe
+resolution/preparation can produce `NOT_READY` before a process is launched.
+When preparation succeeds, the probe process executes at most once. Any
+provider-local failure does not stop later providers from being attempted. The
+command does not run ensure or install, process packages or actions, or
+inspect links. Because a launched probe is an arbitrary external command,
+provider check is diagnostic, not a side-effect-free simulation.
 
 Apply and dry-run reports are human-readable tables, not stable serialized
 interfaces. The list-command TSV contract is the stable machine-facing
