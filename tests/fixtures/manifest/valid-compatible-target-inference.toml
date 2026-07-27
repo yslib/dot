@@ -1,0 +1,37 @@
+[targets.linux-machine]
+platform = { os = "linux" }
+
+[targets.linux-machine.providers.system]
+probe = { program = "system-probe" }
+install = { program = "system-install" }
+
+[targets.linux-machine.packages]
+alpha-manual = { install = { exec = { program = "install-alpha-manual" } } }
+alpha-provider = { provider = "system" }
+zulu-manual = { install = { exec = { program = "install-zulu-manual" } } }
+zulu-provider = { provider = "system" }
+
+[targets.linux-machine.actions]
+alpha-action = { exec = { program = "run-alpha-action" } }
+zulu-action = { exec = { program = "run-zulu-action" } }
+
+[targets.linux-machine.links]
+alpha-link = { source = "alpha-source", target = "alpha-target" }
+zulu-link = { source = "zulu-source", target = "zulu-target" }
+
+[targets.windows-machine]
+platform = { os = "windows" }
+
+[targets.windows-machine.providers.scoop]
+probe = { program = "scoop", args = ["--version"] }
+install = { program = "scoop", args = ["install", "${package:names}"] }
+
+[targets.windows-machine.packages]
+git = { provider = "scoop" }
+
+[targets.windows-machine.actions.configure]
+exec = { program = "powershell.exe", args = ["-File", "configure.ps1"] }
+
+[targets.windows-machine.links.gitconfig]
+source = "home/.gitconfig"
+target = "${env:USERPROFILE}/.gitconfig"
