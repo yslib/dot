@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
-    DotPaths, InterpolationError, PackageContext, ProviderInstallResolutionError, ResolveContext,
+    DotPaths, ExecActionResolutionError, InterpolationError, PackageContext, ResolveContext,
     XdgPaths, promote_provider_install_args, provider_args_resolver_count,
-    resolve_environment_patch, resolve_literal_string, resolve_provider_install_action_with_args,
-    resolve_string_expression,
+    resolve_environment_patch, resolve_exec_action_with_fields, resolve_literal_string,
+    resolve_provider_install_action_with_args, resolve_string_expression,
 };
 use crate::job::{JobId, JobSelection, JobSelector};
-use crate::manifest::{EffectiveManifest, ManifestJobRef};
+use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
     Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage,
@@ -302,65 +302,101 @@ pub struct ExecutionPlanner<'a> {
     platform: &'a PlatformInfo,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionMode {
+    All,
+    Only,
+}
+
 #[derive(Debug)]
-struct ValidatedJobSelection<'a> {
-    requested: &'a JobSelection,
+struct NormalizedJobSelection {
+    mode: SelectionMode,
+    packages: BTreeSet<SelectorIdentifier>,
+    actions: BTreeSet<SelectorIdentifier>,
+    links: BTreeSet<SelectorIdentifier>,
     providers: BTreeSet<Identifier>,
 }
 
-impl<'a> ValidatedJobSelection<'a> {
+impl NormalizedJobSelection {
     fn new(
         manifest: &EffectiveManifest,
-        requested: &'a JobSelection,
+        requested: &JobSelection,
     ) -> Result<Self, JobSelectionError> {
         let JobSelection::Only(selectors) = requested else {
             return Ok(Self {
-                requested,
-                providers: manifest.providers().keys().cloned().collect(),
+                mode: SelectionMode::All,
+                packages: BTreeSet::new(),
+                actions: BTreeSet::new(),
+                links: BTreeSet::new(),
+                providers: BTreeSet::new(),
             });
         };
 
+        let mut normalized = Self {
+            mode: SelectionMode::Only,
+            packages: BTreeSet::new(),
+            actions: BTreeSet::new(),
+            links: BTreeSet::new(),
+            providers: BTreeSet::new(),
+        };
+        let mut missing_provider = None;
+
         for selector in selectors {
-            if !manifest
-                .unresolved_jobs()
-                .any(|job| manifest_job_matches_selector(job, selector))
-            {
-                return Err(JobSelectionError::Unknown(selector.clone()));
+            match selector {
+                JobSelector::Package(package_id) => {
+                    let package = manifest
+                        .packages()
+                        .get(package_id.as_str())
+                        .ok_or_else(|| JobSelectionError::Unknown(selector.clone()))?;
+                    normalized.packages.insert(package_id.clone());
+
+                    if let Package::Provider(package) = package {
+                        let provider = package.provider();
+                        if manifest.providers().contains_key(provider.as_str()) {
+                            normalized.providers.insert(provider.clone());
+                        } else if missing_provider.is_none() {
+                            missing_provider = Some(JobSelectionError::MissingProvider {
+                                package: package_id.clone(),
+                                provider: provider.clone(),
+                            });
+                        }
+                    }
+                }
+                JobSelector::Action(action_id) => {
+                    if !manifest.actions().contains_key(action_id.as_str()) {
+                        return Err(JobSelectionError::Unknown(selector.clone()));
+                    }
+                    normalized.actions.insert(action_id.clone());
+                }
+                JobSelector::Link(link_id) => {
+                    if !manifest.links().contains_key(link_id.as_str()) {
+                        return Err(JobSelectionError::Unknown(selector.clone()));
+                    }
+                    normalized.links.insert(link_id.clone());
+                }
             }
         }
 
-        let mut providers = BTreeSet::new();
-        for selector in selectors {
-            let JobSelector::Package(package_id) = selector else {
-                continue;
-            };
-            let Some(Package::Provider(package)) = manifest.packages().get(package_id.as_str())
-            else {
-                continue;
-            };
-            let provider = package.provider();
-            if !manifest.providers().contains_key(provider.as_str()) {
-                return Err(JobSelectionError::MissingProvider {
-                    package: package_id.clone(),
-                    provider: provider.clone(),
-                });
-            }
-            providers.insert(provider.clone());
+        if let Some(error) = missing_provider {
+            return Err(error);
         }
-
-        Ok(Self {
-            requested,
-            providers,
-        })
+        Ok(normalized)
     }
-}
 
-fn manifest_job_matches_selector(job: ManifestJobRef<'_>, selector: &JobSelector) -> bool {
-    match (job, selector) {
-        (ManifestJobRef::Package(id, _), JobSelector::Package(selected)) => id == selected,
-        (ManifestJobRef::Action(id, _), JobSelector::Action(selected)) => id == selected,
-        (ManifestJobRef::Link(id, _), JobSelector::Link(selected)) => id == selected,
-        _ => false,
+    fn includes_package(&self, id: &SelectorIdentifier) -> bool {
+        self.mode == SelectionMode::All || self.packages.contains(id)
+    }
+
+    fn includes_action(&self, id: &SelectorIdentifier) -> bool {
+        self.mode == SelectionMode::All || self.actions.contains(id)
+    }
+
+    fn includes_link(&self, id: &SelectorIdentifier) -> bool {
+        self.mode == SelectionMode::All || self.links.contains(id)
+    }
+
+    fn includes_provider(&self, id: &Identifier) -> bool {
+        self.mode == SelectionMode::All || self.providers.contains(id)
     }
 }
 
@@ -384,7 +420,7 @@ impl<'a> ExecutionPlanner<'a> {
         manifest: &EffectiveManifest,
         selection: &JobSelection,
     ) -> Result<ExecutionPlan, ExecutionPlanError> {
-        let selection = ValidatedJobSelection::new(manifest, selection)?;
+        let selection = NormalizedJobSelection::new(manifest, selection)?;
         let (providers, provider_environments) = self.plan_providers(manifest, &selection)?;
         let provider_installs =
             self.plan_provider_installs(manifest, &provider_environments, &selection)?;
@@ -420,13 +456,13 @@ impl<'a> ExecutionPlanner<'a> {
     fn plan_providers(
         &self,
         manifest: &EffectiveManifest,
-        selection: &ValidatedJobSelection<'_>,
+        selection: &NormalizedJobSelection,
     ) -> Result<(Vec<PlannedProvider>, BTreeMap<String, ExecutionEnvironment>), PlanningError> {
         let mut plans = Vec::new();
         let mut environments = BTreeMap::new();
 
         for (provider_id, provider) in manifest.providers() {
-            if !selection.providers.contains(provider_id) {
+            if !selection.includes_provider(provider_id) {
                 continue;
             }
             let job_id = JobId::Provider(provider_id.clone());
@@ -474,13 +510,13 @@ impl<'a> ExecutionPlanner<'a> {
         &self,
         manifest: &EffectiveManifest,
         environments: &BTreeMap<String, ExecutionEnvironment>,
-        selection: &ValidatedJobSelection<'_>,
+        selection: &NormalizedJobSelection,
     ) -> Result<Vec<PlannedProviderInstall>, PlanningError> {
         manifest
             .packages()
             .iter()
             .filter_map(|(package_id, package)| {
-                if !selection.requested.includes_package(package_id) {
+                if !selection.includes_package(package_id) {
                     return None;
                 }
                 let Package::Provider(package) = package else {
@@ -558,7 +594,7 @@ impl<'a> ExecutionPlanner<'a> {
                         &install_args,
                         &context,
                     )
-                    .map_err(provider_install_field_error)
+                    .map_err(|error| exec_action_field_error(error, "provider.install"))
                     .map_err(|error| selected_interpolation_error(&job_id, error))?;
 
                     Ok(match package {
@@ -588,14 +624,14 @@ impl<'a> ExecutionPlanner<'a> {
     fn plan_manual_packages(
         &self,
         manifest: &EffectiveManifest,
-        selection: &ValidatedJobSelection<'_>,
+        selection: &NormalizedJobSelection,
     ) -> Result<Vec<PlannedManualPackage>, PlanningError> {
         let context = ResolveContext::new(self.base_environment, self.dot_paths, self.xdg_paths);
         manifest
             .packages()
             .iter()
             .filter_map(|(package_id, package)| {
-                if !selection.requested.includes_package(package_id) {
+                if !selection.includes_package(package_id) {
                     return None;
                 }
                 let Package::Manual(package) = package else {
@@ -618,13 +654,13 @@ impl<'a> ExecutionPlanner<'a> {
     fn plan_actions(
         &self,
         manifest: &EffectiveManifest,
-        selection: &ValidatedJobSelection<'_>,
+        selection: &NormalizedJobSelection,
     ) -> Result<Vec<PlannedAction>, PlanningError> {
         let context = ResolveContext::new(self.base_environment, self.dot_paths, self.xdg_paths);
         manifest
             .actions()
             .iter()
-            .filter(|(action_id, _)| selection.requested.includes_action(action_id))
+            .filter(|(action_id, _)| selection.includes_action(action_id))
             .map(|(action_id, action)| {
                 resolve_action_fields(action, &context, "")
                     .map(|action| PlannedAction {
@@ -641,13 +677,13 @@ impl<'a> ExecutionPlanner<'a> {
     fn plan_links(
         &self,
         manifest: &EffectiveManifest,
-        selection: &ValidatedJobSelection<'_>,
+        selection: &NormalizedJobSelection,
     ) -> Result<Vec<PlannedLink>, PlanningError> {
         let context = ResolveContext::new(self.base_environment, self.dot_paths, self.xdg_paths);
         manifest
             .links()
             .iter()
-            .filter(|(link_id, _)| selection.requested.includes_link(link_id))
+            .filter(|(link_id, _)| selection.includes_link(link_id))
             .map(|(link_id, link)| {
                 let source =
                     resolve_string_expression(&link.source, &context).map_err(|source| {
@@ -707,16 +743,17 @@ fn selected_interpolation_error(job: &JobId, error: FieldInterpolationError) -> 
     }
 }
 
-fn provider_install_field_error(error: ProviderInstallResolutionError) -> FieldInterpolationError {
+fn exec_action_field_error(
+    error: ExecActionResolutionError,
+    prefix: &str,
+) -> FieldInterpolationError {
     let (field, source) = match error {
-        ProviderInstallResolutionError::Program(source) => {
-            ("provider.install.program".to_owned(), source)
+        ExecActionResolutionError::Program(source) => (nested_field(prefix, "program"), source),
+        ExecActionResolutionError::Argument { index, source } => {
+            (format!("{}[{index}]", nested_field(prefix, "args")), source)
         }
-        ProviderInstallResolutionError::Argument { index, source } => {
-            (format!("provider.install.args[{index}]"), source)
-        }
-        ProviderInstallResolutionError::Cwd(source) => ("provider.install.cwd".to_owned(), source),
-        ProviderInstallResolutionError::Env(source) => ("provider.install.env".to_owned(), source),
+        ExecActionResolutionError::Cwd(source) => (nested_field(prefix, "cwd"), source),
+        ExecActionResolutionError::Env(source) => (nested_field(prefix, "env"), source),
     };
     FieldInterpolationError { field, source }
 }
@@ -741,51 +778,8 @@ fn resolve_exec_action_fields(
     context: &ResolveContext<'_>,
     prefix: &str,
 ) -> Result<ResolvedExecAction, FieldInterpolationError> {
-    let program = resolve_string_expression(&action.program, context).map_err(|source| {
-        FieldInterpolationError {
-            field: nested_field(prefix, "program"),
-            source,
-        }
-    })?;
-    let args = action
-        .args
-        .iter()
-        .enumerate()
-        .map(|(index, argument)| {
-            resolve_string_expression(argument, context).map_err(|source| FieldInterpolationError {
-                field: format!("{}[{index}]", nested_field(prefix, "args")),
-                source,
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let cwd = action
-        .cwd
-        .as_ref()
-        .map(|cwd| {
-            resolve_string_expression(cwd, context).map_err(|source| FieldInterpolationError {
-                field: nested_field(prefix, "cwd"),
-                source,
-            })
-        })
-        .transpose()?;
-    let env = action
-        .env
-        .as_ref()
-        .map(|env| {
-            resolve_environment_patch(env, context).map_err(|source| FieldInterpolationError {
-                field: nested_field(prefix, "env"),
-                source,
-            })
-        })
-        .transpose()?;
-
-    Ok(ResolvedExecAction {
-        kind: action.kind,
-        program,
-        args,
-        cwd,
-        env,
-    })
+    resolve_exec_action_with_fields(action, context)
+        .map_err(|error| exec_action_field_error(error, prefix))
 }
 
 fn nested_field(prefix: &str, field: &str) -> String {
