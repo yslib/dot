@@ -7,7 +7,7 @@ use crate::dry_run::build_report;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::job::JobSelection;
 use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlanner, JobSelectionError, PlanningError};
+use crate::plan::{ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlanningError};
 use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
@@ -28,10 +28,9 @@ pub(super) fn run(
     let xdg_paths = XdgPaths::detect();
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
-    let plan = planner.plan(&manifest)?;
-    let selected = plan.select(&JobSelection::All)?;
+    let plan = planner.plan(&manifest, &JobSelection::All)?;
 
-    Ok(build_report(loaded.path(), &selected))
+    Ok(build_report(loaded.path(), &plan))
 }
 
 #[derive(Debug)]
@@ -85,5 +84,14 @@ impl From<PlanningError> for CommandError {
 impl From<JobSelectionError> for CommandError {
     fn from(source: JobSelectionError) -> Self {
         Self::Selection(source)
+    }
+}
+
+impl From<ExecutionPlanError> for CommandError {
+    fn from(source: ExecutionPlanError) -> Self {
+        match source {
+            ExecutionPlanError::Selection(source) => Self::Selection(source),
+            ExecutionPlanError::Planning(source) => Self::Planning(source),
+        }
     }
 }

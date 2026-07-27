@@ -90,6 +90,7 @@ fn plan_fixture(
     workspace: &TempWorkspace,
     fixture_name: &str,
     replacements: &[(&str, String)],
+    selection: &JobSelection,
 ) -> ExecutionPlan {
     let mut input = fixture::read(fixture_name).replace("__OS__", env::consts::OS);
     for (token, value) in replacements {
@@ -107,11 +108,15 @@ fn plan_fixture(
     let dot_paths = DotPaths::new(&config_path, &workspace.directory, &workspace.directory);
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
-        .plan(&manifest)
+        .plan(&manifest, selection)
         .expect("test execution plan should build")
 }
 
-fn serial_plan(workspace: &TempWorkspace, probe_mode: &str) -> ExecutionPlan {
+fn serial_plan(
+    workspace: &TempWorkspace,
+    probe_mode: &str,
+    selection: &JobSelection,
+) -> ExecutionPlan {
     plan_fixture(
         workspace,
         "jobs/valid-serial-execution-template.toml",
@@ -121,6 +126,7 @@ fn serial_plan(workspace: &TempWorkspace, probe_mode: &str) -> ExecutionPlan {
             ("__MANUAL__", helper_exec("manual-install")),
             ("__ACTION__", helper_exec("action")),
         ],
+        selection,
     )
 }
 
@@ -128,14 +134,11 @@ fn serial_plan(workspace: &TempWorkspace, probe_mode: &str) -> ExecutionPlan {
 fn runs_all_selected_jobs_in_stable_serial_order() {
     let workspace = TempWorkspace::new();
     let source = workspace.write_source("source.txt");
-    let plan = serial_plan(&workspace, "probe");
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
-    let selected_ids = selected.jobs().map(PlannedJob::id).collect::<Vec<_>>();
+    let plan = serial_plan(&workspace, "probe", &JobSelection::All);
+    let selected_ids = plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>();
     let environment = ExecutionEnvironment::empty();
 
-    let report = JobRunner::new(&environment).run(&selected);
+    let report = JobRunner::new(&environment).run(&plan);
 
     assert!(report.all_succeeded());
     assert_eq!(
@@ -188,15 +191,14 @@ fn runs_all_selected_jobs_in_stable_serial_order() {
 fn exact_provider_package_runs_only_its_provider_closure() {
     let workspace = TempWorkspace::new();
     workspace.write_source("source.txt");
-    let plan = serial_plan(&workspace, "probe");
-    let selected = plan
-        .select(&JobSelection::only(JobSelector::Package(selector_id(
-            "provider-tool",
-        ))))
-        .expect("provider package should select");
+    let plan = serial_plan(
+        &workspace,
+        "probe",
+        &JobSelection::only(JobSelector::Package(selector_id("provider-tool"))),
+    );
     let environment = ExecutionEnvironment::empty();
 
-    let report = JobRunner::new(&environment).run(&selected);
+    let report = JobRunner::new(&environment).run(&plan);
 
     assert!(report.all_succeeded());
     assert_eq!(workspace.recorded_events(), ["probe", "provider-install"]);
@@ -208,13 +210,10 @@ fn exact_provider_package_runs_only_its_provider_closure() {
 fn provider_failure_blocks_its_package_but_continues_unrelated_work() {
     let workspace = TempWorkspace::new();
     let source = workspace.write_source("source.txt");
-    let plan = serial_plan(&workspace, "probe-fail");
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
+    let plan = serial_plan(&workspace, "probe-fail", &JobSelection::All);
     let environment = ExecutionEnvironment::empty();
 
-    let report = JobRunner::new(&environment).run(&selected);
+    let report = JobRunner::new(&environment).run(&plan);
 
     assert!(!report.all_succeeded());
     assert_eq!(
@@ -259,13 +258,11 @@ fn provider_package_failure_does_not_block_the_next_package_for_that_provider() 
         &workspace,
         "jobs/valid-provider-package-failure-continuation-template.toml",
         &[("__PROBE__", helper_exec("probe"))],
+        &JobSelection::All,
     );
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
     let environment = ExecutionEnvironment::empty();
 
-    let report = JobRunner::new(&environment).run(&selected);
+    let report = JobRunner::new(&environment).run(&plan);
 
     assert_eq!(
         workspace.recorded_events(),
@@ -294,13 +291,11 @@ fn duplicate_link_targets_block_the_complete_link_phase_before_mutation() {
         &workspace,
         "jobs/invalid-duplicate-link-target-template.toml",
         &[("__ACTION__", helper_exec("action"))],
+        &JobSelection::All,
     );
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
     let environment = ExecutionEnvironment::empty();
 
-    let report = JobRunner::new(&environment).run(&selected);
+    let report = JobRunner::new(&environment).run(&plan);
 
     assert!(!report.all_succeeded());
     assert_eq!(workspace.recorded_events(), ["action"]);

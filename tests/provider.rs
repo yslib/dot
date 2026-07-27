@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dot::action::ExecutionEnvironment;
 use dot::interpolation::{DotPaths, XdgPaths};
+use dot::job::JobSelection;
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner};
 use dot::platform::PlatformInfo;
@@ -172,7 +173,7 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
         &xdg,
         &platform,
     )
-    .plan(&manifest)
+    .plan(&manifest, &JobSelection::All)
     .expect("provider plan should build")
 }
 

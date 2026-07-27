@@ -13,8 +13,8 @@ use crate::job_runner::{BlockReason, JobExecutionReport, JobOutcome, JobRunner, 
 use crate::link::LinkOutcome;
 use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::plan::{
-    ExecutionPlanner, JobSelectionError, PlannedJob, PlannedPackage, PlannedProviderInstall,
-    PlanningError, SelectedExecutionPlan,
+    ExecutionPlan, ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlannedJob,
+    PlannedPackage, PlannedProviderInstall, PlanningError,
 };
 use crate::platform::PlatformInfo;
 use crate::provider::{
@@ -38,27 +38,26 @@ pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> 
     let xdg_paths = XdgPaths::detect();
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
-    let plan = planner.plan(&manifest)?;
-    let selected = plan.select(&JobSelection::All)?;
-    let execution = JobRunner::new(loaded.environment()).run(&selected);
+    let plan = planner.plan(&manifest, &JobSelection::All)?;
+    let execution = JobRunner::new(loaded.environment()).run(&plan);
 
-    Ok(build_report(loaded.path(), &selected, &execution))
+    Ok(build_report(loaded.path(), &plan, &execution))
 }
 
 fn build_report(
     config: &Path,
-    selected: &SelectedExecutionPlan<'_>,
+    plan: &ExecutionPlan,
     execution: &JobExecutionReport,
 ) -> CommandReport {
-    let source = selected.source();
-    let items = selected
+    let items = plan
         .jobs()
+        .iter()
         .map(|job| {
             let id = job.id();
             let state = execution
                 .get(&id)
                 .unwrap_or_else(|| panic!("execution report is missing selected job `{id:?}`"));
-            report_item(job, state, &source.platform().os)
+            report_item(job, state, &plan.platform().os)
         })
         .collect();
     let diagnostics = execution
@@ -74,9 +73,9 @@ fn build_report(
         command: ReportCommand::Apply,
         context: ReportContext {
             config: config.to_owned(),
-            target: source.target().to_owned(),
-            profile: source.profile().map(str::to_owned),
-            platform: source.platform().clone(),
+            target: plan.target().to_owned(),
+            profile: plan.profile().map(str::to_owned),
+            platform: plan.platform().clone(),
         },
         status: if execution.all_succeeded() {
             ReportStatus::Succeeded
@@ -475,6 +474,15 @@ impl From<PlanningError> for CommandError {
 impl From<JobSelectionError> for CommandError {
     fn from(source: JobSelectionError) -> Self {
         Self::Selection(source)
+    }
+}
+
+impl From<ExecutionPlanError> for CommandError {
+    fn from(source: ExecutionPlanError) -> Self {
+        match source {
+            ExecutionPlanError::Selection(source) => Self::Selection(source),
+            ExecutionPlanError::Planning(source) => Self::Planning(source),
+        }
     }
 }
 

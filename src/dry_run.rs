@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::plan::{
-    PlannedAction, PlannedJob, PlannedLink, PlannedManualPackage, PlannedPackage, PlannedProvider,
-    PlannedProviderInstall, SelectedExecutionPlan,
+    ExecutionPlan, PlannedAction, PlannedJob, PlannedLink, PlannedManualPackage, PlannedPackage,
+    PlannedProvider, PlannedProviderInstall,
 };
 use crate::report::{
     ActionInfo, ActionItem, CommandInfo, CommandReport, ItemStatus, LinkItem, PackageItem,
@@ -10,9 +10,10 @@ use crate::report::{
     ReportStatus, ReportSubject,
 };
 
-pub fn build_report(config: &Path, selected: &SelectedExecutionPlan<'_>) -> CommandReport {
-    let items = selected
+pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
+    let items = plan
         .jobs()
+        .iter()
         .map(|job| match job {
             PlannedJob::Provider(provider) => provider_item(provider),
             PlannedJob::Package(PlannedPackage::Provider(package)) => {
@@ -23,15 +24,14 @@ pub fn build_report(config: &Path, selected: &SelectedExecutionPlan<'_>) -> Comm
             PlannedJob::Link(link) => link_item(link),
         })
         .collect();
-    let source = selected.source();
 
     CommandReport {
         command: ReportCommand::DryRun,
         context: ReportContext {
             config: config.to_owned(),
-            target: source.target().to_owned(),
-            profile: source.profile().map(str::to_owned),
-            platform: source.platform().clone(),
+            target: plan.target().to_owned(),
+            profile: plan.profile().map(str::to_owned),
+            platform: plan.platform().clone(),
         },
         status: ReportStatus::Planned,
         items,
