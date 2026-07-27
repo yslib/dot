@@ -6,7 +6,7 @@ use crate::interpolation::{
     InterpolationError, promote_literal_string, promote_provider_install_args,
     promote_string_expression, provider_args_resolver_count,
 };
-use crate::manifest::{EffectiveManifest, ManifestError, profile_entries};
+use crate::manifest::{EffectiveManifest, ManifestError, profile_catalog};
 use crate::schema::{
     Action, EnvironmentPatch, ExecAction, Identifier, Link, OneOrMany, Package, Profile, Provider,
     ProviderInstallArgSource, ProviderPackage, SelectableEntries, SelectorIdentifier, SourceAction,
@@ -182,30 +182,21 @@ impl ValidationContext {
 pub fn validate_config(config: &crate::schema::Config) -> Result<(), ConfigValidationError> {
     for (target_id, target) in &config.targets {
         let target_context = ValidationContext::target(target_id);
-        let profiles = profile_entries(target_id, target)
-            .map_err(|source| {
-                target_context.error(None::<String>, ConfigValidationErrorKind::Manifest(source))
-            })?
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
+        let profiles = profile_catalog(target_id, &target.profiles).map_err(|source| {
+            target_context.error(None::<String>, ConfigValidationErrorKind::Manifest(source))
+        })?;
 
         validate_scope(target, &target_context.profile(None))?;
         validate_profiles(&target.profiles, &target_context)?;
 
         validate_effective_scope(
-            EffectiveManifest::from_declared_scope(target_id, target, None).map_err(|source| {
-                target_context.error(None::<String>, ConfigValidationErrorKind::Manifest(source))
-            })?,
+            EffectiveManifest::from_target_root(target_id, target),
             &target_context.profile(None),
         )?;
 
-        for profile_id in profiles {
-            let context = target_context.profile(Some(&profile_id));
-            let manifest =
-                EffectiveManifest::from_declared_scope(target_id, target, Some(&profile_id))
-                    .map_err(|source| {
-                        context.error(None::<String>, ConfigValidationErrorKind::Manifest(source))
-                    })?;
+        for profile in profiles {
+            let context = target_context.profile(Some(profile.id()));
+            let manifest = EffectiveManifest::from_catalog_profile(target_id, target, &profile);
             validate_effective_scope(manifest, &context)?;
         }
     }
@@ -488,7 +479,7 @@ fn validate_effective_scope(
             let actual = provider_args_resolver_count(&install_args);
             if actual != 1 {
                 return Err(package_context.error(
-                    Some("provider_args"),
+                    Some("provider.install.args"),
                     ConfigValidationErrorKind::ProviderArgsResolverCount {
                         provider: provider_id.clone(),
                         actual,
