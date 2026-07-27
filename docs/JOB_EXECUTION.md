@@ -2,153 +2,86 @@
 
 ## Status
 
-`DESIGN.txt` is the canonical definition of runtime semantics. This document
-records the implemented internal job model and its module boundaries.
-
-The current CLI does not expose job selection. Its apply and dry-run paths
-construct `JobSelection::All`, while the internal model supports exact package,
-action, and link selection.
+This document describes the implemented selected-job architecture. Apply and
+dry-run expose complete or exact job selection through the CLI and consume one
+owned, selected, resolved `ExecutionPlan`.
 
 ## Goals
 
-- Keep one resolved `ExecutionPlan` as the fact source for dry-run and apply.
+- Keep one `ExecutionPlan` as the fact source for dry-run and apply.
 - Represent providers, packages, actions, and links as typed jobs.
-- Execute a complete apply serially in provider, package, action, and link
-  order.
-- Keep exact package, action, and link selection in the same execution path.
-- Automatically include the required provider when a provider-backed package
-  is selected.
-- Continue unrelated jobs after an ordinary runtime failure.
-- Preserve stable report ordering.
+- Validate the complete configuration statically before selection.
+- Validate every requested selector before runtime expression evaluation.
+- Resolve only the selected execution closure.
+- Preserve deterministic serial execution and failure isolation.
+- Keep providers as internal requirements rather than public selectors.
 
 ## Non-goals
 
-- Concurrent or parallel execution.
-- Lanes, worker pools, async runtimes, or scheduling resource declarations.
-- User-defined dependency graphs.
 - Selecting a provider directly.
-- Runtime job registration or plugins.
-- Signal handling, process-tree supervision, Job Objects, or recursive kill.
-- Persisted job state, retry, resume, rollback, or receipts.
-- New job-selection syntax in the current CLI.
+- Selecting one concrete name inside a provider Batch.
+- Arbitrary job dependencies, topological scheduling, or concurrency.
+- Inferring execution order from TOML declaration order or selector order.
+- Persistent job state, retry, rollback, or resume.
+- Turning dry-run into simulation or provider check into planning.
 
-dot continues to rely on normal operating-system foreground-process behavior
-for Ctrl-C. Provider probes and action checks capture stdout and stderr with
-stdin connected to null. Provider ensure and install commands, action exec, and
-manual-package exec inherit terminal stdin, stdout, and stderr. Processes that
-detach, change their process group/session, or ignore normal interruption are
-outside dot's guarantees.
+## CLI selection
 
-## Why execution is serial
-
-A provider ID is not a concurrency boundary. Different providers can mutate
-the same external resource. For example, pacman and paru both install through
-the same libalpm package database and cannot safely run installation
-transactions concurrently.
-
-Modeling safe concurrency would require new configuration concepts such as
-shared resource or mutex identifiers. That is outside dot's bootstrap-focused
-scope. Package batches already provide the useful optimization by installing
-multiple package names in one provider invocation.
-
-## Architecture
-
-`ExecutionPlan` is a single typed job collection. There is no additional
-job IR.
+Apply and dry-run accept the same scope and job selectors:
 
 ```text
-dot.toml
-   |
-   | parse, select, merge
-   v
-EffectiveManifest
-   |
-   | validate, resolve, plan
-   v
-ExecutionPlan { jobs: Vec<PlannedJob> }
-   |
-   +-- JobSelection::All
-   `-- JobSelection::Only(package/action/link)
-                 |
-                 | include a true provider requirement
-                 v
-        SelectedExecutionPlan
-                 |
-          +-----------+-----------+
-          |                       |
-          v                       v
- dry_run::build_report         JobRunner
-          |                       |
-          v                       v
-    CommandReport         JobExecutionReport
-                                  |
-                                  v
-                     apply report projection
-                                  |
-                                  v
-                            CommandReport
+dot apply
+    [--target TARGET]
+    [--profile PROFILE]
+    [--job package:ID]...
+    [--job action:ID]...
+    [--job link:ID]...
+
+dot dry-run
+    [--target TARGET]
+    [--profile PROFILE]
+    [--job package:ID]...
+    [--job action:ID]...
+    [--job link:ID]...
 ```
 
-`SelectedExecutionPlan` is a view over the source plan. It stores a source-plan
-reference and an owned set of selected typed job IDs. Job access filters the
-source sequence without copying or re-resolving job data:
+`--job` is repeatable. Omitting it means all effective jobs. Supplying one or
+more occurrences means exactly those typed package, action, and link jobs,
+plus any providers required by selected provider-backed packages. Bare IDs,
+unknown kinds, `provider:ID`, malformed IDs, and duplicate occurrences are
+argument errors. Providers are not selectable.
 
-```rust
-struct SelectedExecutionPlan<'a> {
-    source: &'a ExecutionPlan,
-    selected: BTreeSet<JobId>,
-}
+The profile is optional. Omission and `--profile @root` both select the target
+root; otherwise the value names one globally unique profile node in the target
+tree. A target may be omitted only when exactly one configured target is
+compatible with the current platform.
+
+Selector values use their canonical spelling:
+
+```text
+package:editors
+action:configure
+link:nvim
 ```
 
-## Typed jobs and identity
+Selector input order does not affect plan or execution order.
 
-The job model is closed:
+## Typed identity and selection
+
+Internal and public job identities are deliberately different:
 
 ```rust
-enum PlannedJob {
-    Provider(PlannedProvider),
-    Package(PlannedPackage),
-    Action(PlannedAction),
-    Link(PlannedLink),
-}
-
 enum JobId {
     Provider(Identifier),
-    Package(Identifier),
-    Action(Identifier),
-    Link(Identifier),
+    Package(SelectorIdentifier),
+    Action(SelectorIdentifier),
+    Link(SelectorIdentifier),
 }
-```
 
-The enum variant scopes the declaration ID. A package, action, and link may use
-the same textual key without becoming the same job.
-
-Provider-backed package singles and batches remain distinct strong variants
-inside `PlannedPackage`. Manual packages are also package jobs but have no
-provider requirement.
-
-Provider and action command lifecycles remain internal to one job:
-
-```text
-provider job:
-activate -> probe -> [ensure steps -> activate -> final probe]
-
-action or manual-package job:
-[initial check] -> exec -> [post-check]
-```
-
-Those command stages are not separate selectable jobs.
-
-## Selection
-
-The internal selection model supports a set independently of any request
-surface:
-
-```rust
 enum JobSelector {
-    Package(Identifier),
-    Action(Identifier),
-    Link(Identifier),
+    Package(SelectorIdentifier),
+    Action(SelectorIdentifier),
+    Link(SelectorIdentifier),
 }
 
 enum JobSelection {
@@ -157,282 +90,247 @@ enum JobSelection {
 }
 ```
 
-Providers are internal requirements and cannot be selected by the user.
+`JobId` includes provider jobs because they are part of execution and reports.
+`JobSelector` excludes them because providers are dependency closure, not user
+work. Typed variants also keep equal text such as `package:setup`,
+`action:setup`, and `link:setup` distinct.
 
-Selection computes only the minimum executable closure:
+Target, profile, package, action, and link IDs use the selector-safe grammar
+from `SCHEMA.txt`. Provider IDs remain broad identifiers.
 
-- Selecting a provider-backed package includes that package and its provider.
-- Selecting a manual package includes only that package.
-- Selecting an action includes only that action.
-- Selecting a link includes only that link.
-- Selecting one provider-backed package does not include other packages using
-  the same provider.
+## Architecture and data flow
 
-For example:
-
-```text
-package:cli-tools
-    `-- requires provider:scoop
-```
-
-An unknown selector or missing provider requirement is reported before any
-selected job executes.
-
-Duplicate typed job IDs are prevented structurally rather than diagnosed as a
-second user-facing condition. Each effective domain collection is a TOML table,
-profile merging replaces values by key, and planning creates exactly one job
-from each effective entry. `JobId` adds the domain variant, so equal spelling in
-different domains remains unambiguous.
-
-The current dry-run and apply paths always construct `JobSelection::All`.
-
-## Serial execution order
-
-A full apply uses this stable order:
+The command pipeline is:
 
 ```text
-all selected providers
-    -> all selected packages
-    -> all selected actions
-    -> all selected links
+dot.toml
+   |
+   | parse + whole-configuration static validation
+   v
+Config
+   |
+   | select compatible target, select profile path, merge whole records
+   v
+EffectiveManifest                    (unresolved)
+   |
+   | validate JobSelection, compute provider closure,
+   | resolve only selected providers and jobs
+   v
+ExecutionPlan                        (owned, selected, resolved)
+   |
+   +---- dry-run ----> CommandReport
+   |
+   `---- apply ------> JobRunner
+                         |
+                         v
+                    JobExecutionReport
+                         |
+                         v
+                    CommandReport
 ```
 
-Within each kind, jobs retain the deterministic order assigned by planning.
-Every planned job has a stable position in the single sequence used by
-execution and reporting.
+`EffectiveManifest` is the unresolved structural source after target/profile
+merge. It can project borrowed package, action, and link identities for list
+commands without resolving values.
 
-An exact selection runs only its minimum closure:
+`ExecutionPlanner` receives both `&EffectiveManifest` and `&JobSelection`.
+Selection is therefore part of planning, not a filter applied after a larger
+plan exists. The planner returns exactly one owned `ExecutionPlan` containing
+only the selected resolved closure. There is no secondary selected-plan
+wrapper, no second owned catalog IR, and no post-plan selection view.
+
+`JobRunner::run` consumes `&ExecutionPlan` directly. Dry-run and apply project
+that same plan; dry-run never invokes `JobRunner`.
+
+## Static validation versus runtime resolution
+
+Configuration loading statically validates the complete configuration before
+scope or job selection:
+
+- all TOML and schema shapes;
+- target/profile/package/action/link selector IDs and broad provider IDs;
+- profile-name uniqueness;
+- every source expression's syntax, resolver name and payload, result type, and
+  package-list-variable placement;
+- provider references, Batch shape, and provider-args requirements in every
+  target-root and root-to-profile effective merge.
+
+This traversal includes unselected targets, unselected profiles and jobs, and
+ancestor declarations replaced in a deeper effective merge. An unknown
+resolver or malformed expression in any of them rejects the load.
+
+Static validation does not evaluate runtime resolver values. It does not look
+up a named environment variable, resolve a `dot` or `xdg` path, apply provider
+activation, inspect filesystem state, or run a command.
+
+After static validation and target/profile merge, the planner performs these
+atomic steps:
+
+1. Validate the complete `JobSelection` against unresolved typed identities.
+2. For `Only`, add the minimum provider closure and reject a selected
+   provider-backed package whose effective provider is absent.
+3. Resolve selected providers.
+4. Resolve selected provider-backed packages and provider install commands.
+5. Resolve selected manual packages.
+6. Resolve selected actions.
+7. Resolve selected links and require absolute resolved targets.
+8. Return the complete owned `ExecutionPlan`.
+
+Every selector is checked before step 3 begins. A selection or resolution
+failure returns no plan, so apply executes nothing. An unselected runtime error,
+such as a missing environment value, is never evaluated. The same error in a
+selected provider or job fails planning.
+
+## Provider closure
+
+`JobSelection::All` includes:
 
 ```text
-selected provider-backed package:
-provider -> package
-
-selected manual package:
-package
-
-selected action:
-action
-
-selected link:
-link
+all effective providers
+all effective provider-backed packages
+all effective manual packages
+all effective actions
+all effective links
 ```
 
-Phase order is not an implicit dependency. Selecting an action does not select
-all providers and packages that precede it in a full apply.
+Every effective provider is included even if no package references it.
 
-## JobRunner and JobExecutor
+`JobSelection::Only` includes only:
 
-`JobRunner` is the single execution entry point. It owns serial traversal,
-closed variant dispatch, requirement checks, and result collection. It does not
-contain provider, action, or link lifecycle implementation details.
+- each selected manual package, action, or link;
+- each selected provider-backed package;
+- the provider required by each selected provider-backed package.
 
-```rust
-pub struct JobRunner<'a> {
-    executor: JobExecutor<'a>,
-}
+Multiple selected packages sharing one provider include that provider once.
+Selecting an action or link adds no earlier phase. Selecting one
+provider-backed package does not add other packages that share its provider.
+A package Batch remains one job and cannot be split by name.
 
-impl JobRunner<'_> {
-    pub fn run(&self, plan: &SelectedExecutionPlan<'_>) -> JobExecutionReport;
-}
+## Stable plan and execution order
+
+Both complete and exact plans use the same phase and subphase order:
+
+```text
+1. providers                 by provider ID
+2. provider-backed packages by package ID
+3. manual packages          by package ID
+4. actions                  by action ID
+5. links                    by link ID
 ```
 
-`JobExecutor` is a crate-private closed domain adapter. Its type and methods are
-not public; they delegate to existing provider, action, and link runners:
+The maps are `BTreeMap`-backed. Exact selection filters this canonical sequence
+without reordering it. Provider-backed and manual packages remain separate
+subphases rather than one mixed package-ID order.
 
-```rust
-pub(crate) struct JobExecutor<'a> {
-    provider_runner: ProviderRunner<'a>,
-    action_runner: ActionRunner<'a>,
-}
+`JobRunner` executes synchronously and serially:
 
-impl JobExecutor<'_> {
-    pub(crate) fn ensure_provider(&self, job: &PlannedProvider) -> ProviderStatus;
-    pub(crate) fn install_provider_package(
-        &self,
-        job: &PlannedProviderInstall,
-        provider: &ProviderStatus,
-    ) -> ProviderInstallStatus;
-    pub(crate) fn install_manual_package(
-        &self,
-        job: &PlannedManualPackage,
-    ) -> Result<ActionOutcome, ActionRunError>;
-    pub(crate) fn run_action(
-        &self,
-        job: &PlannedAction,
-    ) -> Result<ActionOutcome, ActionRunError>;
-    pub(crate) fn reconcile_links<'p>(
-        &self,
-        jobs: impl IntoIterator<Item = &'p PlannedLink>,
-    ) -> Result<LinkReport, LinkPhaseError>;
-}
-```
+1. Every selected provider completes its readiness lifecycle before any
+   package starts: apply activation, probe, conditionally run ensure in
+   declaration order, then reapply activation and probe once when ensure
+   succeeds.
+2. Every selected provider-backed package runs after the provider phase. It
+   receives the successful in-memory `ProviderStatus` for its declared
+   provider.
+3. Selected manual-package actions run.
+4. Selected global actions run.
+5. The complete selected link set is prepared as one phase, then links are
+   reconciled in canonical order.
 
-The `PlannedJob` match exists once in `JobRunner`. `JobExecutor` deliberately
-does not add a generic dependency container or a second task graph. Links use a
-phase method because duplicate-target validation must inspect the complete
-selected link set before mutation.
+`ProviderStatus` is transient dependency output. It carries readiness and the
+activated child environment needed by provider installs; it is not persisted
+or exposed as a selectable job.
 
-A successful provider job produces an in-memory `ProviderStatus` containing its
-activated child environment. `JobRunner` keeps that status only in a typed
-transient dependency-output map for the current run, and dependent packages
-borrow it from there. `ProviderRunner::install` rejects a provider status whose
-provider ID differs from the install job's declared provider. After ordinary
-jobs and links finish, the runner consumes each status into its ID-free
-`Result<ProviderOutcome, ProviderError>` payload; the activated environment and
-the status's provider ID are dropped rather than persisted in the execution
-report.
-
-Provider and action runners continue to use the existing blocking
-`ProcessExecutor`. Link jobs continue to use Rust filesystem APIs.
+Job results are keyed by typed `JobId`. Reports are projected by traversing the
+plan sequence, so result-map ordering cannot become a second order source.
 
 ## Failure behavior
 
-Runtime failure does not stop unrelated jobs:
+Planning is all-or-nothing. TOML errors, complete static validation errors,
+scope errors, unknown selectors, missing provider requirements, or selected
+runtime resolution errors happen before any execution.
 
-- A provider failure blocks only packages that require that provider.
-- A package failure does not stop later packages.
-- An action failure does not stop later actions or links.
-- A link failure does not stop later links.
+Runtime failures remain local where execution can continue safely:
 
-Requirements and serial order are different concepts. Two packages using the
-same provider run one after another, but the first package is not a requirement
-of the second.
+- a provider failure blocks only selected packages that require that provider;
+- an unrelated provider and its selected packages still run;
+- failure of one provider install unit does not block later install units,
+  including another unit using the same provider;
+- manual-package and action failures do not stop unrelated later jobs;
+- duplicate selected link targets or another link preparation error block the
+  complete selected link phase before link mutation;
+- after successful link preparation, a per-link failure does not stop later
+  links.
 
-Scheduling state remains separate from typed domain outcomes:
+Every planned job receives exactly one completed or blocked result. Apply
+returns a failed report when any selected job fails or is blocked.
 
-```rust
-enum JobState {
-    Completed(JobOutcome),
-    Blocked(BlockReason),
-}
-
-enum JobOutcome {
-    Provider(Result<ProviderOutcome, ProviderError>),
-    ProviderPackage(Result<ProviderInstallOutcome, ProviderInstallError>),
-    ManualPackage(Result<ActionOutcome, ActionRunError>),
-    Action(Result<ActionOutcome, ActionRunError>),
-    Link(Result<LinkOutcome, LinkError>),
-}
-```
-
-Configuration parsing, target/profile selection, interpolation, planning, and
-job selection errors happen before execution. Runtime provider, command, and
-filesystem errors become per-job report results.
-
-## Links
-
-Links use the same selection and serial result path as other jobs but do not
-start child processes.
-
-Link preparation validates the selected link set and normalizes its targets
-before mutation. The existing duplicate-target behavior remains unchanged: a
-duplicate target is a phase-level error, so every selected link is reported as
-blocked and no link mutation starts. This preserves the current safety boundary
-without adding partial recovery.
-
-Each prepared link is then reconciled as one `PlannedJob::Link` in stable order.
-
-Before associating link results with jobs, `JobRunner` unconditionally verifies
-the complete result count and each result ID in order. These checks remain
-active in release builds. A mismatch is an internal contract violation and
-fails fast; it is not disguised as a link phase error.
+Provider commands retain their existing stream behavior: probes and checks use
+captured output, while ensure, install, and action exec processes inherit the
+terminal streams. Execution remains blocking, foreground, and serial.
 
 ## Apply, dry-run, and provider check
 
-The current operations are:
+Apply and dry-run share this construction:
 
 ```text
-dot
-    select All
-    pass the selected view to JobRunner for serial execution
-    project the typed results in selected/source order
-
-dot --dry-run
-    select All
-    render the selected plan without execution
-
-dot check providers
-    retain its existing probe-only diagnostic path
+load and statically validate the complete configuration
+    -> select and merge target/profile
+    -> validate selectors and provider closure
+    -> resolve selected runtime values
+    -> construct one ExecutionPlan
 ```
 
-Provider check does not use `ExecutionPlan` or `JobRunner`. It intentionally
-resolves only provider activate and probe fields so expression errors in ensure,
-package installs, manual packages, actions, and links remain outside its
-diagnostic scope. Forcing it through the complete apply plan would break that
-contract or require a second partial provider-job shape.
+Apply passes `&ExecutionPlan` directly to `JobRunner`, then combines plan facts
+with typed execution outcomes. Dry-run projects the same plan directly into
+`PLANNED` report items and performs no execution. It does not probe providers,
+run checks or exec actions, inspect link state, or mutate the filesystem.
 
-Provider check retains the existing `ProviderChecker` and blocking
-`ProcessExecutor`. It remains serial, probes every effective provider once, and
-never runs ensure or package installation.
+`dot check providers` is a separate diagnostic path. It does not accept job
+selectors, construct an `ExecutionPlan`, or invoke `JobRunner`. After complete
+static validation and target/profile selection, it resolves only each
+effective provider's activation and probe at runtime, applies activation to an
+in-memory child environment, and probes the provider once.
 
-Dry-run never invokes `JobRunner`. It visits the same selected job data and
-projects planned report items.
+A runtime activation, interpolation, preparation, execution, or probe failure
+becomes that provider's local `NOT_READY` result. Checking continues with later
+providers. Provider check does not runtime-resolve or execute ensure, install,
+packages, actions, or links.
+
+The structural list commands also do not construct an `ExecutionPlan`.
+`list jobs` stops at the unresolved merged manifest and lists only packages,
+actions, and links; providers never appear as selectable rows.
 
 ## Reporting
 
-`JobRunner` records results by typed `JobId`. `CommandReport` projects them in
-the stable selected/source order from `ExecutionPlan`.
+Dry-run and apply reports contain exactly the plan closure. A selected
+provider-backed package therefore causes its provider to appear before it,
+while a selected manual package, action, or link appears alone.
 
-```rust
-struct JobExecutionReport {
-    results: BTreeMap<JobId, JobState>,
-    link_phase_error: Option<LinkPhaseError>,
-}
-```
+The presentation-independent report vocabulary remains:
 
-The result map does not store a second copy of job order. Its typed `JobId` key
-is the sole stored report identity; `JobState` stores only ID-free domain
-outcomes and does not repeat it. `ProviderStatus`, including the activated
-environment needed by provider-package jobs, is transient dependency output
-and is never stored in `JobExecutionReport`.
+- provider results: ready or not ready;
+- provider-package results: installed, failed, or blocked;
+- manual-package/action results: satisfied, executed, or failed;
+- link results: satisfied, created, replaced, skipped, failed, or blocked.
 
-Every result insertion enforces key uniqueness in debug and release builds.
-Before returning a report, `JobRunner` also verifies that the result count
-equals the selected-job count. A duplicate or incomplete report is an internal
-contract violation and fails fast.
-
-Because execution is serial, live child output remains naturally grouped by
-command. The final report retains the existing typed statuses such as READY,
-INSTALLED, EXECUTED, CREATED, BLOCKED, and FAILED.
-
-Ctrl-C uses the operating system's default termination behavior. An interrupted
-dot process does not construct or render a final report.
+The human table renderer is not a stable serialized interface. The stable
+machine-facing selection interface is the headerless TSV emitted by the list
+commands.
 
 ## Module boundaries
 
 ```text
-plan.rs          ExecutionPlan and typed PlannedJob values
-job.rs           JobId, JobKind, JobSelector, and JobSelection identity vocabulary
-job_runner.rs    BlockReason, JobOutcome, JobState, JobExecutionReport, and serial traversal
-job_executor.rs  crate-private closed domain adapter
-provider.rs      provider lifecycle
-action_runner.rs action lifecycle
-link.rs          link preparation and one-link reconciliation
-report.rs        report types
-app/apply.rs     deterministic typed result projection
-dry_run.rs       deterministic selected-plan projection
-check.rs         existing provider-only diagnostic path
+config.rs        complete parsing and static validation entry point
+validation.rs    whole-tree expression and effective-merge validation
+manifest.rs      scope selection, profile merge, unresolved job projection
+job.rs           JobId, JobSelector, and JobSelection
+plan.rs          selection, provider closure, runtime resolution, ExecutionPlan
+job_runner.rs    serial phase orchestration over &ExecutionPlan
+job_executor.rs  typed provider/action/link execution adapter
+dry_run.rs       deterministic ExecutionPlan report projection
+check.rs         independent provider-only diagnostic path
 ```
 
-No scheduler, lane, cancellation, process-supervisor, platform-process, thread,
-channel, or async-runtime module is required.
-
-## Verification
-
-Tests verify:
-
-1. Full selection preserves provider, package, action, and link order.
-2. Exact provider-backed package selection adds only its provider.
-3. Exact manual package, action, and link selection adds no unrelated jobs.
-4. Unknown selectors fail before execution.
-5. A provider failure blocks only its dependent packages.
-6. Package, action, and link failures do not stop later unrelated jobs.
-7. A real runner test proves that a failed package does not block the next
-   package using the same provider and that both installs receive the activated
-   provider environment.
-8. Provider output supplies the activated environment to its packages.
-9. Dry-run and apply consume the same selected job data.
-10. Report order is stable.
-11. Existing provider-check tests continue to prove that it resolves only
-    activate/probe and remains serial.
-12. A duplicate link target blocks the selected link phase before mutation.
+These boundaries keep configuration facts, selected resolved intent, runtime
+outcomes, and presentation separate while preserving one execution order and
+one owned plan.

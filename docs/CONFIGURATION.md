@@ -9,7 +9,9 @@ this reference.
 ## Type index
 
 - [Foundational types](#foundational-types): [`string`](#string),
-  [`identifier`](#identifier), [`environment_name`](#environment_name),
+  [`identifier`](#identifier),
+  [`selector_identifier`](#selector_identifier),
+  [`environment_name`](#environment_name),
   [literal-string source](#literal-string-source),
   [string-expression source](#string-expression-source),
   [provider install flat-list expression](#provider-install-flat-list-expression),
@@ -34,25 +36,26 @@ The complete configuration tree is:
 
 ```text
 Root
-└── targets: { identifier -> Target }
+└── targets: { selector_identifier -> Target }
     ├── platform: PlatformConstraint
     ├── providers: { identifier -> Provider }
-    ├── packages: { identifier -> Package }
-    ├── links: { identifier -> Link }
-    ├── actions: { identifier -> Action }
-    └── profiles: { identifier -> Profile }
+    ├── packages: { selector_identifier -> Package }
+    ├── links: { selector_identifier -> Link }
+    ├── actions: { selector_identifier -> Action }
+    └── profiles: { selector_identifier -> Profile }
         ├── providers: { identifier -> Provider }
-        ├── packages: { identifier -> Package }
-        ├── links: { identifier -> Link }
-        ├── actions: { identifier -> Action }
-        └── profiles: { identifier -> Profile } (recursive)
+        ├── packages: { selector_identifier -> Package }
+        ├── links: { selector_identifier -> Link }
+        ├── actions: { selector_identifier -> Action }
+        └── profiles: { selector_identifier -> Profile } (recursive)
 ```
 
 A selected profile inherits the target and each profile on its lexical ancestor
 path. Each keyed provider, package, link, or action record is atomic: a deeper
 record with the same key replaces the complete earlier record. Fields and lists
 inside a record are never merged. Unselected branches and replaced records do
-not enter the effective manifest.
+not enter the effective manifest. They still undergo complete static
+validation when the configuration is loaded.
 
 Except for the single marked complete example at the end, every TOML snippet in
 this reference is an explicitly contextual fragment. It illustrates the type
@@ -80,8 +83,8 @@ source, or provider install flat-list rules for the actual field.
 
 ### identifier
 
-Shape: a non-empty string used for table keys, provider references, platform
-values, and similar names.
+Shape: a non-empty string used for provider keys and references, package
+installation names, and platform facts and constraints.
 
 Contextual fragment:
 
@@ -91,10 +94,26 @@ provider = "brew"
 
 Identifier syntax is validated during TOML deserialization. Identifiers must
 not contain `${` anywhere, including `\${`, and do not accept interpolation.
-Profile names are checked for global uniqueness within a target during manifest
-selection. The CLI profile selector rejects `/`; configuration declarations
-should avoid `/` so every profile node remains selectable. A slash in a
-declaration is not rejected by identifier deserialization.
+This broad type deliberately permits names that need not round-trip as external
+selectors. Providers, package `provider` references, Batch `names`, and
+`PlatformConstraint` values use it.
+
+### selector_identifier
+
+Shape: a string matching this exact ASCII grammar:
+
+```text
+[A-Za-z0-9_][A-Za-z0-9._-]*
+```
+
+Target, profile, package, action, and link table keys use this narrower type.
+Those keys are externally selectable identities, so the grammar excludes
+whitespace, control characters, `:`, `/`, `\`, and `@`. This makes
+`kind:identifier` unambiguous, keeps a selector safe as the first field of
+machine-readable listings, reserves `@root`, and allows profile paths to use
+`/` only as a display separator. Profile identifiers must also be globally
+unique within one target. Like broad identifiers, selector identifiers never
+interpolate.
 
 ### environment_name
 
@@ -113,9 +132,8 @@ and may interpolate.
 
 ### Literal-string source
 
-Shape: a TOML string whose selected consumer requires a validated literal
-string. This source role is currently used for package `provider_args`
-elements.
+Shape: a TOML string whose consumer requires a validated literal string. This
+source role is currently used for package `provider_args` elements.
 
 Contextual fragment:
 
@@ -125,10 +143,10 @@ provider_args = ["--cask", '--label=\${literal}']
 
 Literal strings do not resolve anything. Every source retains its deserialized
 TOML string value and a recoverable parsed form. An unescaped `${` in this role
-is rejected when a selected install unit consumes the package. `\${`
-represents literal `${` in the interpolation syntax; a TOML literal string is
-convenient when the parsed value must retain that backslash. Literal strings
-are data and are never shell syntax.
+is rejected during whole-configuration static validation. `\${` represents
+literal `${` in the interpolation syntax; a TOML literal string is convenient
+when the parsed value must retain that backslash. Literal strings are data and
+are never shell syntax.
 
 ### String-expression source
 
@@ -149,11 +167,12 @@ an exact variable is one resolver call occupying the entire source. A complete
 exact variable takes the resolver's declared result type.
 
 These sources reject unknown resolvers, invalid payloads, list-valued package
-variables, nesting, defaults, and expressions when the selected command
-consumes them. An unescaped `${` starts resolver syntax; `\${` represents
-literal `${` after TOML parsing. Malformed syntax remains recoverable during
-deserialization. Contextual validation and resolution happen later, at the
-field's command-sensitive planning or provider-check boundary.
+variables, nesting, defaults, and expressions. An unescaped `${` starts
+resolver syntax; `\${` represents literal `${` after TOML parsing. Malformed
+syntax remains recoverable during deserialization, then fails static promotion
+during configuration loading. Static promotion verifies syntax, resolver
+existence, payload shape, and result type without evaluating a runtime value.
+Only the selected execution closure is resolved later.
 
 TOML string syntax is only the carrier. Strings that look alike at that level
 can represent different typed forms:
@@ -224,8 +243,9 @@ string-expression sources do.
 
 ### Keyed tables
 
-Shape: a TOML table mapping an `identifier` key to a typed record, such as
-`{ <package_id>: Package }`.
+Shape: a TOML table mapping either an `identifier` or
+`selector_identifier` key to a typed record, such as
+`{ <package_id: selector_identifier>: Package }`.
 
 Contextual fragment:
 
@@ -234,11 +254,12 @@ Contextual fragment:
 ripgrep = { provider = "brew" }
 ```
 
-Keys are identifiers and cannot interpolate. Target keys are unique in the
-root table. Provider, package, link, and action keys are unique within their
+Keys cannot interpolate. Provider maps use broad `identifier` keys. Target,
+profile, package, link, and action maps use `selector_identifier` keys because
+those identities are externally selectable. Each key is unique within its
 declaration map. During profile inheritance, the same record key at a deeper
-level replaces the entire ancestor record; no field-level merge, deletion, or
-tombstone syntax exists.
+level replaces the entire ancestor record; no field-level merge, list merge,
+deletion, or tombstone syntax exists.
 
 ## Structural types
 
@@ -247,7 +268,7 @@ tombstone syntax exists.
 Shape:
 
 ```text
-{ targets: { identifier -> Target } }
+{ targets: { selector_identifier -> Target } }
 ```
 
 | Field | Type | Required | Interpolation |
@@ -261,9 +282,12 @@ Contextual fragment:
 platform = { os = "linux" }
 ```
 
-`Root` rejects unknown fields. A command selects one target by id; `--target`
-may be omitted only when the root contains exactly one target. dot never
-chooses among multiple targets using platform facts.
+`Root` rejects unknown fields. When target selection is omitted, dot selects a
+target only when exactly one configured target is compatible with the active
+platform facts. Zero compatible targets and multiple compatible targets are
+errors. An explicitly selected target still has its compatibility checked for
+execution; structural profile and job inspection may name an incompatible
+target.
 
 ### Target
 
@@ -338,9 +362,11 @@ platform = { os = "linux", arch = ["x86_64", "aarch64"], distro_family = ["arch"
 Different fields combine with AND; multiple values within one field combine
 with OR. Missing optional fields impose no constraint. Known examples include
 `windows`, `macos`, and `linux` for `os`, and `native`, `wsl`, and `container`
-for `environment`. The constraint is an assertion after explicit target
-selection, not a target filter. A mismatch fails before actions or filesystem
-mutation. All values are identifiers and do not interpolate.
+for `environment`. The constraint filters omitted-target inference and target
+listings, and is an assertion for execution with an explicitly selected
+target. An execution mismatch fails before actions or filesystem mutation.
+Structural profile and job inspection can examine an explicitly named
+incompatible target. All values are broad identifiers and do not interpolate.
 
 ## Package types
 
@@ -364,8 +390,9 @@ exec = { program = "./install-tool" }
 
 Each package key is its stable declaration and report id. Provider packages
 reference an effective provider; manual packages carry an `Action`. Package
-keys and provider references are identifiers and do not interpolate. Unknown
-fields and shapes that match neither variant are rejected.
+keys are selector identifiers; provider references are broad identifiers.
+Neither interpolates. Unknown fields and shapes that match neither variant are
+rejected.
 
 ### ProviderPackage
 
@@ -509,12 +536,14 @@ ensure = { program = "bash", args = ["${dot:config_dir}/install-brew"] }
 install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
 ```
 
-Every effective provider is activated and probed, even with no assigned
-packages. A failed or unstartable probe may run `ensure`; an ensure list runs
-in order and stops on failure. After successful ensure, dot reapplies activate
-and probes once more. Provider install then runs once per declared Single or
-Batch unit only when the provider is ready. An unavailable provider blocks its
-units without invoking install, while unrelated providers continue.
+Complete execution includes every effective provider, even one with no
+assigned packages. Exact job execution includes only providers required by the
+selected provider-backed packages; providers are not themselves selectable.
+A failed or unstartable probe may run `ensure`; an ensure list runs in order
+and stops on failure. After successful ensure, dot reapplies activate and
+probes once more. Provider install then runs once per selected Single or Batch
+unit only when the provider is ready. An unavailable provider blocks its units
+without invoking install, while unrelated work continues.
 
 Package list variables are invalid in `activate`, `probe`, and `ensure`, and
 are valid only as complete `install.args` elements. The provider install's
@@ -666,11 +695,12 @@ exec = { program = "mkdir", args = ["-p", "${xdg:cache}/dot"] }
 
 The implementation models this record as `Action<S, A>`, containing optional
 and required `ExecAction<S, A>` records. Every TOML action uses
-`Action<string-expression source, string-expression source>`. Its selected
-fields are promoted to typed string expressions and resolved into
-`Action<resolved string, resolved string>`. These generic parameters distinguish
-source and planned phases; users write only the concrete `check` and `exec`
-shape above.
+`Action<string-expression source, string-expression source>`. Every source
+field is promoted to a typed string expression during complete configuration
+validation. A selected action is later resolved into
+`Action<resolved string, resolved string>`. These generic parameters
+distinguish source and planned phases; users write only the concrete `check`
+and `exec` shape above.
 
 Without `check`, `exec` runs on every apply. Check exit code 0 means satisfied
 and skips exec; 1 means unsatisfied, so dot runs exec and checks exactly once
@@ -744,43 +774,48 @@ currently inapplicable and makes no mutation. This policy is independent of
 
 ## Cross-cutting validation and defaults
 
-Validation has three distinct boundaries:
+Validation and evaluation have four distinct boundaries:
 
-1. **Parsing and deserialization** check TOML structure, type shapes, required
-   fields, identifier rules, and environment-name rules. All object shapes
-   reject unknown fields. String-bearing source roles retain both their
-   deserialized TOML string value and a recoverable literal, template,
-   exact-variable, or malformed parsed form. Resolver lookup, result typing,
-   and malformed-source errors are deferred until a command consumes the
-   field.
-2. **Selection, merge, and planning** choose one target and optional profile,
-   replace keyed records along its ancestor path, then promote and resolve the
-   fields consumed while building the requested plan. Apply and dry-run consume
-   effective provider activate, probe, and ensure fields, selected manual
-   packages, actions, and links. They consume a provider's install sources only
-   for a selected provider-package unit that references that provider; an
-   otherwise selected but unused provider install remains unvalidated.
-3. **Execution** probes providers, runs processes, and reconciles links only
-   after planning succeeds. Dry-run stops before this boundary.
+1. **Parsing and deserialization** check TOML structure, field types, required
+   fields, broad and selector identifier rules, environment-name rules, and
+   fixed literals. All object shapes reject unknown fields. String-bearing
+   source roles retain both their TOML spelling and a recoverable literal,
+   template, exact-variable, or malformed parsed form.
+2. **Complete static validation** promotes every source expression in every
+   target and profile declaration, including unselected branches and records
+   that a deeper merge could replace. Promotion checks expression syntax,
+   resolver existence and payload form, result type, and list-variable
+   placement without evaluating resolver values. Validation also constructs
+   the target root and every root-to-profile effective merge. In each effective
+   scope, profile names must be globally unique, provider references must
+   resolve, Batch `names` must be non-empty and unique, and a package with
+   non-empty `provider_args` requires exactly one complete
+   `${package:provider_args}` element in its effective provider install args.
+3. **Selection and runtime resolution** choose and merge one target/profile
+   scope, validate the complete requested job-selector set, add the required
+   provider closure, and evaluate resolver values only for that selected
+   closure. A missing environment variable or unavailable `xdg` value in an
+   unselected job is therefore not read. Complete job selection resolves all
+   effective providers and jobs; exact selection resolves only selected
+   package/action/link jobs and providers required by selected
+   provider-backed packages.
+4. **Execution** probes providers, runs processes, and reconciles links only
+   after planning succeeds. Dry-run stops before this boundary. Structural list
+   commands stop after complete validation and unresolved target/profile
+   selection; they do not evaluate runtime resolver values.
 
 Omitted provider, package, link, action, and profile maps deserialize as empty
 maps. Omitted ExecAction `args` and EnvironmentPatch `variables` deserialize as
 empty collections. Other fields marked optional remain absent and receive any
 runtime default documented in their type section.
 
-`check providers` intentionally has a narrower validation boundary: it selects
-and merges the effective manifest, then resolves, applies, and checks only each
-provider's `activate` and `probe` fields. A local interpolation, activation,
-preparation, execution, or nonzero-probe result is recorded for that provider,
-and checking continues with the remaining providers. The command does not
-consume packages, actions, links, provider `ensure`, or provider `install`
-sources.
-
-Declarations outside the selected profile ancestry, and ancestor declarations
-replaced by a deeper record, are excluded from contextual expression
-validation for every command. They still pass through strict whole-document
-TOML deserialization, including identifier, environment-name, fixed-enum,
-required-field, and unknown-field checks.
+`check providers` shares parsing, complete static validation, and
+target/profile selection, but has a narrower runtime boundary. It resolves,
+applies, and checks only each effective provider's `activate` and `probe`
+fields. A local interpolation, activation, preparation, execution, or
+nonzero-probe result is recorded for that provider, and checking continues
+with the remaining providers. The command does not runtime-resolve packages,
+actions, links, provider `ensure`, or provider `install` sources.
 
 ## Interpolation
 
@@ -842,7 +877,8 @@ non-empty `provider_args`, the provider install args must contain exactly one
 
 | Role | Schema type | String variables | Package list variables |
 | --- | --- | --- | --- |
-| table keys/ids/provider refs/platform values | `identifier` | no | no |
+| target/profile/package/action/link keys | `selector_identifier` | no | no |
+| provider keys/refs, package names, platform values | `identifier` | no | no |
 | environment map keys | `environment_name` | no | no |
 | package `provider_args` | literal-string source | no | no |
 | provider `activate` path/variable values | string-expression source | yes | no |

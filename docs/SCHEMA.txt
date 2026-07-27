@@ -55,9 +55,10 @@ Schema map keys are restricted to `#string_key_type`:
     a documented named refinement of !string
 
 These are the implemented `StringKeyType::{String, Refinement}` alternatives.
-`#identifier` and `#environment_name` are documented string refinements. An
-arbitrary `SchemaType` cannot be a map key. There is no `Any`, no untyped
-heterogeneous schema container, and no general recursive flattening.
+`#identifier`, `#selector_identifier`, and `#environment_name` are documented
+string refinements. An arbitrary `SchemaType` cannot be a map key. There is no
+`Any`, no untyped heterogeneous schema container, and no general recursive
+flattening.
 
 
 ### identifier
@@ -65,10 +66,21 @@ heterogeneous schema container, and no general recursive flattening.
 !string
 
 An identifier is a non-empty table key or reference value. It does not accept
-interpolation and must not contain `${`. Profile identifiers must be globally
-unique inside one target. The profile name accepted by the CLI additionally
-cannot contain `/`; profile declarations should follow the same restriction so
-that every node remains selectable by name.
+interpolation and must not contain `${`. This broad identifier type is used for
+provider keys and references, provider package installation names and batch
+names, and platform facts and constraints.
+
+
+### selector_identifier
+
+!string matching:
+
+[A-Za-z0-9_][A-Za-z0-9._-]*
+
+A selector identifier is the table key and stable identity for a target,
+profile, package, action, or link. It is ASCII-only, cannot contain
+interpolation, and is safe to expose as an unencoded selector field. Profile
+identifiers must additionally be globally unique inside one target.
 
 
 ### environment_name
@@ -143,12 +155,12 @@ Resolver lookup and result typing do not affect source classification.
 #provider_install_arg_source =
     #source_role<#raw_toml_string, #parsed_string_form>
 
-These wrappers have the same TOML shape (`!string`) but declare how a selected
-consumer may promote the source. A literal-string source permits no resolver.
-A string-expression source may become a validated string expression. A
-provider-install argument source may become either one string expression or an
-exact list variable in the provider install flat-list expression. These type
-distinctions add no TOML syntax.
+These wrappers have the same TOML shape (`!string`) but declare how the source
+is promoted during whole-configuration validation. A literal-string source
+permits no resolver. A string-expression source may become a validated string
+expression. A provider-install argument source may become either one string
+expression or an exact list variable in the provider install flat-list
+expression. These type distinctions add no TOML syntax.
 
 
 ### contextual typed variables and expressions
@@ -259,26 +271,38 @@ interpolation, resolver argument lists, defaults, and expressions are invalid.
 
 Identifiers, environment names, fixed enums, and object shapes remain strict
 during TOML deserialization. All object shapes reject unknown fields. A
-malformed string source is retained during deserialization and becomes an
-error only if the selected command consumes that field.
+malformed string source is retained during deserialization so loading can
+report it with target, profile, job, and field context.
 
-After selecting a target and optional profile, apply and dry-run plan the
-selected effective records. They consume provider activate, probe, and ensure
-fields; provider install fields only for selected provider-package units that
-reference that provider; selected manual packages, actions, and links. A
-selected provider with no provider-package install unit leaves its install
-source unconsumed.
+After deserialization, loading syntactically and type-promotes every source
+expression in the complete configuration. This includes every target, every
+profile node, every job, unselected branches, and ancestor records that a
+deeper effective merge would replace. Unknown or malformed resolvers, invalid
+payloads, invalid result types for the source role, and invalid package list
+variable positions therefore fail every command at load time.
+
+Static loading does not evaluate resolver values. It does not read a named
+environment value, resolve a `dot` or `xdg` path, inject provider/package
+runtime context, inspect filesystem state, or run a command. Apply and dry-run
+perform that runtime resolution only after target/profile and job selection,
+and only for the selected execution closure. With complete job selection that
+closure contains every effective provider and job; with exact job selection it
+contains the selected package/action/link jobs plus only providers required by
+selected provider-backed packages.
+
+Loading also checks every target-root effective manifest and every effective
+root-to-profile merge. Every provider-backed package must reference a provider
+present in that effective merge. Batch `names` must be non-empty and unique.
+When an effective package has non-empty `provider_args`, its effective
+provider's `install.args` must contain exactly one complete
+`${package:provider_args}` variable.
 
 `check providers` consumes only each effective provider's activate and probe
 fields. It records a local activation, interpolation, preparation, execution,
 or probe error for that provider and continues checking the remaining
-providers. It does not consume provider ensure or install fields, packages,
-actions, or links.
-
-Declarations outside the selected profile ancestry and ancestor records
-replaced by a deeper record are not consumed by these contextual validation
-steps. They remain subject to the strict whole-document deserialization rules
-above.
+providers. It does not resolve provider ensure or install fields, packages,
+actions, or links at runtime; all of those declarations have already passed
+whole-configuration static validation.
 
 Omitted provider/package/link/action/profile maps, exec args, and environment
 variables deserialize as empty collections. Other fields marked with `?`
@@ -288,7 +312,7 @@ remain absent and receive any runtime default described in DESIGN.txt.
 ### root
 
 {
-targets: { <target_id: #identifier>: #target },
+targets: { <target_id: #selector_identifier>: #target },
 }
 
 
@@ -297,10 +321,10 @@ targets: { <target_id: #identifier>: #target },
 {
 platform: #platform_constraint,
 providers?: { <provider_id: #identifier>: #provider },
-packages?: { <package_id: #identifier>: #package },
-links?: { <link_id: #identifier>: #link },
-actions?: { <action_id: #identifier>: #source_action },
-profiles?: { <profile_id: #identifier>: #profile },
+packages?: { <package_id: #selector_identifier>: #package },
+links?: { <link_id: #selector_identifier>: #link },
+actions?: { <action_id: #selector_identifier>: #source_action },
+profiles?: { <profile_id: #selector_identifier>: #profile },
 }
 
 
@@ -308,10 +332,10 @@ profiles?: { <profile_id: #identifier>: #profile },
 
 {
 providers?: { <provider_id: #identifier>: #provider },
-packages?: { <package_id: #identifier>: #package },
-links?: { <link_id: #identifier>: #link },
-actions?: { <action_id: #identifier>: #source_action },
-profiles?: { <profile_id: #identifier>: #profile },
+packages?: { <package_id: #selector_identifier>: #package },
+links?: { <link_id: #selector_identifier>: #link },
+actions?: { <action_id: #selector_identifier>: #source_action },
+profiles?: { <profile_id: #selector_identifier>: #profile },
 }
 
 A selected profile inherits the target and each profile on its lexical ancestor

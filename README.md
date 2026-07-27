@@ -1,21 +1,23 @@
 # dot
 
-`dot` is a small, declarative bootstrap runner for personal development
+`dot` is a conservative, declarative bootstrap runner for personal development
 environments and dotfiles across Linux, macOS, and Windows.
 
-It reads a TOML manifest, selects one explicit target and optional profile,
-then coordinates external package providers, manual installation actions,
-generic actions, and symbolic links. The manifest stays readable as an
-inventory of the environment it describes.
+It reads a TOML manifest, selects one target and optional profile, and
+coordinates external package providers, manual installation actions, generic
+actions, and symbolic links. The manifest remains a readable inventory of the
+environment it describes.
 
-> [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete application
-> example used to develop `dot`. It describes an Arch Linux base/desktop/laptop
-> profile tree plus independent macOS and Windows environments.
+> [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete
+> application example used to develop `dot`. It describes an Arch Linux
+> base/desktop/laptop profile tree plus independent macOS and Windows
+> environments.
 
-`dot` is intentionally not a package manager. It does not search repositories,
-resolve dependencies, compare versions, implement installers, or keep an
-installed-state database. Those responsibilities remain with commands such as
-`pacman`, `brew`, `scoop`, `npm`, and `cargo`.
+`dot` is intentionally not a package manager or a general-purpose
+configuration DSL. It does not search repositories, solve dependencies,
+compare versions, implement installers, or keep an installed-state database.
+Those responsibilities remain with declared commands such as `pacman`, `brew`,
+`scoop`, `npm`, and `cargo`.
 
 ## Installation
 
@@ -59,71 +61,168 @@ ripgrep = { provider = "apt" }
 nvim = { source = "config/nvim", target = "${xdg:config}/nvim" }
 ```
 
-Inspect the selected intent without running commands or touching links:
+Inspect the complete selected intent without executing it:
 
 ```console
-dot --target workstation --dry-run
+dot dry-run --target workstation
 ```
 
-Check whether the selected providers are currently available:
+Check whether the effective providers are currently available:
 
 ```console
-dot --target workstation check providers
+dot check providers --target workstation
 ```
 
 Apply the environment:
 
 ```console
-dot --target workstation
+dot apply --target workstation
 ```
 
-`dot.toml` is the default configuration path. `--target` may be omitted when
-the file declares exactly one target.
+The default configuration path is `./dot.toml`; use `--config PATH` to select
+another file. `--target` may be omitted when exactly one configured target is
+compatible with the current platform.
 
 ## Command line
 
+The command is always explicit:
+
 ```text
-dot [OPTIONS]
-dot [OPTIONS] check providers
+dot [--config PATH] apply
+    [--target TARGET] [--profile PROFILE] [--job KIND:ID]...
+
+dot [--config PATH] dry-run
+    [--target TARGET] [--profile PROFILE] [--job KIND:ID]...
+
+dot [--config PATH] check providers
+    [--target TARGET] [--profile PROFILE]
+
+dot [--config PATH] list targets [--all]
+
+dot [--config PATH] list profiles
+    [--target TARGET]
+
+dot [--config PATH] list jobs
+    [--target TARGET] [--profile PROFILE]
 ```
 
-With no subcommand, `dot` applies the selected environment. Selection options
-are global and may appear before or after `check providers`.
+The optional profile is one globally unique profile node name inside the
+target. Omitting it selects the target root; `--profile @root` is the explicit
+equivalent. If the target is omitted, selection succeeds only when exactly one
+target is compatible. Execution commands and provider check reject an explicit
+incompatible target. `list profiles` and `list jobs` may inspect an explicitly
+named incompatible target structurally.
 
-| Option | Meaning |
-| --- | --- |
-| `-c, --config <PATH>` | TOML manifest; defaults to `./dot.toml` |
-| `-t, --target <TARGET>` | Target id; optional only when exactly one target exists |
-| `-p, --profile <PROFILE>` | One unique profile node name inside the target |
-| `--dry-run` | Render the resolved apply plan without executing it |
-| `-h, --help` | Print command help |
-| `-V, --version` | Print the `dot` version |
+### Exact job selection
 
-`--dry-run` performs configuration loading, target/profile selection, platform
-validation, profile merging, interpolation, and planning. It does not execute
-provider, package, or action commands and does not inspect or modify link state.
-Its output describes intent, not whether the current machine can satisfy it.
+Omitting `--job` selects all effective jobs. Repeat `--job` to select exact
+package, action, and link jobs:
 
-`check providers` applies each provider's in-memory environment patch and runs
-its probe once. It does not run ensure or install, process packages or actions,
-or inspect links. All effective providers are checked even if one is not ready.
+```console
+dot dry-run --target workstation \
+  --job package:ripgrep \
+  --job action:prepare-cache \
+  --job link:nvim
 
-Apply uses the same resolved execution plan as dry-run. It ensures providers,
-runs each declared provider install unit, applies manual packages and global
-actions, then reconciles links. Unrelated work continues after an individual
-runtime failure. The final report exits non-zero if any item failed or was
-blocked.
+dot apply --target workstation \
+  --job package:ripgrep \
+  --job action:prepare-cache \
+  --job link:nvim
+```
+
+The accepted forms are exactly:
+
+```text
+package:ID
+action:ID
+link:ID
+```
+
+A provider-backed package automatically includes its required provider.
+Providers cannot be selected directly, and a Batch package remains one
+indivisible job. Selector argument order does not control execution order.
+
+## Machine-readable lists
+
+The `list` commands provide stable catalogs for shell scripts, completion
+engines, fzf, and other external tools. Output is UTF-8, headerless TSV with
+one record per line and fixed columns:
+
+```text
+list targets:   TARGET  COMPATIBILITY  OS  ARCH  DISTRO  DISTRO_FAMILY  ENVIRONMENT
+list profiles:  PROFILE PATH           DEPTH
+list jobs:      SELECTOR KIND          ID  VIA  DETAIL
+```
+
+`list targets` includes only compatible targets by default; `--all` includes
+every target and labels compatibility. `list profiles` starts with
+`@root<TAB><root><TAB>0`. `list jobs` describes the unresolved effective
+package, action, and link records and never emits provider rows.
+
+The first field is the canonical reusable selector and is written verbatim.
+In later fields, backslash, tab, carriage return, and newline are escaped as
+`\\`, `\t`, `\r`, and `\n`. All records are prepared before stdout is written,
+so configuration or selection errors leave stdout empty. A downstream broken
+pipe is normal successful termination.
+
+### External fzf composition
+
+This Bash example lets fzf select one or more complete TSV rows, extracts each
+canonical first field, and passes it as a separately quoted `--job` argument:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+target=workstation
+profile=@root
+command=${1:-dry-run}
+
+case "$command" in
+  apply|dry-run) ;;
+  *) printf 'usage: %s [apply|dry-run]\n' "$0" >&2; exit 2 ;;
+esac
+
+selectors=()
+while IFS=$'\t' read -r selector _; do
+  selectors+=("$selector")
+done < <(
+  dot list jobs --target "$target" --profile "$profile" |
+    fzf --multi
+)
+
+((${#selectors[@]})) || {
+  printf 'no jobs selected\n' >&2
+  exit 1
+}
+
+job_args=()
+for selector in "${selectors[@]}"; do
+  job_args+=(--job "$selector")
+done
+
+dot "$command" \
+  --target "$target" \
+  --profile "$profile" \
+  "${job_args[@]}"
+```
+
+Run the wrapper with `dry-run` to inspect the chosen plan or `apply` to execute
+it. `dot` never invokes, configures, or depends on fzf; it does not read
+selection from stdin. The wrapper turns fzf output into ordinary command-line
+selectors before starting `apply` or `dry-run`, leaving their stdin available
+to interactive child commands.
 
 ## Configuration
 
 Configuration is intentionally finite and explicit. A target is a complete
-environment declaration; a selected nested profile inherits the target and only
-the profile nodes along the path to the selected node. Deeper keyed records
-replace complete earlier records.
+environment declaration. A selected nested profile inherits the target and
+only the profile nodes along the path to that node. Deeper keyed records
+replace complete earlier records; record fields and lists do not merge.
 
 A provider declares how to probe and install, with optional activation and
-ensure actions. Every provider-backed package is one declared provider install
-unit: a Single uses its table key as the name, while a Batch supplies an
+ensure actions. Every provider-backed package is one declared install unit: a
+Single uses its table key as the package name, while a Batch supplies an
 explicit non-empty `names` list. `dot` does not infer grouping.
 
 <!-- readme-configuration-example:start -->
@@ -147,27 +246,37 @@ names = ["bat", "fd"]
 <!-- readme-configuration-example:end -->
 
 A manual package contains its own install action. Generic actions describe
-other idempotent work, and links map existing sources to native symlink targets.
+other idempotent work, and links map existing sources to native symlink
+targets. The complete configuration is statically validated at load, while
+environment and path values are resolved only for the selected execution
+closure.
 
-See the [Configuration Reference](docs/CONFIGURATION.md) for the complete types,
-fields, examples, and interpolation rules.
+See the [Configuration Reference](docs/CONFIGURATION.md) for the complete
+types, fields, examples, and interpolation rules.
 
-## Reports and side-effect boundaries
+## Execution and diagnostics
 
-Dry-run, apply, and provider check share the same presentation-independent
-report model and table rendering, but cover different items:
+Apply and dry-run build the same selected, resolved execution plan. Dry-run
+renders that plan without running provider, package, or action commands and
+without inspecting or changing link state. Its output describes intent, not
+whether the current machine can satisfy it.
 
-- **Dry-run and apply:** report each logical provider, one item for each declared
-  Single or Batch provider install unit, each manual package, action, and link.
-- **`check providers`:** reports only effective providers and their readiness.
+Apply executes serially in stable provider, provider-backed package, manual
+package, action, and link phases. A provider failure blocks only selected
+packages that require it; unrelated selected work continues. Planning is
+atomic, and the final report exits non-zero if any selected item failed or was
+blocked.
 
-Dry-run is side-effect-free with respect to managed state, but provider probes
-are arbitrary external commands: `check providers` is diagnostic, not a
-side-effect-free simulation. Apply streams interactive child output and prints
-its final report afterward.
+`check providers` is separate from job selection. It applies each effective
+provider's in-memory activation patch and runs its probe once. It does not run
+ensure or install, process packages or actions, or inspect links. Runtime
+failures remain local to a provider, so later providers are still checked.
+Because probes are arbitrary external commands, provider check is diagnostic,
+not a side-effect-free simulation.
 
-The current table output is intended for people and is not a stable serialized
-interface. v0.0.1 does not provide `--json`.
+Apply and dry-run reports are human-readable tables, not stable serialized
+interfaces. The list-command TSV contract is the stable machine-facing
+interface. Version 0.0.1 does not provide `--json`.
 
 ## Goals
 
@@ -181,12 +290,10 @@ interface. v0.0.1 does not provide `--json`.
 
 ## Non-goals
 
-`dot` is not a package manager, a general-purpose configuration language, or a
-system orchestration platform. It deliberately omits:
+`dot` deliberately omits:
 
 - repository search, dependency solving, versions, updates, and uninstall;
 - package or link receipts and other persistent managed-state databases;
-- automatic target selection from platform facts;
 - per-item condition expressions and arbitrary evaluation;
 - cross-target inheritance, profile references, and multiple inheritance;
 - action dependency graphs and provider dependency resolution;
@@ -200,20 +307,21 @@ program works, it probably belongs outside `dot`.
 
 ## Development platform override
 
-The development-only `dev-platform-override` Cargo feature adds
-`--platform <TOML>` for testing target selection:
+The development-only `dev-platform-override` Cargo feature adds the global
+`--platform <TOML>` option for compatibility testing:
 
 ```console
 cargo run --features dev-platform-override -- \
-  --dry-run \
-  --platform '{ os = "windows", arch = "x86_64" }'
+  --platform '{ os = "windows", arch = "x86_64" }' \
+  dry-run
 ```
 
-Dry-run and `check providers` use the injected PlatformInfo only for target
-selection. Commands, environment variables, XDG paths, and filesystem state
-still belong to the host. Apply accepts but ignores the override and always
-uses detected host facts. `dot` prints a warning whenever this option is used.
-Without the feature, `--platform` is not part of the CLI.
+The injected `PlatformInfo` controls compatibility for dry-run, provider check,
+and target listings, and omitted-target inference for profile/job listings.
+Commands, environment variables, XDG paths, and filesystem state still belong
+to the host. Apply accepts but ignores the override and always uses detected
+host facts. `dot` prints a warning whenever this option is used. Without the
+feature, `--platform` is not part of the CLI.
 
 ## Further reading
 
@@ -221,7 +329,9 @@ Without the feature, `--platform` is not part of the CLI.
   examples, and interpolation rules.
 - [Configuration schema](docs/SCHEMA.txt) — authoritative structural schema and
   string roles.
-- [Design](docs/DESIGN.txt) — runtime and design semantics, execution boundaries,
-  and explicit design decisions.
+- [Design](docs/DESIGN.txt) — runtime and design semantics, execution
+  boundaries, and explicit design decisions.
+- [Unified job execution](docs/JOB_EXECUTION.md) — selected-plan architecture,
+  serial order, and failure behavior.
 - [yslib/dotfiles](https://github.com/yslib/dotfiles) — complete real-world
   configuration for Linux, macOS, and Windows.

@@ -8,10 +8,11 @@ describes runtime semantics and design boundaries.
 
 dot is a declarative bootstrap runner for personal development environments
 and dotfiles. A user selects one globally named target and, optionally, one
-globally unique inline profile node. The target option may be omitted only when
-the configuration contains exactly one target. dot derives one effective
-manifest and either displays it with --dry-run, probes its providers with
-`check providers`, or applies it.
+globally unique inline profile node. When the target is omitted, dot infers it
+only if exactly one configured target is compatible with the active
+PlatformInfo. It derives one effective unresolved manifest and then explicitly
+applies it, renders a dry-run, checks its providers, or lists structural
+selection data.
 
 dot deliberately prefers locally complete declarations over cross-environment
 deduplication. Two targets may repeat the same package, provider, link, or
@@ -31,7 +32,8 @@ dot understands only a small set of domain concepts:
 
 dot coordinates external providers and user actions, but it is not a package
 manager. It does not access package repositories, resolve dependencies,
-compare versions, select downloads, or implement package installation.
+compare versions, select downloads, or implement package installation. Its
+finite TOML schema is not a general-purpose configuration or execution DSL.
 
 
 ### target
@@ -39,9 +41,11 @@ compare versions, select downloads, or implement package installation.
 A target is a complete base environment declaration.
 
 - Target ids are globally unique within one configuration.
-- The user selects a target by id. If the configuration contains exactly one
-  target, omitting --target selects that sole target.
-- dot never chooses among multiple targets from platform or host facts.
+- The user may select a target by id. If target selection is omitted, dot
+  selects the target only when exactly one configured target matches the active
+  platform facts.
+- Zero compatible targets and multiple compatible targets are errors when
+  target selection is omitted.
 - A target owns its platform constraint, providers, packages, links, actions,
   and nested profiles.
 - Selecting a target without a profile uses only the target root declarations.
@@ -54,7 +58,8 @@ Examples of independent target ids include arch, macos, and windows.
 
 ### platform compatibility
 
-The target platform field is a compatibility assertion, not a filter.
+The target platform field defines compatibility for both inference and
+execution.
 
 - os is required. Known values include windows, macos, and linux.
 - arch, distro, distro_family, and environment are optional refinements.
@@ -62,11 +67,15 @@ The target platform field is a compatibility assertion, not a filter.
 - Different fields are combined with AND.
 - Multiple values inside one field are combined with OR.
 - Missing optional fields do not constrain compatibility.
-- A mismatch fails before any action or filesystem mutation occurs.
+- An explicitly selected incompatible target fails execution and provider
+  check before any action or filesystem mutation occurs.
+- `list profiles` and `list jobs` may structurally inspect an explicitly
+  selected incompatible target; omitted-target inference still requires one
+  compatible target.
 - A profile cannot change or weaken its target's platform constraint.
 
-Selecting an incompatible target is an error. It never produces a collection
-of skipped declarations.
+Execution never turns an incompatible target into a collection of skipped
+declarations.
 
 Runtime PlatformInfo uses Rust's compiled target `os` and `arch`. On Linux, dot
 reads the first available `/etc/os-release` or `/usr/lib/os-release`: `ID`
@@ -90,8 +99,10 @@ diamond merge, topological sort, or inheritance-cycle detection.
 
 A profile is selected directly by its id, regardless of its depth in the
 target's inline tree. Every profile id must therefore be unique within one
-target, and an id cannot contain slash. dot finds the selected node and derives
-its unique lexical path from the target root. Selecting no profile means the
+target. Its selector-safe grammar excludes slash and `@`, so slash remains only
+a path display separator and the reserved `@root` CLI token cannot collide with
+a declared profile. dot finds the selected node and derives its unique lexical
+path from the target root. Selecting no profile or selecting `@root` means the
 target root. Selecting an unknown profile id is an error before side effects.
 Exactly one profile node may be selected per invocation.
 
@@ -125,14 +136,16 @@ duplicates that declaration in the two branches. If a child does not want an
 ancestor declaration, the tree is structured incorrectly; dot provides no
 subtractive inheritance operation.
 
-All TOML records must deserialize according to SCHEMA.txt. Semantic validation
-is performed on the final effective manifest after replacement. In particular,
-only effective provider references and interpolations participate in the
-selected invocation.
+All TOML records must deserialize according to SCHEMA.txt. Configuration load
+then statically validates every declaration in the complete tree, including
+unselected and replaced records. It also validates provider references,
+package-batch structure, and provider-args requirements against the target root
+and every root-to-profile effective merge. Runtime expression values remain
+unresolved until an execution scope and exact job closure have been selected.
 
-The effective manifest is an internal value shared by dry-run, provider check,
-and apply. It is not a persistent receipt, a public serialization format, or a
-separate user-facing IR.
+The effective manifest is the unresolved internal value shared by list jobs,
+dry-run, provider check, and apply. It is not a persistent receipt, a public
+serialization format, or a separate user-facing IR.
 
 
 ### package
@@ -214,11 +227,12 @@ resolved only from the final effective provider map.
 A profile may add or completely replace a provider. This allows a specialized
 profile to introduce a capability without making it part of sibling profiles.
 Every selected provider is eagerly activated, probed, and ensured before any
-selected provider-package install unit is executed. The current full apply uses
-JobSelection::All, so it selects every effective provider, including providers
-with no packages. An exact selection includes a provider only when it is
-required by a selected provider-backed package. Provider install is never
-called with an empty names list.
+selected provider-package install unit is executed. Complete job selection uses
+JobSelection::All and includes every effective provider, including providers
+with no packages. Exact job selection uses JobSelection::Only and includes a
+provider only when it is required by a selected provider-backed package.
+Providers cannot be selected directly. Provider install is never called with
+an empty names list.
 
 
 ### provider lifecycle
@@ -465,10 +479,18 @@ v0.0.1 does not interpolate their contents, and interpolation syntax in them
 is an error. Scalar interpolation may be a complete string or part of a larger
 string. A list value cannot be embedded inside another string.
 
-Profile merging happens before interpolation. Replaced declarations and nodes
-outside the selected path do not resolve interpolation. Missing environment
-variables, unknown resolvers, unsupported payloads, and resolvers used in an
-invalid context are errors; values never silently become an empty string.
+Every source expression is syntactically and type-promoted during complete
+configuration loading. Unknown resolvers, unsupported payloads, malformed
+syntax, invalid list-variable placement, and resolvers used in an invalid
+source role are errors even in unselected targets, unselected jobs, or replaced
+declarations.
+
+Profile merging and exact job selection happen before runtime resolver
+evaluation. Only the selected provider/job closure reads environment values,
+resolves dot or XDG paths, or injects provider/package context. A missing
+environment variable or unavailable path in an unselected job does not block
+an exact selection; the same missing value in the selected closure is a
+planning error. Values never silently become an empty string.
 
 v0.0.1 intentionally omits resolver defaults, nested interpolation,
 configuration-node references, user-defined resolvers, expressions, automatic
@@ -478,88 +500,83 @@ no implicit meaning, and resolved values are never reinterpreted by a shell.
 
 ### execution plan and dry-run
 
-After target and profile selection, manifest merging, validation, and
-interpolation, dot constructs one internal ExecutionPlan. Its sole job storage
-is one stable ordered sequence of typed Provider, Package, Action, and Link
-jobs. Phase-specific accessors are projections over that sequence, not parallel
-aggregate storage. The plan is the single source of truth shared by real
-execution and dry-run. There is no separate DryRunPlan. Provider-backed package
-jobs preserve the single-versus-batch distinction instead of immediately
-reducing both forms to an untyped name list.
+The planning pipeline has one direction:
+
+```
+whole-configuration static validation
+    -> unresolved target/profile EffectiveManifest
+    -> JobSelection validation and provider closure
+    -> selected runtime resolution
+    -> one owned ExecutionPlan
+    -> dry-run projection or apply execution
+```
+
+ExecutionPlanner receives the unresolved effective manifest and a
+JobSelection. It validates the entire requested selector set before runtime
+resolution. JobSelection::All includes every effective provider, package,
+action, and link. JobSelection::Only includes the exact selected
+package/action/link identities and the minimum provider closure required by
+selected provider-backed packages. Providers are internal requirements and
+cannot be selected directly.
+
+The planner resolves only that closure and returns one owned ExecutionPlan.
+There is no post-plan selection view and no second selected-plan type. Its sole
+job storage is one stable ordered sequence of typed Provider, Package, Action,
+and Link jobs. Phase-specific accessors are projections over that sequence, not
+parallel aggregate storage. Provider-backed package jobs preserve the
+single-versus-batch distinction.
+
+The exact stable phase and subphase order is:
+
+```
+providers by provider id
+provider-backed packages by package id
+manual packages by package id
+actions by action id
+links by link id
+```
+
+Both map types are BTreeMap-backed. Exact selection filters the canonical
+sequence without reordering it; selector occurrence order and TOML declaration
+order are not execution order.
 
 ExecutionPlan is an internal Rust data model, not a serialized configuration
 format or public compatibility boundary. Runtime observations such as probe or
 check results, provider readiness, and filesystem state are execution state and
 are not stored in the plan.
 
-A SelectedExecutionPlan is a view over its source ExecutionPlan and retains the
-source job facts and order rather than copying or re-resolving them. Current
-dry-run and apply both construct JobSelection::All. The internal selection
-model also supports exact package, action, and link selections for future use.
-An exact provider-backed package selection adds only its required provider; it
-does not add other packages using that provider.
+Apply passes `&ExecutionPlan` directly to JobRunner, records runtime outcomes,
+and builds its CommandReport from the same plan facts. Dry-run projects that
+same plan into PLANNED report items without invoking JobRunner. A report is a
+view, not another executable plan.
 
-Dry-run projects the selected job facts into a presentation-independent
-CommandReport. This is a report view, not another executable plan: it may omit,
-regroup, or explain plan fields according to dry-run's human-facing purpose.
-Apply passes the same selected view to JobRunner, records runtime outcomes, and
-then builds its CommandReport from those selected facts and outcomes.
+For each selected provider, planning resolves and applies activate only to an
+in-memory child environment, then uses that environment to resolve the
+provider's probe, ensure, and selected install units. This is ordinary data
+transformation and does not start a process or modify the parent process
+environment. Global and manual actions resolve against the captured dot process
+environment and do not inherit an implicit provider environment.
 
-Dry-run selects and validates exactly the same effective manifest used by real
-execution, constructs the same ExecutionPlan and All-selected view, then renders
-it without invoking JobRunner. This is a permanent command contract: --dry-run
-never executes an exec_action and never reconciles or inspects runtime resource
-state.
+Provider install commands are fully resolved once per selected Single or Batch
+install unit, including list-valued package interpolation. A Single uses the
+package key as its item name; a Batch uses its stable logical key and retains
+its complete names list. Relative link sources are joined to the configuration
+directory and link targets must resolve to absolute paths.
 
-For an invocation conceptually equivalent to:
+Dry-run does not probe, ensure, or install providers; run manual-package or
+global-action checks and execs; inspect link state; or reconcile links. It does
+not test link-source existence, canonicalize paths, inspect conflicts, or
+modify the filesystem. Its output describes selected intent, not runtime
+outcome: a provider may be missing, a package may already be installed, an
+action check may skip exec, and a link may already be satisfied or may fail
+during apply.
 
-dot --target arch-personal --profile work --dry-run
-
-dry-run performs only these operations:
-
-1. Parse the configuration.
-2. Select the globally named target.
-3. Detect the current platform and validate target compatibility.
-4. Resolve the requested inline profile node and its ancestor path.
-5. Overlay target and profile nodes from root to the selected node.
-6. Validate the final effective manifest.
-7. Resolve each provider package declaration as one install unit without
-   regrouping separate declarations, resolve non-executing interpolation, and
-   construct the internal ExecutionPlan.
-8. Select all planned jobs, project that view into one logical report item per
-   provider, provider-package install unit, manual package, global action, and
-   link, then render the report.
-
-For each provider, dry-run resolves and applies activate only to an in-memory
-child environment, then uses that environment to resolve the provider's probe,
-ensure, and declared install units. This is ordinary data transformation and
-does not start a process or modify the parent process environment. Global and
-manual actions resolve against the captured dot process environment and do not
-inherit an implicit provider environment.
-
-Provider install commands are fully resolved once per declared single or batch
-install unit, including list-valued package interpolation. The report shows one
-row per install unit. A single row uses the package key as its item name; a
-batch row uses its stable logical key and shows names as detail. Manual and
-global actions retain resolved program/argument data in the report. Relative
-link sources are joined to the configuration directory and link targets must
-resolve to absolute paths, but dry-run does not test path existence,
-canonicalize paths, inspect conflicts, or create links.
-
-Dry-run omits replaced ancestors, unselected siblings, descendants outside the
-path, and any notion of skipped declarations. It does not run provider probe,
-ensure, or install; manual-package checks or installs; global-action checks or
-exec; or link reconciliation. It does not inspect provider availability,
-installed packages, or current link/filesystem state.
-
-The output describes selected intent, not runtime outcome. A listed provider
-may be missing, a package may already be installed, an action check may skip
-exec, and a listed link may already be satisfied or may fail during apply.
-
-Reading the configuration, command-line arguments, platform facts, environment
-variables, and built-in path context is permitted. These observations do not
-modify managed state. The internal ExecutionPlan, CommandReport, and current
-table formatting are not stable machine-readable or serialization contracts.
+Selected planning is atomic. Every selector is valid and every selected
+provider and job is resolved before an ExecutionPlan exists, so apply executes
+nothing after a selection or resolution error. Reading selected environment
+values and built-in path context is permitted during planning; those
+observations do not modify managed state. The ExecutionPlan, CommandReport, and
+human table formatting are not stable machine-readable contracts.
 
 
 ### provider check
@@ -569,23 +586,23 @@ Provider check is a separate, explicitly active diagnostic command:
 dot check providers --target arch --profile laptop
 
 It is intended for developing and debugging provider declarations against the
-current environment. Unlike --dry-run, it executes external probe commands and
+current environment. Unlike `dot dry-run`, it executes external probe commands and
 therefore cannot guarantee freedom from side effects. The configuration author
 owns the observational behavior of every probe.
 
 Provider check performs these operations:
 
-1. Parse the configuration.
-2. Select the globally named target.
-3. Detect the current platform and validate target compatibility.
-4. Resolve the requested inline profile node and its ancestor path.
-5. Overlay target and profile nodes from root to the selected node.
-6. Validate the final effective manifest.
-7. Resolve only the interpolation needed by each effective provider's activate
+1. Parse and statically validate the complete configuration, including every
+   source expression and every effective root/profile provider reference.
+2. Detect the current platform and select the target, requiring exactly one
+   compatible target when the target is omitted.
+3. Resolve the requested inline profile node and its ancestor path.
+4. Overlay target and profile nodes from root to the selected node.
+5. Resolve only the runtime values needed by each effective provider's activate
    and probe, then build its child environment by applying activate to the
    current dot process environment.
-8. Execute every effective provider's probe once.
-9. Build one report item per provider and render its readiness. Exit codes and
+6. Execute every effective provider's probe once.
+7. Build one report item per provider and render its readiness. Exit codes and
    captured stdout/stderr remain structured evidence; the current table shows a
    compact message or exit code rather than dumping captured streams.
 
@@ -609,33 +626,103 @@ manual-package or global action check/exec, or inspect/reconcile links. v0.0.1
 defines no link, action, package, or aggregate check command.
 
 Provider check remains an independent probe-only path. It does not construct a
-complete ExecutionPlan or invoke JobRunner. Because it resolves only activate
-and probe, expression errors in ensure, provider install, manual-package,
-action, or link fields remain outside this diagnostic command.
+complete ExecutionPlan or invoke JobRunner. All declarations have already
+passed static expression promotion, but missing runtime values in ensure,
+provider install, manual-package, action, or link fields remain unevaluated.
+Runtime activation, interpolation, preparation, execution, and probe failures
+remain provider-local and do not stop later provider checks.
 
 
 ### command surface
 
-The v0.0.1 command surface is intentionally small:
+The v0.0.1 command facade is explicit:
 
-- `dot` applies the selected target/profile;
-- `dot --dry-run` plans the same selection without executing the plan;
-- `dot check providers` probes the effective providers without ensuring them;
-- `--config PATH` selects the configuration and defaults to `dot.toml` in the
-  invocation directory;
-- `--target TARGET` is optional only for a configuration with exactly one
-  target;
-- `--profile PROFILE` selects one globally unique node name inside the target.
+```
+dot apply
+dot dry-run
+dot check providers
+dot list targets [--all]
+dot list profiles
+dot list jobs
+```
 
-`--dry-run` is an option on the default apply operation, not a check mode, and
-cannot be combined with `check providers`.
+There is no default operation. `dot` without a subcommand prints help and is an
+error. `--config PATH` is global and defaults to `./dot.toml`.
+
+Target and profile options belong to `apply`, `dry-run`, `check providers`, and
+`list jobs`. `list profiles` accepts only the target option. `list targets`
+accepts only `--all`. Target may be omitted only when exactly one configured
+target is compatible. Profile omission and `--profile @root` both select the
+target root.
+
+Apply and dry-run additionally accept repeatable exact job options:
+
+```
+--job package:ID
+--job action:ID
+--job link:ID
+```
+
+No `--job` occurrences means JobSelection::All. One or more mean
+JobSelection::Only. Bare IDs, provider selectors, unknown kinds, malformed
+selector identifiers, and duplicate occurrences are errors. Providers are not
+selectable.
 
 Development builds may enable the `dev-platform-override` feature. Its
-`--platform` inline TOML argument overrides PlatformInfo only for target
-selection by dry-run and provider check; commands, environment, XDG paths, and
-filesystem observations still come from the host. Apply ignores the override
-and always detects the host platform. Each case prints a warning so simulated
-platform facts cannot be mistaken for full platform emulation.
+global `--platform` inline TOML argument controls compatibility for dry-run,
+provider check, target-list labels/filtering, and omitted-target inference in
+profile/job lists. Commands, environment, XDG paths, and filesystem
+observations still come from the host. Apply ignores the override and always
+detects the host platform. Each case prints a warning so simulated platform
+facts cannot be mistaken for full platform emulation. Without the feature,
+`--platform` is absent from the CLI.
+
+
+### structural lists and TSV
+
+List commands are a stable machine-facing query surface. They load and
+statically validate the complete configuration, then stop at structural,
+unresolved data. They do not read runtime resolver values, inspect filesystem
+state, or run commands.
+
+`list targets` returns only compatible targets by default; `--all` returns
+every target with a compatibility label. `list profiles` returns `@root`
+followed by the target's profile tree in stable sibling-id preorder.
+`list jobs` returns the effective merged packages, actions, and links in
+canonical job order and never returns provider rows. An explicit incompatible
+target is permitted only for structural `list profiles` and `list jobs`;
+execution and provider check reject it.
+
+Every list command writes UTF-8, headerless TSV with one record per line and a
+fixed number of columns:
+
+```
+list targets:
+TARGET  COMPATIBILITY  OS  ARCH  DISTRO  DISTRO_FAMILY  ENVIRONMENT
+
+list profiles:
+PROFILE  PATH  DEPTH
+
+list jobs:
+SELECTOR  KIND  ID  VIA  DETAIL
+```
+
+The canonical reusable selector is the first field and is emitted verbatim.
+Backslash, tab, carriage return, and newline in later display fields are
+escaped as `\\`, `\t`, `\r`, and `\n`. Later fields are stable display
+columns, not a reversible serialization of the complete domain record.
+
+Every typed record and all of its fields are prepared before stdout is written.
+Configuration, validation, or scope errors therefore leave stdout empty. A
+downstream BrokenPipe is successful termination, which supports consumers that
+stop after enough records.
+
+This TSV boundary is intentionally sufficient for fzf and other external
+selectors. An external wrapper may pipe list jobs into `fzf --multi`, take each
+selected first field, and pass repeated `--job` arguments to apply or dry-run.
+dot never invokes, configures, detects, or depends on fzf, and it never reads a
+selection from stdin. Keeping selection outside dot leaves apply stdin attached
+to the terminal for interactive child commands.
 
 
 ### command reports and rendering
@@ -646,8 +733,8 @@ CommandReport before presentation. It contains:
 - the command kind: dry-run, apply, or check providers;
 - context: absolute config path, target, optional profile, and PlatformInfo;
 - overall status: PLANNED, SUCCESS, or FAILED;
-- one logical item per effective provider, provider-package install unit,
-  manual package, action, or link;
+- one logical item per provider or user job in the selected execution closure,
+  or one item per effective provider for provider check;
 - per-item typed subject data, status, and zero or more evidence records;
 - command-level diagnostics.
 
@@ -678,26 +765,31 @@ and exit non-zero. A constructed report controls the process exit status:
 PLANNED and SUCCESS exit zero, while FAILED exits non-zero.
 
 CommandReport separates result content from presentation so another renderer
-can be added later. Version 0.0.1 provides only the table renderer: it has no
-`--json` option and neither the Rust report shape nor table text is a stable
-public data contract.
+can be added later. Version 0.0.1 has no `--json` option, and neither the Rust
+report shape nor human table text is a stable public data contract. The
+separate list-command TSV format is the stable machine-facing catalog contract.
 
 
 ### apply pipeline
 
-1. Load the configuration and parse all TOML records structurally.
-2. Detect the platform, select one target and zero or one profile, and validate
-   target compatibility.
+1. Load the configuration, parse all TOML records structurally, promote every
+   source expression, and validate provider rules against every effective
+   target-root/profile merge.
+2. Detect the platform, select one compatible target and zero or one profile,
+   and reject ambiguity or incompatibility.
 3. Overlay target and profile declarations from root to the selected node,
-   replacing whole records by id.
-4. Validate and interpolate the effective manifest and construct the stable
+   replacing whole records by id to produce an unresolved EffectiveManifest.
+4. Validate the complete JobSelection and compute its provider closure before
+   reading any selected runtime resolver value.
+5. Resolve only the selected providers and user jobs into one owned, stable,
    typed ExecutionPlan.
-5. Construct a SelectedExecutionPlan with JobSelection::All.
-6. Pass that view to JobRunner for strictly synchronous serial execution in
-   provider, package, action, and link order.
+6. Pass `&ExecutionPlan` directly to JobRunner for strictly synchronous serial
+   execution in provider, provider-package, manual-package, action, and link
+   order.
 7. Project the typed JobExecutionReport into CommandReport by traversing the
-   selected jobs in their source-plan order.
-8. Render the complete CommandReport. Persist no package, action, or link state.
+   plan jobs in their canonical order.
+8. Render the complete CommandReport. Persist no package, action, or link
+   state.
 
 An individual runtime failure does not stop unrelated work. A provider failure
 blocks only its dependent packages. Before any link mutation, JobRunner
@@ -714,8 +806,8 @@ no signal handling, process supervision, or platform-specific kill mechanism.
 
 ### explicit non-goals for v0.0.1
 
-- Automatic target selection from platform facts or environment-quality
-  detection. The sole-target convenience rule is the only implicit selection.
+- Heuristic target ranking, environment-quality detection, or implicit
+  selection beyond the unique-compatible-target rule.
 - Cross-target inheritance, includes, imports, templates, or shared manifests.
 - Profile references, multiple inheritance, graph inheritance, or selecting
   multiple profile branches in one invocation.
@@ -748,4 +840,6 @@ no signal handling, process supervision, or platform-specific kill mechanism.
   guaranteed stable serial job order, or service management.
 - Process supervision, platform-specific kill APIs, custom signal handling, or
   recursive process-tree termination.
-- A package, action, or link selector in the current CLI.
+- Built-in interactive selection, an fzf command or dependency, or reading
+  selectors from stdin.
+- Direct provider selection or per-name selection inside a package Batch.
