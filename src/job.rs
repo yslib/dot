@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::schema::Identifier;
+use crate::schema::{Identifier, SelectorIdentifier};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobKind {
@@ -13,9 +13,9 @@ pub enum JobKind {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum JobId {
     Provider(Identifier),
-    Package(Identifier),
-    Action(Identifier),
-    Link(Identifier),
+    Package(SelectorIdentifier),
+    Action(SelectorIdentifier),
+    Link(SelectorIdentifier),
 }
 
 impl JobId {
@@ -30,19 +30,19 @@ impl JobId {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Provider(identifier)
-            | Self::Package(identifier)
-            | Self::Action(identifier)
-            | Self::Link(identifier) => identifier.as_str(),
+            Self::Provider(identifier) => identifier.as_str(),
+            Self::Package(identifier) | Self::Action(identifier) | Self::Link(identifier) => {
+                identifier.as_str()
+            }
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum JobSelector {
-    Package(Identifier),
-    Action(Identifier),
-    Link(Identifier),
+    Package(SelectorIdentifier),
+    Action(SelectorIdentifier),
+    Link(SelectorIdentifier),
 }
 
 impl JobSelector {

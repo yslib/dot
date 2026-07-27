@@ -16,7 +16,7 @@ use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
 use dot::platform::PlatformInfo;
 use dot::provider::ProviderInstallOutcome;
-use dot::schema::{Config, Identifier};
+use dot::schema::{Config, Identifier, SelectorIdentifier};
 use support::fixture;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
@@ -63,8 +63,12 @@ impl Drop for TempWorkspace {
     }
 }
 
-fn identifier(value: &str) -> Identifier {
+fn provider_id(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
 fn helper_program_toml() -> String {
@@ -141,35 +145,35 @@ fn runs_all_selected_jobs_in_stable_serial_order() {
     assert_eq!(
         selected_ids,
         [
-            JobId::Provider(identifier("ready")),
-            JobId::Package(identifier("provider-tool")),
-            JobId::Package(identifier("manual-tool")),
-            JobId::Action(identifier("configure")),
-            JobId::Link(identifier("config")),
+            JobId::Provider(provider_id("ready")),
+            JobId::Package(selector_id("provider-tool")),
+            JobId::Package(selector_id("manual-tool")),
+            JobId::Action(selector_id("configure")),
+            JobId::Link(selector_id("config")),
         ]
     );
     assert_eq!(report.len(), 5);
     assert!(report.link_phase_error().is_none());
     assert!(matches!(
-        report.get(&JobId::Provider(identifier("ready"))),
+        report.get(&JobId::Provider(provider_id("ready"))),
         Some(JobState::Completed(JobOutcome::Provider(Ok(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Package(identifier("provider-tool"))),
+        report.get(&JobId::Package(selector_id("provider-tool"))),
         Some(JobState::Completed(JobOutcome::ProviderPackage(Ok(
             ProviderInstallOutcome::Executed { .. }
         ))))
     ));
     assert!(matches!(
-        report.get(&JobId::Package(identifier("manual-tool"))),
+        report.get(&JobId::Package(selector_id("manual-tool"))),
         Some(JobState::Completed(JobOutcome::ManualPackage(Ok(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Action(identifier("configure"))),
+        report.get(&JobId::Action(selector_id("configure"))),
         Some(JobState::Completed(JobOutcome::Action(Ok(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Link(identifier("config"))),
+        report.get(&JobId::Link(selector_id("config"))),
         Some(JobState::Completed(JobOutcome::Link(Ok(
             LinkOutcome::Created
         ))))
@@ -186,7 +190,7 @@ fn exact_provider_package_runs_only_its_provider_closure() {
     workspace.write_source("source.txt");
     let plan = serial_plan(&workspace, "probe");
     let selected = plan
-        .select(&JobSelection::only(JobSelector::Package(identifier(
+        .select(&JobSelection::only(JobSelector::Package(selector_id(
             "provider-tool",
         ))))
         .expect("provider package should select");
@@ -220,24 +224,24 @@ fn provider_failure_blocks_its_package_but_continues_unrelated_work() {
     assert_eq!(report.len(), 5);
     assert!(report.link_phase_error().is_none());
     assert!(matches!(
-        report.get(&JobId::Provider(identifier("ready"))),
+        report.get(&JobId::Provider(provider_id("ready"))),
         Some(JobState::Completed(JobOutcome::Provider(Err(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Package(identifier("provider-tool"))),
+        report.get(&JobId::Package(selector_id("provider-tool"))),
         Some(JobState::Blocked(BlockReason::ProviderUnavailable { provider }))
             if provider.as_str() == "ready"
     ));
     assert!(matches!(
-        report.get(&JobId::Package(identifier("manual-tool"))),
+        report.get(&JobId::Package(selector_id("manual-tool"))),
         Some(JobState::Completed(JobOutcome::ManualPackage(Ok(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Action(identifier("configure"))),
+        report.get(&JobId::Action(selector_id("configure"))),
         Some(JobState::Completed(JobOutcome::Action(Ok(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Link(identifier("config"))),
+        report.get(&JobId::Link(selector_id("config"))),
         Some(JobState::Completed(JobOutcome::Link(Ok(
             LinkOutcome::Created
         ))))
@@ -270,11 +274,11 @@ fn provider_package_failure_does_not_block_the_next_package_for_that_provider() 
     assert_eq!(report.len(), 3);
     assert!(!report.all_succeeded());
     assert!(matches!(
-        report.get(&JobId::Package(identifier("first-tool"))),
+        report.get(&JobId::Package(selector_id("first-tool"))),
         Some(JobState::Completed(JobOutcome::ProviderPackage(Err(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Package(identifier("second-tool"))),
+        report.get(&JobId::Package(selector_id("second-tool"))),
         Some(JobState::Completed(JobOutcome::ProviderPackage(Ok(
             ProviderInstallOutcome::Executed { .. }
         ))))
@@ -310,12 +314,12 @@ fn duplicate_link_targets_block_the_complete_link_phase_before_mutation() {
             if links == &[String::from("first"), String::from("second")]
     ));
     assert!(matches!(
-        report.get(&JobId::Action(identifier("configure"))),
+        report.get(&JobId::Action(selector_id("configure"))),
         Some(JobState::Completed(JobOutcome::Action(Ok(_))))
     ));
     for link in ["first", "second"] {
         assert!(matches!(
-            report.get(&JobId::Link(identifier(link))),
+            report.get(&JobId::Link(selector_id(link))),
             Some(JobState::Blocked(BlockReason::LinkPhase { message }))
                 if message == &error.to_string()
         ));

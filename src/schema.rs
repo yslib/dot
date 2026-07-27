@@ -98,6 +98,7 @@ impl From<&str> for ResolvedString {
 }
 
 pub type Entries<T> = BTreeMap<Identifier, T>;
+pub type SelectableEntries<T> = BTreeMap<SelectorIdentifier, T>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Identifier(String);
@@ -611,7 +612,7 @@ source_string_type!(ProviderInstallArgSource);
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub targets: Entries<Target>,
+    pub targets: SelectableEntries<Target>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -621,13 +622,13 @@ pub struct Target {
     #[serde(default)]
     pub providers: Entries<Provider>,
     #[serde(default)]
-    pub packages: Entries<Package>,
+    pub packages: SelectableEntries<Package>,
     #[serde(default)]
-    pub links: Entries<Link>,
+    pub links: SelectableEntries<Link>,
     #[serde(default)]
-    pub actions: Entries<Action>,
+    pub actions: SelectableEntries<Action>,
     #[serde(default)]
-    pub profiles: Entries<Profile>,
+    pub profiles: SelectableEntries<Profile>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -636,13 +637,13 @@ pub struct Profile {
     #[serde(default)]
     pub providers: Entries<Provider>,
     #[serde(default)]
-    pub packages: Entries<Package>,
+    pub packages: SelectableEntries<Package>,
     #[serde(default)]
-    pub links: Entries<Link>,
+    pub links: SelectableEntries<Link>,
     #[serde(default)]
-    pub actions: Entries<Action>,
+    pub actions: SelectableEntries<Action>,
     #[serde(default)]
-    pub profiles: Entries<Profile>,
+    pub profiles: SelectableEntries<Profile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

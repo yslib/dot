@@ -1,0 +1,4 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.profiles."desktop/laptop"]

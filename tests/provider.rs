@@ -13,7 +13,8 @@ use dot::platform::PlatformInfo;
 use dot::provider::{ProviderOutcome, ProviderRunner, ProviderStage};
 use dot::schema::{
     Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, Identifier, OneOrMany,
-    PlatformConstraint, Provider, ProviderInstallArgSource, StringExpressionSource, Target,
+    PlatformConstraint, Provider, ProviderInstallArgSource, SelectorIdentifier,
+    StringExpressionSource, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -57,8 +58,12 @@ impl Drop for TempState {
     }
 }
 
-fn identifier(value: &str) -> Identifier {
+fn provider_id(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
 fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, StringExpressionSource> {
@@ -131,14 +136,14 @@ fn provider(probe: ExecAction, ensure: Vec<ExecAction>) -> Provider {
 fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
     let providers = providers
         .into_iter()
-        .map(|(id, provider)| (identifier(id), provider))
+        .map(|(id, provider)| (provider_id(id), provider))
         .collect::<Entries<_>>();
     let config = Config {
         targets: BTreeMap::from([(
-            identifier("test"),
+            selector_id("test"),
             Target {
                 platform: PlatformConstraint {
-                    os: OneOrMany::One(identifier(env::consts::OS)),
+                    os: OneOrMany::One(provider_id(env::consts::OS)),
                     arch: None,
                     distro: None,
                     distro_family: None,

@@ -14,7 +14,8 @@ use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
     FlatListPart, Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider,
-    ProviderPackage, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SourceAction,
+    ProviderPackage, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction,
+    SelectorIdentifier, SourceAction,
 };
 
 #[derive(Debug)]
@@ -297,7 +298,7 @@ impl PlannedProviderInstall {
 
 #[derive(Debug)]
 pub struct PlannedSingleProviderPackage {
-    id: Identifier,
+    id: SelectorIdentifier,
     provider: Identifier,
     provider_args: Vec<String>,
     install: ResolvedExecAction,
@@ -305,7 +306,7 @@ pub struct PlannedSingleProviderPackage {
 
 #[derive(Debug)]
 pub struct PlannedProviderPackageBatch {
-    id: Identifier,
+    id: SelectorIdentifier,
     provider: Identifier,
     provider_args: Vec<String>,
     names: Vec<String>,
@@ -314,7 +315,7 @@ pub struct PlannedProviderPackageBatch {
 
 #[derive(Debug)]
 pub struct PlannedManualPackage {
-    id: Identifier,
+    id: SelectorIdentifier,
     install: ResolvedAction,
 }
 
@@ -334,7 +335,7 @@ impl PlannedManualPackage {
 
 #[derive(Debug)]
 pub struct PlannedAction {
-    id: Identifier,
+    id: SelectorIdentifier,
     action: ResolvedAction,
 }
 
@@ -354,7 +355,7 @@ impl PlannedAction {
 
 #[derive(Debug)]
 pub struct PlannedLink {
-    id: Identifier,
+    id: SelectorIdentifier,
     source: PathBuf,
     target: PathBuf,
     on_conflict: LinkConflict,
@@ -833,7 +834,7 @@ impl Error for PlanningError {
 pub enum JobSelectionError {
     Unknown(JobSelector),
     MissingProvider {
-        package: Identifier,
+        package: SelectorIdentifier,
         provider: Identifier,
     },
 }
@@ -868,16 +869,20 @@ mod tests {
     };
     use crate::job::{JobSelection, JobSelector};
     use crate::platform::PlatformInfo;
-    use crate::schema::{Identifier, ResolvedExecAction};
+    use crate::schema::{Identifier, ResolvedExecAction, SelectorIdentifier};
 
-    fn identifier(value: &str) -> Identifier {
+    fn provider_id(value: &str) -> Identifier {
         Identifier::new(value).expect("test identifier should be valid")
+    }
+
+    fn selector_id(value: &str) -> SelectorIdentifier {
+        SelectorIdentifier::new(value).expect("test selector identifier should be valid")
     }
 
     #[test]
     fn exact_provider_package_reports_its_missing_provider_job() {
-        let package = identifier("orphan");
-        let provider = identifier("missing");
+        let package = selector_id("orphan");
+        let provider = provider_id("missing");
         let plan = ExecutionPlan {
             target: String::from("test"),
             profile: None,

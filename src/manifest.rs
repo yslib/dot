@@ -4,17 +4,18 @@ use std::fmt;
 
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    Action, Config, Entries, Link, Package, PlatformConstraint, Profile, Provider, Target,
+    Action, Config, Entries, Link, Package, PlatformConstraint, Profile, Provider,
+    SelectableEntries, SelectorIdentifier, Target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffectiveManifest {
-    target: String,
-    profile: Option<String>,
+    target: SelectorIdentifier,
+    profile: Option<SelectorIdentifier>,
     providers: Entries<Provider>,
-    packages: Entries<Package>,
-    links: Entries<Link>,
-    actions: Entries<Action>,
+    packages: SelectableEntries<Package>,
+    links: SelectableEntries<Link>,
+    actions: SelectableEntries<Action>,
 }
 
 impl EffectiveManifest {
@@ -28,7 +29,7 @@ impl EffectiveManifest {
 
         if !target.platform.matches(actual_platform) {
             return Err(ManifestError::IncompatiblePlatform {
-                target: target_id.to_owned(),
+                target: target_id.to_string(),
                 expected: Box::new(target.platform.clone()),
                 actual: Box::new(actual_platform.clone()),
             });
@@ -38,11 +39,11 @@ impl EffectiveManifest {
         let selected_profile = requested_profile
             .map(|profile| {
                 profiles
-                    .get(profile)
+                    .get_key_value(profile)
                     .ok_or_else(|| ManifestError::UnknownProfile {
-                        target: target_id.to_owned(),
+                        target: target_id.to_string(),
                         requested: profile.to_owned(),
-                        available: profiles.keys().cloned().collect(),
+                        available: profiles.keys().map(ToString::to_string).collect(),
                     })
             })
             .transpose()?;
@@ -52,7 +53,7 @@ impl EffectiveManifest {
         let mut links = target.links.clone();
         let mut actions = target.actions.clone();
 
-        if let Some(selected) = selected_profile {
+        if let Some((_, selected)) = selected_profile {
             for profile in &selected.chain {
                 providers.extend(profile.providers.clone());
                 packages.extend(profile.packages.clone());
@@ -62,8 +63,8 @@ impl EffectiveManifest {
         }
 
         Ok(Self {
-            target: target_id.to_owned(),
-            profile: requested_profile.map(str::to_owned),
+            target: target_id.clone(),
+            profile: selected_profile.map(|(profile_id, _)| profile_id.clone()),
             providers,
             packages,
             links,
@@ -72,26 +73,26 @@ impl EffectiveManifest {
     }
 
     pub fn target(&self) -> &str {
-        &self.target
+        self.target.as_str()
     }
 
     pub fn profile(&self) -> Option<&str> {
-        self.profile.as_deref()
+        self.profile.as_ref().map(SelectorIdentifier::as_str)
     }
 
     pub fn providers(&self) -> &Entries<Provider> {
         &self.providers
     }
 
-    pub fn packages(&self) -> &Entries<Package> {
+    pub fn packages(&self) -> &SelectableEntries<Package> {
         &self.packages
     }
 
-    pub fn links(&self) -> &Entries<Link> {
+    pub fn links(&self) -> &SelectableEntries<Link> {
         &self.links
     }
 
-    pub fn actions(&self) -> &Entries<Action> {
+    pub fn actions(&self) -> &SelectableEntries<Action> {
         &self.actions
     }
 }
@@ -102,15 +103,15 @@ struct IndexedProfile<'a> {
 }
 
 fn index_profiles<'a>(
-    target: &str,
-    profiles: &'a Entries<Profile>,
-) -> Result<BTreeMap<String, IndexedProfile<'a>>, ManifestError> {
+    target: &SelectorIdentifier,
+    profiles: &'a SelectableEntries<Profile>,
+) -> Result<BTreeMap<SelectorIdentifier, IndexedProfile<'a>>, ManifestError> {
     fn visit<'a>(
-        target: &str,
-        profiles: &'a Entries<Profile>,
+        target: &SelectorIdentifier,
+        profiles: &'a SelectableEntries<Profile>,
         path: &mut Vec<String>,
         chain: &mut Vec<&'a Profile>,
-        index: &mut BTreeMap<String, IndexedProfile<'a>>,
+        index: &mut BTreeMap<SelectorIdentifier, IndexedProfile<'a>>,
     ) -> Result<(), ManifestError> {
         for (profile_id, profile) in profiles {
             path.push(profile_id.to_string());
@@ -119,7 +120,7 @@ fn index_profiles<'a>(
 
             if let Some(existing) = index.get(profile_id.as_str()) {
                 return Err(ManifestError::DuplicateProfile {
-                    target: target.to_owned(),
+                    target: target.to_string(),
                     profile: profile_id.to_string(),
                     first_path: existing.path.clone(),
                     second_path: current_path,
@@ -127,7 +128,7 @@ fn index_profiles<'a>(
             }
 
             index.insert(
-                profile_id.to_string(),
+                profile_id.clone(),
                 IndexedProfile {
                     path: current_path,
                     chain: chain.clone(),
@@ -156,7 +157,7 @@ fn index_profiles<'a>(
 fn select_target<'a>(
     config: &'a Config,
     requested: Option<&str>,
-) -> Result<(&'a str, &'a Target), ManifestError> {
+) -> Result<(&'a SelectorIdentifier, &'a Target), ManifestError> {
     let available = || {
         config
             .targets
@@ -166,14 +167,15 @@ fn select_target<'a>(
     };
 
     match requested {
-        Some(target) => config
-            .targets
-            .get_key_value(target)
-            .map(|(id, target)| (id.as_str(), target))
-            .ok_or_else(|| ManifestError::UnknownTarget {
-                requested: target.to_owned(),
-                available: available(),
-            }),
+        Some(target) => {
+            config
+                .targets
+                .get_key_value(target)
+                .ok_or_else(|| ManifestError::UnknownTarget {
+                    requested: target.to_owned(),
+                    available: available(),
+                })
+        }
         None => match config.targets.len() {
             0 => Err(ManifestError::NoTargets),
             1 => {
@@ -181,7 +183,7 @@ fn select_target<'a>(
                     .targets
                     .first_key_value()
                     .expect("length checked above");
-                Ok((id.as_str(), target))
+                Ok((id, target))
             }
             _ => Err(ManifestError::TargetRequired {
                 available: available(),

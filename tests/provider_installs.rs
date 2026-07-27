@@ -14,7 +14,8 @@ use dot::provider::{ProviderInstallError, ProviderInstallOutcome, ProviderRunner
 use dot::schema::{
     BatchProviderPackage, Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction,
     Identifier, OneOrMany, Package, PlatformConstraint, Provider, ProviderInstallArgSource,
-    ProviderPackage, SingleProviderPackage, StringExpressionSource, Target,
+    ProviderPackage, SelectableEntries, SelectorIdentifier, SingleProviderPackage,
+    StringExpressionSource, Target,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -51,8 +52,12 @@ impl Drop for TempState {
     }
 }
 
-fn identifier(value: &str) -> Identifier {
+fn provider_id(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
 fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, StringExpressionSource> {
@@ -135,15 +140,15 @@ enum TestPackage<'a> {
 fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) -> ExecutionPlan {
     let providers = providers
         .into_iter()
-        .map(|(id, provider)| (identifier(id), provider))
+        .map(|(id, provider)| (provider_id(id), provider))
         .collect::<Entries<_>>();
     let packages = packages
         .into_iter()
         .map(|package| match package {
             TestPackage::Single { id, provider } => (
-                identifier(id),
+                selector_id(id),
                 Package::Provider(ProviderPackage::Single(SingleProviderPackage {
-                    provider: identifier(provider),
+                    provider: provider_id(provider),
                     provider_args: None,
                 })),
             ),
@@ -152,21 +157,21 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) ->
                 provider,
                 names,
             } => (
-                identifier(id),
+                selector_id(id),
                 Package::Provider(ProviderPackage::Batch(BatchProviderPackage {
-                    provider: identifier(provider),
-                    names: names.iter().map(|name| identifier(name)).collect(),
+                    provider: provider_id(provider),
+                    names: names.iter().map(|name| provider_id(name)).collect(),
                     provider_args: None,
                 })),
             ),
         })
-        .collect::<Entries<_>>();
+        .collect::<SelectableEntries<_>>();
     let config = Config {
         targets: BTreeMap::from([(
-            identifier("test"),
+            selector_id("test"),
             Target {
                 platform: PlatformConstraint {
-                    os: OneOrMany::One(identifier(env::consts::OS)),
+                    os: OneOrMany::One(provider_id(env::consts::OS)),
                     arch: None,
                     distro: None,
                     distro_family: None,
