@@ -4,8 +4,8 @@ use dot::schema::{
     Config, EnvironmentName, EnvironmentPatch, ExecAction, ExecActionType, ExpressionParseError,
     Identifier, LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
     ParsedStringForm, ParsedTemplatePart, ProviderInstallArgSource, ProviderPackage, RecordTypeId,
-    ResolvedEnvironmentPatch, ResolvedString, SchemaType, SchemaTypeMarker, StringExpressionSource,
-    StringKeyType, StringRefinementTypeId, StringType,
+    ResolvedEnvironmentPatch, ResolvedString, SchemaType, SchemaTypeMarker, SelectorIdentifier,
+    StringExpressionSource, StringKeyType, StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
@@ -54,6 +54,30 @@ fn logical_markers_define_their_resolved_value_types() {
 
     assert_eq!(list[0].value(), "owned");
     assert_eq!(list[1].value(), "borrowed");
+}
+
+#[test]
+fn selector_identifiers_use_the_cli_safe_grammar() {
+    for valid in ["a", "A1", "_root", "arch-personal", "tool.v2"] {
+        assert_eq!(SelectorIdentifier::new(valid).unwrap().as_str(), valid);
+    }
+
+    for invalid in [
+        "",
+        "has space",
+        "package:name",
+        "profile/name",
+        r"has\slash",
+        "@root",
+        "line\nbreak",
+        "tab\tvalue",
+        "非ascii",
+    ] {
+        assert!(
+            SelectorIdentifier::new(invalid).is_err(),
+            "{invalid:?} must be rejected"
+        );
+    }
 }
 
 #[test]
