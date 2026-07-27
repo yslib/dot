@@ -182,6 +182,87 @@ impl fmt::Display for IdentifierError {
 impl Error for IdentifierError {}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SelectorIdentifier(String);
+
+impl SelectorIdentifier {
+    pub fn new(value: impl Into<String>) -> Result<Self, SelectorIdentifierError> {
+        let value = value.into();
+        let mut characters = value.chars();
+        let Some(first) = characters.next() else {
+            return Err(SelectorIdentifierError);
+        };
+        let valid_first = first.is_ascii_alphanumeric() || first == '_';
+        let valid_rest =
+            characters.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'));
+        if !valid_first || !valid_rest {
+            return Err(SelectorIdentifierError);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SelectorIdentifier {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for SelectorIdentifier {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for SelectorIdentifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<String> for SelectorIdentifier {
+    type Error = SelectorIdentifierError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for SelectorIdentifier {
+    type Error = SelectorIdentifierError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for SelectorIdentifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_from(String::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectorIdentifierError;
+
+impl fmt::Display for SelectorIdentifierError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "a selector identifier must start with an ASCII letter, digit, or underscore and \
+             contain only ASCII letters, digits, underscores, periods, or hyphens",
+        )
+    }
+}
+
+impl Error for SelectorIdentifierError {}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnvironmentName(String);
 
 impl EnvironmentName {
