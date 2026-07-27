@@ -4,63 +4,79 @@ use crate::config::LoadedConfig;
 use crate::manifest::target_entries;
 use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
-use crate::schema::{Identifier, OneOrMany, PlatformConstraint};
+use crate::schema::{Identifier, OneOrMany, PlatformConstraint, SelectorIdentifier};
 
 use super::ListCommandError;
 
-pub(super) struct TargetRecord {
-    target: String,
-    compatibility: &'static str,
-    os: String,
-    arch: String,
-    distro: String,
-    distro_family: String,
-    environment: String,
+pub(super) struct Catalog {
+    loaded: LoadedConfig,
 }
 
-impl TsvRecord for TargetRecord {
-    fn fields(&self) -> Vec<Cow<'_, str>> {
-        vec![
-            Cow::Borrowed(&self.target),
-            Cow::Borrowed(self.compatibility),
-            Cow::Borrowed(&self.os),
-            Cow::Borrowed(&self.arch),
-            Cow::Borrowed(&self.distro),
-            Cow::Borrowed(&self.distro_family),
-            Cow::Borrowed(&self.environment),
-        ]
+impl Catalog {
+    pub(super) fn load(config: &std::path::Path) -> Result<Self, ListCommandError> {
+        Ok(Self {
+            loaded: LoadedConfig::load(config)?,
+        })
+    }
+
+    pub(super) fn records<'a>(
+        &'a self,
+        platform: &PlatformInfo,
+        all: bool,
+    ) -> Vec<TargetRecord<'a>> {
+        target_entries(self.loaded.config(), platform)
+            .filter(|entry| all || entry.compatible)
+            .map(|entry| TargetRecord {
+                target: entry.id,
+                compatibility: Compatibility::from(entry.compatible),
+                constraint: &entry.target.platform,
+            })
+            .collect()
     }
 }
 
-pub(super) fn records(
-    config: &std::path::Path,
-    platform: &PlatformInfo,
-    all: bool,
-) -> Result<Vec<TargetRecord>, ListCommandError> {
-    let loaded = LoadedConfig::load(config)?;
-    Ok(target_entries(loaded.config(), platform)
-        .filter(|entry| all || entry.compatible)
-        .map(|entry| from_constraint(entry.id.as_str(), entry.compatible, &entry.target.platform))
-        .collect())
+#[derive(Clone, Copy)]
+enum Compatibility {
+    Compatible,
+    Incompatible,
 }
 
-fn from_constraint(
-    target: &str,
-    compatible: bool,
-    constraint: &PlatformConstraint,
-) -> TargetRecord {
-    TargetRecord {
-        target: target.to_owned(),
-        compatibility: if compatible {
-            "compatible"
+impl Compatibility {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compatible => "compatible",
+            Self::Incompatible => "incompatible",
+        }
+    }
+}
+
+impl From<bool> for Compatibility {
+    fn from(compatible: bool) -> Self {
+        if compatible {
+            Self::Compatible
         } else {
-            "incompatible"
-        },
-        os: join(&constraint.os),
-        arch: join_optional(constraint.arch.as_ref()),
-        distro: join_optional(constraint.distro.as_ref()),
-        distro_family: join_optional(constraint.distro_family.as_ref()),
-        environment: join_optional(constraint.environment.as_ref()),
+            Self::Incompatible
+        }
+    }
+}
+
+pub(super) struct TargetRecord<'a> {
+    target: &'a SelectorIdentifier,
+    compatibility: Compatibility,
+    constraint: &'a PlatformConstraint,
+}
+
+impl TsvRecord for TargetRecord<'_> {
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.target.as_str()),
+            Cow::Borrowed(self.compatibility.as_str()),
+            Cow::Owned(join(&self.constraint.os)),
+            Cow::Owned(join_optional(self.constraint.arch.as_ref())),
+            Cow::Owned(join_optional(self.constraint.distro.as_ref())),
+            Cow::Owned(join_optional(self.constraint.distro_family.as_ref())),
+            Cow::Owned(join_optional(self.constraint.environment.as_ref())),
+        ]
     }
 }
 
@@ -76,5 +92,21 @@ fn join(values: &OneOrMany<Identifier>) -> String {
             .map(Identifier::as_str)
             .collect::<Vec<_>>()
             .join(","),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_preserve_typed_target_facts_until_rendering() {
+        fn assert_types<'a>(record: TargetRecord<'a>) {
+            let _: &'a SelectorIdentifier = record.target;
+            let _: Compatibility = record.compatibility;
+            let _: &'a PlatformConstraint = record.constraint;
+        }
+
+        let _ = assert_types;
     }
 }
