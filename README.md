@@ -121,12 +121,10 @@ package, action, and link jobs:
 ```console
 dot dry-run --target workstation \
   --job package:ripgrep \
-  --job action:prepare-cache \
   --job link:nvim
 
 dot apply --target workstation \
   --job package:ripgrep \
-  --job action:prepare-cache \
   --job link:nvim
 ```
 
@@ -165,6 +163,9 @@ In later fields, backslash, tab, carriage return, and newline are escaped as
 so configuration or selection errors leave stdout empty. A downstream broken
 pipe is normal successful termination.
 
+See the [Design Model](docs/DESIGN.txt) for the stable meaning of every TSV
+column.
+
 ### External fzf composition
 
 This Bash example lets fzf select one or more complete TSV rows, extracts each
@@ -183,13 +184,22 @@ case "$command" in
   *) printf 'usage: %s [apply|dry-run]\n' "$0" >&2; exit 2 ;;
 esac
 
+selection_file=$(mktemp)
+cleanup() {
+  rm -f "$selection_file"
+}
+trap cleanup EXIT
+
+if ! dot list jobs --target "$target" --profile "$profile" |
+  fzf --multi > "$selection_file"; then
+  printf 'job selection failed\n' >&2
+  exit 1
+fi
+
 selectors=()
 while IFS=$'\t' read -r selector _; do
   selectors+=("$selector")
-done < <(
-  dot list jobs --target "$target" --profile "$profile" |
-    fzf --multi
-)
+done < "$selection_file"
 
 ((${#selectors[@]})) || {
   printf 'no jobs selected\n' >&2

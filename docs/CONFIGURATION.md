@@ -143,10 +143,12 @@ provider_args = ["--cask", '--label=\${literal}']
 
 Literal strings do not resolve anything. Every source retains its deserialized
 TOML string value and a recoverable parsed form. An unescaped `${` in this role
-is rejected during whole-configuration static validation. `\${` represents
-literal `${` in the interpolation syntax; a TOML literal string is convenient
-when the parsed value must retain that backslash. Literal strings are data and
-are never shell syntax.
+is rejected during whole-configuration static validation. To represent a
+literal `${`, the deserialized TOML value must preserve `\${` for the
+expression parser; that parser consumes the backslash and produces literal
+`${` data. A TOML literal string is a convenient carrier for that value. This
+does not retain lexical TOML quoting or escape spelling. Literal strings are
+data and are never shell syntax.
 
 ### String-expression source
 
@@ -168,7 +170,8 @@ exact variable takes the resolver's declared result type.
 
 These sources reject unknown resolvers, invalid payloads, list-valued package
 variables, nesting, defaults, and expressions. An unescaped `${` starts
-resolver syntax; `\${` represents literal `${` after TOML parsing. Malformed
+resolver syntax. When the deserialized TOML value contains `\${`, the
+expression parser consumes the backslash and produces literal `${`. Malformed
 syntax remains recoverable during deserialization, then fails static promotion
 during configuration loading. Static promotion verifies syntax, resolver
 existence, payload shape, and result type without evaluating a runtime value.
@@ -891,10 +894,11 @@ non-empty `provider_args`, the provider install args must contain exactly one
 
 Identifiers and environment names reject every `${` substring, even escaped.
 For literal-string and string-expression source roles, unescaped `${`
-introduces resolver syntax and `\${` represents literal `${` after TOML
-parsing. Fixed enums accept only their declared literals. Unknown resolvers,
-unsupported or missing payloads, nested interpolation, defaults, expressions,
-missing values, and a resolver used outside its allowed context are errors.
+introduces resolver syntax. If the deserialized TOML value preserves `\${`,
+the expression parser consumes the backslash and produces literal `${`. Fixed
+enums accept only their declared literals. Unknown resolvers, unsupported or
+missing payloads, nested interpolation, defaults, expressions, missing values,
+and a resolver used outside its allowed context are errors.
 
 Environment patches resolve in application order: current dot process
 environment, provider activation when applicable, then the individual action's
