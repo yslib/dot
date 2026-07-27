@@ -49,15 +49,24 @@ pub fn run(dispatch: Dispatch) -> ExitCode {
         }
         Operation::ListTargets { all } => {
             let platform = compatibility_platform(platform_override.as_ref());
-            render_list(list_targets::records(&config, &platform, all))
+            match list_targets::Catalog::load(&config) {
+                Ok(catalog) => render_list(catalog.records(&platform, all)),
+                Err(error) => command_error(error),
+            }
         }
         Operation::ListProfiles { target } => {
             let platform = compatibility_platform(platform_override.as_ref());
-            render_list(list_profiles::records(&config, &platform, target.as_ref()))
+            match list_profiles::Catalog::load(&config, &platform, target.as_ref()) {
+                Ok(catalog) => render_list(catalog.records()),
+                Err(error) => command_error(error),
+            }
         }
         Operation::ListJobs(scope) => {
             let platform = compatibility_platform(platform_override.as_ref());
-            render_list(list_jobs::records(&config, &platform, &scope))
+            match list_jobs::Catalog::load(&config, &platform, &scope) {
+                Ok(catalog) => render_list(catalog.records()),
+                Err(error) => command_error(error),
+            }
         }
     }
 }
@@ -111,12 +120,7 @@ fn render_report(report: &CommandReport) -> ExitCode {
     }
 }
 
-fn render_list<R: TsvRecord>(records: Result<Vec<R>, ListCommandError>) -> ExitCode {
-    let records = match records {
-        Ok(records) => records,
-        Err(error) => return command_error(error),
-    };
-
+fn render_list<R: TsvRecord>(records: Vec<R>) -> ExitCode {
     let stdout = io::stdout();
     match normalize_list_output(TsvRenderer.render(&records, &mut stdout.lock())) {
         Ok(()) => ExitCode::SUCCESS,
@@ -185,12 +189,9 @@ mod tests {
 
     #[test]
     fn list_output_preserves_other_io_errors() {
-        let error = normalize_list_output(Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "injected",
-        )))
-        .expect_err("non-pipe output errors should remain errors");
+        let error = normalize_list_output(Err(io::Error::other("injected")))
+            .expect_err("non-pipe output errors should remain errors");
 
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.kind(), io::ErrorKind::Other);
     }
 }
