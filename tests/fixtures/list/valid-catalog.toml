@@ -1,0 +1,37 @@
+[targets.current]
+platform = { os = ["linux", "macos", "windows"] }
+
+[targets.never]
+platform = { os = "never-os", arch = ["x86_64", "aarch64"], distro = "never-distro", distro_family = ["never-family", "other-family"], environment = "never-environment" }
+
+[targets.never.providers.system]
+probe = { program = "probe-system" }
+install = { program = "install-system", args = ["${package:names}"] }
+
+[targets.never.packages.alpha]
+provider = "system"
+
+[targets.never.packages.bundle]
+provider = "system"
+names = ["bat", "fd", "fzf"]
+
+[targets.never.packages.manual]
+install = { exec = { program = "manual\\runner	phase" } }
+
+[targets.never.actions.configure]
+exec = { program = """configure
+runner""" }
+
+[targets.never.links.config]
+source = "home\\config"
+target = "${env:HOME}/.config/tool"
+
+[targets.never.profiles.desktop.packages.desktop]
+provider = "system"
+
+[targets.never.profiles.desktop.profiles.laptop.actions.laptop]
+exec = { program = "laptop-runner" }
+
+[targets.never.profiles.server.links.server]
+source = "server-source"
+target = "/server-target"

@@ -2,13 +2,12 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use super::Selection;
+use super::ExecutionRequest;
 use crate::action::ExecutionResult;
 use crate::action_runner::{ActionOutcome, ActionRunError, ActionStage};
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
-use crate::job::JobSelection;
 use crate::job_runner::{BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState};
 use crate::link::LinkOutcome;
 use crate::manifest::{EffectiveManifest, ManifestError};
@@ -26,19 +25,22 @@ use crate::report::{
     ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 
-pub(super) fn run(selection: &Selection) -> Result<CommandReport, CommandError> {
-    let loaded = LoadedConfig::load(&selection.config)?;
+pub(super) fn run(
+    config: &Path,
+    request: &ExecutionRequest,
+) -> Result<CommandReport, CommandError> {
+    let loaded = LoadedConfig::load(config)?;
     let platform = PlatformInfo::detect();
-    let manifest = EffectiveManifest::select(
+    let manifest = EffectiveManifest::select_for_execution(
         loaded.config(),
         &platform,
-        selection.target.as_deref(),
-        selection.profile.as_deref(),
+        request.scope.target.as_ref(),
+        request.scope.profile.named(),
     )?;
     let xdg_paths = XdgPaths::detect();
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
-    let plan = planner.plan(&manifest, &JobSelection::All)?;
+    let plan = planner.plan(&manifest, &request.jobs)?;
     let execution = JobRunner::new(loaded.environment()).run(&plan);
 
     Ok(build_report(loaded.path(), &plan, &execution))
@@ -478,6 +480,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+    use crate::app::{ProfileSelection, ScopeSelection};
     use crate::diagnostic::Operation;
     use crate::link::LinkError;
 
@@ -538,7 +541,7 @@ mod tests {
             .replace("__ACTION__", &helper_exec("action-ok"));
         let manifest = workspace.write_manifest(&contents);
 
-        let report = run(&selection(manifest)).expect("complete apply should produce a report");
+        let report = run(&manifest, &request()).expect("complete apply should produce a report");
 
         assert_eq!(report.status, ReportStatus::Succeeded);
         assert!(report.diagnostics.is_empty());
@@ -564,7 +567,8 @@ mod tests {
             .replace("__ACTION__", &helper_exec("action-ok"));
         let manifest = workspace.write_manifest(&contents);
 
-        let report = run(&selection(manifest)).expect("link phase failure should produce a report");
+        let report =
+            run(&manifest, &request()).expect("link phase failure should produce a report");
 
         assert_eq!(report.status, ReportStatus::Failed);
         assert_eq!(
@@ -646,11 +650,13 @@ mod tests {
         }
     }
 
-    fn selection(config: PathBuf) -> Selection {
-        Selection {
-            config,
-            target: None,
-            profile: None,
+    fn request() -> ExecutionRequest {
+        ExecutionRequest {
+            scope: ScopeSelection {
+                target: None,
+                profile: ProfileSelection::Root,
+            },
+            jobs: crate::job::JobSelection::All,
         }
     }
 

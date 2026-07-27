@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use super::Selection;
+use super::ScopeSelection;
 use crate::check::{ProviderChecker, build_report};
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::interpolation::{DotPaths, XdgPaths};
@@ -10,18 +10,19 @@ use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
 pub(super) fn run(
-    selection: &Selection,
+    config: &std::path::Path,
+    scope: &ScopeSelection,
     platform_override: Option<&PlatformInfo>,
 ) -> Result<CommandReport, CommandError> {
-    let loaded = LoadedConfig::load(&selection.config)?;
+    let loaded = LoadedConfig::load(config)?;
     let platform = platform_override
         .cloned()
         .unwrap_or_else(PlatformInfo::detect);
-    let manifest = EffectiveManifest::select(
+    let manifest = EffectiveManifest::select_for_execution(
         loaded.config(),
         &platform,
-        selection.target.as_deref(),
-        selection.profile.as_deref(),
+        scope.target.as_ref(),
+        scope.profile.named(),
     )?;
     let xdg_paths = XdgPaths::detect();
     let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());

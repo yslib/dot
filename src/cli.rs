@@ -1,10 +1,13 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
 use clap::{Args, Error, Parser, Subcommand};
 
-use crate::app::{Dispatch, Operation, Selection};
+use crate::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
+use crate::job::{JobSelection, JobSelector};
+use crate::schema::SelectorIdentifier;
 
 pub fn parse() -> Dispatch {
     let cli = Cli::parse();
@@ -23,18 +26,23 @@ where
 #[command(
     name = "dot",
     version,
-    about = "Bootstrap a declared development environment"
+    about = "Bootstrap a declared development environment",
+    arg_required_else_help = true,
+    subcommand_required = true
 )]
 struct Cli {
-    #[command(flatten)]
-    selection: SelectionArgs,
+    /// Path to the TOML manifest
+    #[arg(
+        short,
+        long,
+        global = true,
+        value_name = "PATH",
+        default_value = "./dot.toml"
+    )]
+    config: PathBuf,
 
-    /// Show the effective apply plan without executing it
-    #[arg(long)]
-    dry_run: bool,
-
-    /// Inject PlatformInfo for development-time target selection only; commands, environment,
-    /// XDG paths, and filesystem state remain on the host
+    /// Inject PlatformInfo for development-time compatibility selection; host environment, XDG
+    /// paths, commands, and filesystem state remain unchanged
     #[cfg(feature = "dev-platform-override")]
     #[arg(
         long,
@@ -45,7 +53,7 @@ struct Cli {
     platform: Option<crate::platform::PlatformInfo>,
 
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 impl Cli {
@@ -56,86 +64,146 @@ impl Cli {
         let platform_override = None;
 
         let operation = match self.command {
-            None => Operation::Apply {
-                dry_run: self.dry_run,
+            Command::Apply(args) => Operation::Apply(args.into_request()?),
+            Command::DryRun(args) => Operation::DryRun(args.into_request()?),
+            Command::Check {
+                command: CheckCommand::Providers(args),
+            } => Operation::CheckProviders(args.into_scope()),
+            Command::List {
+                command: ListCommand::Targets(args),
+            } => Operation::ListTargets { all: args.all },
+            Command::List {
+                command: ListCommand::Profiles(args),
+            } => Operation::ListProfiles {
+                target: args.target,
             },
-            Some(Command::Check {
-                command: CheckCommand::Providers,
-            }) if !self.dry_run => Operation::CheckProviders,
-            Some(Command::Check { .. }) => {
-                return Err(Error::raw(
-                    ErrorKind::ArgumentConflict,
-                    "--dry-run cannot be used with `check providers`",
-                ));
-            }
+            Command::List {
+                command: ListCommand::Jobs(args),
+            } => Operation::ListJobs(args.into_scope()),
         };
 
         Ok(Dispatch {
-            selection: self.selection.into(),
+            config: self.config,
             operation,
             platform_override,
         })
     }
 }
 
-#[derive(Debug, Args)]
-struct SelectionArgs {
-    /// Path to the TOML manifest
-    #[arg(
-        short,
-        long,
-        global = true,
-        value_name = "PATH",
-        default_value = "dot.toml"
-    )]
-    config: PathBuf,
-
-    /// Target to select; optional when the manifest contains exactly one target
-    #[arg(short, long, global = true, value_name = "TARGET")]
-    target: Option<String>,
-
-    /// Unique profile node name to select
-    #[arg(
-        short,
-        long,
-        global = true,
-        value_name = "PROFILE",
-        value_parser = parse_profile_name
-    )]
-    profile: Option<String>,
-}
-
-impl From<SelectionArgs> for Selection {
-    fn from(args: SelectionArgs) -> Self {
-        Self {
-            config: args.config,
-            target: args.target,
-            profile: args.profile,
-        }
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Apply the selected jobs
+    Apply(ExecutionArgs),
+
+    /// Show the selected apply plan without executing it
+    DryRun(ExecutionArgs),
+
     /// Inspect the current environment without repairing it
     Check {
         #[command(subcommand)]
         command: CheckCommand,
+    },
+
+    /// Print machine-readable catalog records
+    List {
+        #[command(subcommand)]
+        command: ListCommand,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum CheckCommand {
     /// Probe every effective provider
-    Providers,
+    Providers(ScopeArgs),
 }
 
-fn parse_profile_name(value: &str) -> Result<String, String> {
-    if value.is_empty() {
-        return Err("profile name cannot be empty".into());
+#[derive(Debug, Subcommand)]
+enum ListCommand {
+    /// List configured targets
+    Targets(ListTargetsArgs),
+
+    /// List declared profiles for one target
+    Profiles(ListProfilesArgs),
+
+    /// List effective unresolved jobs
+    Jobs(ScopeArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExecutionArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+
+    /// Select one package, action, or link job; repeat to select more
+    #[arg(long, value_name = "KIND:ID")]
+    job: Vec<JobSelector>,
+}
+
+impl ExecutionArgs {
+    fn into_request(self) -> Result<ExecutionRequest, Error> {
+        let jobs = if self.job.is_empty() {
+            JobSelection::All
+        } else {
+            let mut unique = BTreeSet::new();
+            for selector in self.job {
+                if !unique.insert(selector.clone()) {
+                    return Err(Error::raw(
+                        ErrorKind::ArgumentConflict,
+                        format!("job selector `{selector}` was supplied more than once"),
+                    ));
+                }
+            }
+            JobSelection::Only(unique)
+        };
+
+        Ok(ExecutionRequest {
+            scope: self.scope.into_scope(),
+            jobs,
+        })
     }
-    if value.contains('/') {
-        return Err("profile must be one node name and cannot contain `/`".into());
+}
+
+#[derive(Debug, Args)]
+struct ScopeArgs {
+    /// Target to select; optional when exactly one target is compatible
+    #[arg(short, long, value_name = "TARGET", value_parser = parse_selector)]
+    target: Option<SelectorIdentifier>,
+
+    /// Profile node to select, or @root for target-root jobs
+    #[arg(short, long, value_name = "PROFILE", value_parser = parse_profile)]
+    profile: Option<String>,
+}
+
+impl ScopeArgs {
+    fn into_scope(self) -> ScopeSelection {
+        ScopeSelection {
+            target: self.target,
+            profile: ProfileSelection::from_cli(self.profile.as_deref())
+                .expect("clap validated the profile selector"),
+        }
     }
-    Ok(value.to_owned())
+}
+
+#[derive(Debug, Args)]
+struct ListTargetsArgs {
+    /// Include incompatible targets
+    #[arg(long)]
+    all: bool,
+}
+
+#[derive(Debug, Args)]
+struct ListProfilesArgs {
+    /// Target to inspect; optional when exactly one target is compatible
+    #[arg(short, long, value_name = "TARGET", value_parser = parse_selector)]
+    target: Option<SelectorIdentifier>,
+}
+
+fn parse_selector(value: &str) -> Result<SelectorIdentifier, String> {
+    SelectorIdentifier::new(value).map_err(|error| error.to_string())
+}
+
+fn parse_profile(value: &str) -> Result<String, String> {
+    ProfileSelection::from_cli(Some(value))
+        .map(|_| value.to_owned())
+        .map_err(|error| error.to_string())
 }

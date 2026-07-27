@@ -1,38 +1,235 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
-use dot::app::{Dispatch, Operation, ProfileSelection, Selection};
+use dot::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
 use dot::cli;
+use dot::job::{JobSelection, JobSelector};
 #[cfg(feature = "dev-platform-override")]
 use dot::platform::PlatformInfo;
 use dot::schema::SelectorIdentifier;
 
+fn identifier(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector should be valid")
+}
+
+fn root_scope(target: Option<&str>) -> ScopeSelection {
+    ScopeSelection {
+        target: target.map(identifier),
+        profile: ProfileSelection::Root,
+    }
+}
+
 #[test]
-fn defaults_to_apply_with_the_current_directory_dotfile() {
-    let dispatch = cli::try_parse_from(["dot"]).expect("default invocation should parse");
+fn requires_an_explicit_root_subcommand() {
+    let error = cli::try_parse_from(["dot"]).expect_err("dot alone should show help");
+
+    assert_eq!(
+        error.kind(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+}
+
+#[test]
+fn rejects_the_old_implicit_apply_and_global_dry_run_syntax() {
+    let implicit = cli::try_parse_from(["dot", "--config", "config/dev.toml"])
+        .expect_err("implicit apply should be rejected");
+    let dry_run =
+        cli::try_parse_from(["dot", "--dry-run"]).expect_err("global dry-run should be rejected");
+
+    assert_eq!(implicit.kind(), ErrorKind::MissingSubcommand);
+    assert_eq!(dry_run.kind(), ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn parses_explicit_apply_with_root_scope_and_all_jobs() {
+    let dispatch = cli::try_parse_from(["dot", "apply"]).expect("apply should parse");
 
     assert_eq!(
         dispatch,
         Dispatch {
-            selection: Selection {
-                config: PathBuf::from("dot.toml"),
-                target: None,
-                profile: None,
-            },
-            operation: Operation::Apply { dry_run: false },
+            config: PathBuf::from("./dot.toml"),
+            operation: Operation::Apply(ExecutionRequest {
+                scope: root_scope(None),
+                jobs: JobSelection::All,
+            }),
             platform_override: None,
         }
     );
 }
 
-#[cfg(feature = "dev-platform-override")]
 #[test]
-fn parses_a_toml_platform_override() {
+fn parses_dry_run_selection_and_repeatable_jobs() {
     let dispatch = cli::try_parse_from([
         "dot",
-        "--dry-run",
+        "dry-run",
+        "--config",
+        "config/dev.toml",
+        "--target",
+        "arch-personal",
+        "--profile",
+        "laptop",
+        "--job",
+        "link:config",
+        "--job",
+        "package:ripgrep",
+    ])
+    .expect("dry-run arguments should parse");
+
+    assert_eq!(dispatch.config, PathBuf::from("config/dev.toml"));
+    assert_eq!(
+        dispatch.operation,
+        Operation::DryRun(ExecutionRequest {
+            scope: ScopeSelection {
+                target: Some(identifier("arch-personal")),
+                profile: ProfileSelection::Named(identifier("laptop")),
+            },
+            jobs: JobSelection::Only(BTreeSet::from([
+                "link:config".parse::<JobSelector>().unwrap(),
+                "package:ripgrep".parse::<JobSelector>().unwrap(),
+            ])),
+        })
+    );
+}
+
+#[test]
+fn normalizes_absent_and_explicit_root_profiles() {
+    for args in [
+        vec!["dot", "apply"],
+        vec!["dot", "apply", "--profile", "@root"],
+    ] {
+        let dispatch = cli::try_parse_from(args).expect("root profile should parse");
+        let Operation::Apply(request) = dispatch.operation else {
+            panic!("expected apply request");
+        };
+        assert_eq!(request.scope.profile, ProfileSelection::Root);
+    }
+}
+
+#[test]
+fn rejects_duplicate_job_selectors_during_dispatch_conversion() {
+    let error = cli::try_parse_from([
+        "dot",
+        "apply",
+        "--job",
+        "package:ripgrep",
+        "--job",
+        "package:ripgrep",
+    ])
+    .expect_err("duplicate jobs should be rejected");
+
+    assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    assert!(error.to_string().contains("package:ripgrep"));
+}
+
+#[test]
+fn rejects_bare_provider_and_unknown_job_selectors() {
+    for selector in ["ripgrep", "provider:brew", "service:ssh"] {
+        let error = cli::try_parse_from(["dot", "apply", "--job", selector])
+            .expect_err("invalid job selector should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
+}
+
+#[test]
+fn parses_check_and_list_operations() {
+    let check = cli::try_parse_from([
+        "dot",
+        "check",
+        "providers",
+        "-c",
+        "config/dev.toml",
+        "-t",
+        "arch-personal",
+        "-p",
+        "laptop",
+    ])
+    .expect("check providers should parse");
+    assert_eq!(check.config, PathBuf::from("config/dev.toml"));
+    assert_eq!(
+        check.operation,
+        Operation::CheckProviders(ScopeSelection {
+            target: Some(identifier("arch-personal")),
+            profile: ProfileSelection::Named(identifier("laptop")),
+        })
+    );
+
+    let targets =
+        cli::try_parse_from(["dot", "list", "targets", "--all"]).expect("targets should parse");
+    assert_eq!(targets.operation, Operation::ListTargets { all: true });
+
+    let profiles = cli::try_parse_from(["dot", "list", "profiles", "-t", "never"])
+        .expect("profiles should parse");
+    assert_eq!(
+        profiles.operation,
+        Operation::ListProfiles {
+            target: Some(identifier("never")),
+        }
+    );
+
+    let jobs = cli::try_parse_from([
+        "dot",
+        "list",
+        "jobs",
+        "--target",
+        "never",
+        "--profile",
+        "@root",
+    ])
+    .expect("jobs should parse");
+    assert_eq!(
+        jobs.operation,
+        Operation::ListJobs(root_scope(Some("never")))
+    );
+}
+
+#[test]
+fn structurally_rejects_options_on_commands_where_they_do_not_apply() {
+    for args in [
+        vec!["dot", "check", "providers", "--job", "package:ripgrep"],
+        vec!["dot", "list", "targets", "--profile", "desktop"],
+        vec!["dot", "list", "targets", "--target", "current"],
+        vec!["dot", "list", "profiles", "--profile", "desktop"],
+        vec!["dot", "list", "profiles", "--job", "link:config"],
+        vec!["dot", "list", "jobs", "--all"],
+    ] {
+        let error = cli::try_parse_from(args).expect_err("misplaced option should be rejected");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
+}
+
+#[test]
+fn requires_complete_nested_commands() {
+    for args in [vec!["dot", "check"], vec!["dot", "list"]] {
+        let error = cli::try_parse_from(args).expect_err("nested command should be required");
+        assert_eq!(
+            error.kind(),
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_target_and_profile_identifiers() {
+    for args in [
+        vec!["dot", "apply", "--target", "desktop/laptop"],
+        vec!["dot", "apply", "--profile", "desktop/laptop"],
+        vec!["dot", "apply", "--profile", ""],
+    ] {
+        let error = cli::try_parse_from(args).expect_err("invalid selector should be rejected");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
+}
+
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn parses_a_global_toml_platform_override() {
+    let dispatch = cli::try_parse_from([
+        "dot",
         "--platform",
         r#"{ os = "linux", arch = "x86_64", distro = "ubuntu", distro_family = ["debian", "linux"], environment = ["wsl", "container"] }"#,
+        "dry-run",
     ])
     .expect("a complete TOML platform should parse");
 
@@ -56,8 +253,8 @@ fn parses_a_toml_platform_override() {
 fn defaults_an_injected_platform_to_native() {
     let dispatch = cli::try_parse_from([
         "dot",
-        "check",
-        "providers",
+        "list",
+        "targets",
         "--platform",
         r#"{ os = "windows", arch = "x86_64" }"#,
     ])
@@ -84,7 +281,7 @@ fn rejects_an_invalid_platform_override() {
         r#"{ os = "windows", arch = "x86_64", unknown = "value" }"#,
         r#"{ os = "", arch = "x86_64" }"#,
     ] {
-        let error = cli::try_parse_from(["dot", "--dry-run", "--platform", platform])
+        let error = cli::try_parse_from(["dot", "dry-run", "--platform", platform])
             .expect_err("an invalid platform should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
@@ -98,8 +295,7 @@ fn development_help_states_the_platform_override_boundary() {
         .expect_err("help should exit early")
         .to_string();
 
-    assert!(help.contains("target selection only"), "{help}");
-    assert!(help.contains("XDG"), "{help}");
+    assert!(help.contains("compatibility"), "{help}");
     assert!(help.contains("host"), "{help}");
 }
 
@@ -108,109 +304,13 @@ fn development_help_states_the_platform_override_boundary() {
 fn production_cli_does_not_expose_platform_override() {
     let error = cli::try_parse_from([
         "dot",
-        "--dry-run",
+        "dry-run",
         "--platform",
         r#"{ os = "windows", arch = "x86_64" }"#,
     ])
     .expect_err("the production CLI must not expose the development option");
 
     assert_eq!(error.kind(), ErrorKind::UnknownArgument);
-}
-
-#[test]
-fn parses_explicit_apply_selection_and_dry_run() {
-    let dispatch = cli::try_parse_from([
-        "dot",
-        "--config",
-        "config/dev.toml",
-        "--target",
-        "arch-personal",
-        "--profile",
-        "laptop",
-        "--dry-run",
-    ])
-    .expect("apply arguments should parse");
-
-    assert_eq!(dispatch.selection.config, PathBuf::from("config/dev.toml"));
-    assert_eq!(dispatch.selection.target.as_deref(), Some("arch-personal"));
-    assert_eq!(dispatch.selection.profile.as_deref(), Some("laptop"));
-    assert_eq!(dispatch.operation, Operation::Apply { dry_run: true });
-}
-
-#[test]
-fn parses_check_providers_with_global_options_after_the_subcommands() {
-    let dispatch = cli::try_parse_from([
-        "dot",
-        "check",
-        "providers",
-        "-c",
-        "config/dev.toml",
-        "-t",
-        "arch-personal",
-        "-p",
-        "laptop",
-    ])
-    .expect("check providers should accept global options");
-
-    assert_eq!(dispatch.selection.config, PathBuf::from("config/dev.toml"));
-    assert_eq!(dispatch.selection.target.as_deref(), Some("arch-personal"));
-    assert_eq!(dispatch.selection.profile.as_deref(), Some("laptop"));
-    assert_eq!(dispatch.operation, Operation::CheckProviders);
-}
-
-#[test]
-fn requires_the_complete_check_providers_command() {
-    let error =
-        cli::try_parse_from(["dot", "check"]).expect_err("check without providers should fail");
-
-    assert_eq!(
-        error.kind(),
-        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-    );
-}
-
-#[test]
-fn rejects_dry_run_with_check_providers() {
-    let error = cli::try_parse_from(["dot", "--dry-run", "check", "providers"])
-        .expect_err("dry-run must not modify check providers");
-
-    assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
-    assert!(cli::try_parse_from(["dot", "check", "providers", "--dry-run"]).is_err());
-}
-
-#[test]
-fn rejects_profile_paths_and_empty_profile_names() {
-    for profile in ["", "/desktop", "desktop/laptop", "desktop/"] {
-        let error = cli::try_parse_from(["dot", "--profile", profile])
-            .expect_err("profile must be one node name");
-
-        assert_eq!(error.kind(), ErrorKind::ValueValidation);
-    }
-}
-
-#[test]
-fn profile_selection_normalizes_root_inputs() {
-    assert_eq!(
-        ProfileSelection::from_cli(None).unwrap(),
-        ProfileSelection::Root
-    );
-    assert_eq!(
-        ProfileSelection::from_cli(Some("@root")).unwrap(),
-        ProfileSelection::Root
-    );
-}
-
-#[test]
-fn profile_selection_normalizes_named_profiles() {
-    assert_eq!(
-        ProfileSelection::from_cli(Some("laptop")).unwrap(),
-        ProfileSelection::Named(SelectorIdentifier::new("laptop").unwrap())
-    );
-}
-
-#[test]
-fn profile_selection_rejects_invalid_selector_identifiers() {
-    assert!(ProfileSelection::from_cli(Some("desktop/laptop")).is_err());
 }
 
 #[test]

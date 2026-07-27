@@ -92,7 +92,7 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     let manifest = workspace.write_manifest(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
-        .args(["--config"])
+        .args(["apply", "--config"])
         .arg(&manifest)
         .output()
         .expect("dot apply should start");
@@ -148,7 +148,7 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
     let manifest = workspace.write_manifest(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
-        .args(["--config"])
+        .args(["apply", "--config"])
         .arg(&manifest)
         .output()
         .expect("dot apply should start");
@@ -199,7 +199,7 @@ fn apply_projects_a_link_phase_error_as_blocked_items_and_one_diagnostic() {
     let manifest = workspace.write_manifest(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
-        .args(["--config"])
+        .args(["apply", "--config"])
         .arg(&manifest)
         .output()
         .expect("dot apply should start");
