@@ -5,7 +5,7 @@ use std::path::Path;
 
 use dot::action::ExecutionEnvironment;
 use dot::interpolation::{DotPaths, XdgPaths};
-use dot::job::{JobId, JobKind, JobSelection, JobSelector};
+use dot::job::{JobId, JobKind, JobSelection, JobSelector, JobSelectorParseError};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner, JobSelectionError, PlannedJob};
 use dot::platform::PlatformInfo;
@@ -106,6 +106,57 @@ fn exact_selection_keeps_its_typed_selector() {
         JobSelection::Only(ref selectors)
             if selectors.contains(&JobSelector::Package(selector_id("cli-tools")))
     ));
+}
+
+#[test]
+fn job_selectors_round_trip_the_canonical_spelling() {
+    for spelling in ["package:editors", "action:setup", "link:nvim"] {
+        let selector: JobSelector = spelling.parse().unwrap();
+        assert_eq!(selector.to_string(), spelling);
+    }
+}
+
+#[test]
+fn job_selectors_reject_bare_provider_and_malformed_values() {
+    for invalid in ["editors", "provider:brew", "package:", "package:bad/id"] {
+        assert!(invalid.parse::<JobSelector>().is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn job_selector_parse_errors_distinguish_invalid_inputs() {
+    assert_eq!(
+        "editors".parse::<JobSelector>(),
+        Err(JobSelectorParseError::MissingKind)
+    );
+    assert_eq!(
+        ":editors".parse::<JobSelector>(),
+        Err(JobSelectorParseError::MissingKind)
+    );
+    assert!(matches!(
+        "package:bad/id".parse::<JobSelector>(),
+        Err(JobSelectorParseError::InvalidIdentifier(_))
+    ));
+    assert_eq!(
+        "service:editors".parse::<JobSelector>(),
+        Err(JobSelectorParseError::UnknownKind("service".into()))
+    );
+    assert_eq!(
+        "provider:brew".parse::<JobSelector>(),
+        Err(JobSelectorParseError::ProviderNotSelectable)
+    );
+}
+
+#[test]
+fn job_ids_display_the_canonical_spelling() {
+    for (job, spelling) in [
+        (JobId::Provider(provider_id("brew")), "provider:brew"),
+        (JobId::Package(selector_id("editors")), "package:editors"),
+        (JobId::Action(selector_id("setup")), "action:setup"),
+        (JobId::Link(selector_id("nvim")), "link:nvim"),
+    ] {
+        assert_eq!(job.to_string(), spelling);
+    }
 }
 
 #[test]

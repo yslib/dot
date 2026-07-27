@@ -6,7 +6,9 @@ mod dry_run;
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
-pub use command::{Dispatch, Operation, Selection};
+pub use command::{
+    Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection, Selection,
+};
 
 use crate::output::TableRenderer;
 use crate::report::{CommandReport, ReportStatus};
