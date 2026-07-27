@@ -358,7 +358,6 @@ fn select_target<'a>(
                     available: available_targets(config),
                 })
         }
-        None if config.targets.is_empty() => Err(ManifestError::NoTargets),
         None => {
             let mut compatible = config
                 .targets
@@ -387,7 +386,6 @@ fn select_target<'a>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManifestError {
-    NoTargets,
     NoCompatibleTargets {
         available: Vec<String>,
     },
@@ -419,7 +417,6 @@ pub enum ManifestError {
 impl fmt::Display for ManifestError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoTargets => formatter.write_str("the configuration contains no targets"),
             Self::NoCompatibleTargets { available } => write!(
                 formatter,
                 "no configured targets are compatible with this platform; available targets: {}",
