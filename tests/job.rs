@@ -9,7 +9,10 @@ use dot::job::{JobId, JobKind, JobSelection, JobSelector};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner, JobSelectionError, PlannedJob};
 use dot::platform::PlatformInfo;
-use dot::schema::{Config, EnvironmentName, Identifier, ResolvedEnvironmentPatch, ResolvedString};
+use dot::schema::{
+    Config, EnvironmentName, Identifier, ResolvedEnvironmentPatch, ResolvedString,
+    SelectorIdentifier,
+};
 use support::fixture;
 
 #[cfg(not(windows))]
@@ -29,8 +32,12 @@ const TEST_HOME: &str = "/home/tester";
 #[cfg(windows)]
 const TEST_HOME: &str = r"C:\Users\tester";
 
-fn id(value: &str) -> Identifier {
+fn provider_id(value: &str) -> Identifier {
     Identifier::new(value).expect("test identifier should be valid")
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
 fn plan_fixture() -> ExecutionPlan {
@@ -80,9 +87,9 @@ fn plan_fixture() -> ExecutionPlan {
 
 #[test]
 fn job_identity_is_scoped_by_kind() {
-    let package = JobId::Package(id("shared"));
-    let action = JobId::Action(id("shared"));
-    let link = JobId::Link(id("shared"));
+    let package = JobId::Package(selector_id("shared"));
+    let action = JobId::Action(selector_id("shared"));
+    let link = JobId::Link(selector_id("shared"));
 
     assert_ne!(package, action);
     assert_ne!(action, link);
@@ -92,12 +99,12 @@ fn job_identity_is_scoped_by_kind() {
 
 #[test]
 fn exact_selection_keeps_its_typed_selector() {
-    let selection = JobSelection::only(JobSelector::Package(id("cli-tools")));
+    let selection = JobSelection::only(JobSelector::Package(selector_id("cli-tools")));
 
     assert!(matches!(
         selection,
         JobSelection::Only(ref selectors)
-            if selectors.contains(&JobSelector::Package(id("cli-tools")))
+            if selectors.contains(&JobSelector::Package(selector_id("cli-tools")))
     ));
 }
 
@@ -105,12 +112,17 @@ fn exact_selection_keeps_its_typed_selector() {
 fn selecting_provider_package_adds_only_its_provider() {
     let plan = plan_fixture();
     let selected = plan
-        .select(&JobSelection::only(JobSelector::Package(id("alpha"))))
+        .select(&JobSelection::only(JobSelector::Package(selector_id(
+            "alpha",
+        ))))
         .expect("package should select");
 
     assert_eq!(
         selected.jobs().map(PlannedJob::id).collect::<Vec<_>>(),
-        [JobId::Provider(id("system")), JobId::Package(id("alpha")),]
+        [
+            JobId::Provider(provider_id("system")),
+            JobId::Package(selector_id("alpha")),
+        ]
     );
 }
 
@@ -119,16 +131,16 @@ fn selecting_manual_action_or_link_adds_no_provider() {
     let plan = plan_fixture();
     for (selector, expected) in [
         (
-            JobSelector::Package(id("manual")),
-            JobId::Package(id("manual")),
+            JobSelector::Package(selector_id("manual")),
+            JobId::Package(selector_id("manual")),
         ),
         (
-            JobSelector::Action(id("configure")),
-            JobId::Action(id("configure")),
+            JobSelector::Action(selector_id("configure")),
+            JobId::Action(selector_id("configure")),
         ),
         (
-            JobSelector::Link(id("gitconfig")),
-            JobId::Link(id("gitconfig")),
+            JobSelector::Link(selector_id("gitconfig")),
+            JobId::Link(selector_id("gitconfig")),
         ),
     ] {
         let selected = plan
@@ -145,7 +157,9 @@ fn selecting_manual_action_or_link_adds_no_provider() {
 fn unknown_typed_selector_fails_before_execution() {
     let plan = plan_fixture();
     let error = plan
-        .select(&JobSelection::only(JobSelector::Action(id("missing"))))
+        .select(&JobSelection::only(JobSelector::Action(selector_id(
+            "missing",
+        ))))
         .expect_err("unknown action should fail");
 
     assert!(matches!(
@@ -159,8 +173,8 @@ fn unknown_typed_selector_fails_before_execution() {
 fn mixed_selection_with_an_unknown_selector_returns_unknown() {
     let plan = plan_fixture();
     let selection = JobSelection::Only(BTreeSet::from([
-        JobSelector::Package(id("manual")),
-        JobSelector::Action(id("missing")),
+        JobSelector::Package(selector_id("manual")),
+        JobSelector::Action(selector_id("missing")),
     ]));
 
     let error = plan

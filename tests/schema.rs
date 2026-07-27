@@ -283,7 +283,7 @@ fn deserializes_strings_into_their_declared_schema_roles() {
     let config: Config = toml::from_str(&input).expect("schema roles should deserialize");
 
     let (target_id, target) = config.targets.first_key_value().expect("target exists");
-    let _: &Identifier = target_id;
+    let _: &SelectorIdentifier = target_id;
     assert_eq!(target_id.as_str(), "machine");
 
     let provider = &target.providers["brew"];
@@ -329,6 +329,21 @@ fn rejects_invalid_identifiers_while_deserializing() {
     let input = fixture::read("schema/invalid-identifier.toml");
 
     assert!(toml::from_str::<Config>(&input).is_err());
+}
+
+#[test]
+fn selectable_table_keys_use_selector_identifiers() {
+    for fixture_name in [
+        "schema/invalid-selector-target-id.toml",
+        "schema/invalid-selector-profile-id.toml",
+        "schema/invalid-selector-job-id.toml",
+    ] {
+        let input = fixture::read(fixture_name);
+        assert!(
+            toml::from_str::<Config>(&input).is_err(),
+            "{fixture_name} must fail"
+        );
+    }
 }
 
 #[test]
