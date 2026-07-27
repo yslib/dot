@@ -2,9 +2,11 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use dot::manifest::{EffectiveManifest, ManifestError};
+use dot::manifest::{
+    EffectiveManifest, ManifestError, ManifestJobRef, profile_entries, target_entries,
+};
 use dot::platform::PlatformInfo;
-use dot::schema::{Config, Package, ProviderPackage};
+use dot::schema::{Config, Package, ProviderPackage, SelectorIdentifier};
 use support::fixture;
 
 fn parse_fixture(name: &str) -> Config {
@@ -20,6 +22,235 @@ fn platform(os: &str) -> PlatformInfo {
         distro_families: BTreeSet::new(),
         environments: BTreeSet::from(["native".into()]),
     }
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
+}
+
+#[test]
+fn execution_infers_the_only_compatible_target() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
+        .expect("the only compatible target should be selected");
+
+    assert_eq!(manifest.target(), "linux-machine");
+}
+
+#[test]
+fn execution_reports_when_no_targets_are_compatible() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+
+    let error = EffectiveManifest::select_for_execution(&config, &platform("macos"), None, None)
+        .expect_err("selection should fail when no targets are compatible");
+
+    assert_eq!(
+        error,
+        ManifestError::NoCompatibleTargets {
+            available: vec!["linux-machine".into(), "windows-machine".into()],
+        }
+    );
+}
+
+#[test]
+fn execution_reports_only_compatible_targets_when_inference_is_ambiguous() {
+    let config = parse_fixture("manifest/invalid-ambiguous-targets.toml");
+
+    let error = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
+        .expect_err("selection should fail when multiple targets are compatible");
+
+    assert_eq!(
+        error,
+        ManifestError::TargetRequired {
+            available: vec!["first".into(), "second".into()],
+        }
+    );
+}
+
+#[test]
+fn execution_rejects_an_explicit_incompatible_target() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+    let windows = selector_id("windows-machine");
+
+    let error =
+        EffectiveManifest::select_for_execution(&config, &platform("linux"), Some(&windows), None)
+            .expect_err("execution should reject an incompatible target");
+
+    assert!(matches!(
+        error,
+        ManifestError::IncompatiblePlatform { target, .. } if target == "windows-machine"
+    ));
+}
+
+#[test]
+fn inspection_permits_an_explicit_incompatible_target() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+    let windows = selector_id("windows-machine");
+
+    let manifest =
+        EffectiveManifest::select_for_inspection(&config, &platform("linux"), Some(&windows), None)
+            .expect("inspection should permit an explicitly requested incompatible target");
+
+    assert_eq!(manifest.target(), "windows-machine");
+}
+
+#[test]
+fn inspection_infers_the_only_compatible_target_when_target_is_omitted() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+
+    let manifest =
+        EffectiveManifest::select_for_inspection(&config, &platform("linux"), None, None)
+            .expect("inspection should infer a compatible target");
+
+    assert_eq!(manifest.target(), "linux-machine");
+}
+
+#[test]
+fn target_entries_borrow_targets_and_label_platform_compatibility() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+
+    let entries = target_entries(&config, &platform("linux")).collect::<Vec<_>>();
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].id.as_str(), "linux-machine");
+    assert!(entries[0].compatible);
+    assert!(std::ptr::eq(
+        entries[0].target,
+        &config.targets["linux-machine"]
+    ));
+    assert_eq!(entries[1].id.as_str(), "windows-machine");
+    assert!(!entries[1].compatible);
+    assert!(std::ptr::eq(
+        entries[1].target,
+        &config.targets["windows-machine"]
+    ));
+}
+
+#[test]
+fn profile_entries_are_borrowed_recursive_preorder_without_the_root() {
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
+    let (target_id, target) = config
+        .targets
+        .get_key_value("machine")
+        .expect("fixture should contain the machine target");
+
+    let entries = profile_entries(target_id, target)
+        .expect("fixture profile names should be unique")
+        .collect::<Vec<_>>();
+    let actual = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.id.as_str(),
+                entry
+                    .path
+                    .iter()
+                    .map(|segment| segment.as_str())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+                entry.depth(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            ("desktop", "desktop".into(), 1),
+            ("laptop", "desktop/laptop".into(), 2),
+            ("server", "server".into(), 1),
+        ]
+    );
+    assert!(std::ptr::eq(
+        entries[0].id,
+        config.targets["machine"]
+            .profiles
+            .get_key_value("desktop")
+            .expect("fixture should contain desktop")
+            .0,
+    ));
+}
+
+#[test]
+fn profile_entries_report_duplicate_names_in_deterministic_preorder() {
+    let config = parse_fixture("manifest/invalid-duplicate-profile-name.toml");
+    let (target_id, target) = config
+        .targets
+        .get_key_value("machine")
+        .expect("fixture should contain the machine target");
+
+    let error =
+        profile_entries(target_id, target).expect_err("duplicate profile names should fail");
+
+    assert_eq!(
+        error,
+        ManifestError::DuplicateProfile {
+            target: "machine".into(),
+            profile: "shared".into(),
+            first_path: "desktop/shared".into(),
+            second_path: "server/shared".into(),
+        }
+    );
+}
+
+#[test]
+fn unresolved_jobs_borrow_records_in_execution_category_order() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
+        .expect("the Linux target should be inferred");
+
+    let jobs = manifest.unresolved_jobs().collect::<Vec<_>>();
+    let actual = jobs
+        .iter()
+        .map(|job| match job {
+            ManifestJobRef::Package(id, Package::Provider(_)) => {
+                format!("provider-package:{id}")
+            }
+            ManifestJobRef::Package(id, Package::Manual(_)) => format!("manual-package:{id}"),
+            ManifestJobRef::Action(id, _) => format!("action:{id}"),
+            ManifestJobRef::Link(id, _) => format!("link:{id}"),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            "provider-package:alpha-provider",
+            "provider-package:zulu-provider",
+            "manual-package:alpha-manual",
+            "manual-package:zulu-manual",
+            "action:alpha-action",
+            "action:zulu-action",
+            "link:alpha-link",
+            "link:zulu-link",
+        ]
+    );
+
+    let ManifestJobRef::Package(first_id, first_package) = jobs[0] else {
+        panic!("the first job should be a provider package");
+    };
+    let (expected_id, expected_package) = manifest
+        .packages()
+        .get_key_value("alpha-provider")
+        .expect("fixture should contain alpha-provider");
+    assert!(std::ptr::eq(first_id, expected_id));
+    assert!(std::ptr::eq(first_package, expected_package));
+}
+
+#[test]
+fn legacy_selection_wrapper_preserves_string_selection() {
+    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
+
+    let legacy =
+        EffectiveManifest::select(&config, &platform("linux"), Some("linux-machine"), None)
+            .expect("the legacy wrapper should still select by string");
+    let target = selector_id("linux-machine");
+    let typed =
+        EffectiveManifest::select_for_execution(&config, &platform("linux"), Some(&target), None)
+            .expect("typed selection should select the same manifest");
+
+    assert_eq!(legacy, typed);
 }
 
 #[test]
