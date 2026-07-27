@@ -6,7 +6,7 @@ use crate::action_runner::{ActionOutcome, ActionRunError};
 use crate::job::JobId;
 use crate::job_executor::JobExecutor;
 use crate::link::{LinkError, LinkOutcome, LinkPhaseError};
-use crate::plan::{PlannedJob, PlannedPackage, SelectedExecutionPlan};
+use crate::plan::{ExecutionPlan, PlannedJob, PlannedPackage};
 use crate::provider::{
     ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStatus,
 };
@@ -126,8 +126,8 @@ impl<'a> JobRunner<'a> {
         }
     }
 
-    pub fn run(&self, selected: &SelectedExecutionPlan<'_>) -> JobExecutionReport {
-        let jobs = selected.jobs().collect::<Vec<_>>();
+    pub fn run(&self, plan: &ExecutionPlan) -> JobExecutionReport {
+        let jobs = plan.jobs().iter().collect::<Vec<_>>();
         let expected_result_count = jobs.len();
         let mut results = BTreeMap::new();
         let mut provider_outputs = BTreeMap::<JobId, ProviderStatus>::new();

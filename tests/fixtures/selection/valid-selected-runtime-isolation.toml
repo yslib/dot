@@ -1,0 +1,17 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.system]
+probe = { program = "system" }
+install = { program = "system", args = ["install", "${package:names}"] }
+
+[targets.machine.packages]
+editor = { provider = "system" }
+editor-tools = { provider = "system" }
+
+[targets.machine.actions.setup-editor]
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING}" }
+
+[targets.machine.links.nvim]
+source = "../support/readable.txt"
+target = "${env:HOME}/.config/nvim"

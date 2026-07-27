@@ -59,16 +59,6 @@ pub enum JobSelector {
     Link(SelectorIdentifier),
 }
 
-impl JobSelector {
-    pub(crate) fn job_id(&self) -> JobId {
-        match self {
-            Self::Package(id) => JobId::Package(id.clone()),
-            Self::Action(id) => JobId::Action(id.clone()),
-            Self::Link(id) => JobId::Link(id.clone()),
-        }
-    }
-}
-
 impl fmt::Display for JobSelector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -149,5 +139,26 @@ pub enum JobSelection {
 impl JobSelection {
     pub fn only(selector: JobSelector) -> Self {
         Self::Only(BTreeSet::from([selector]))
+    }
+
+    pub(crate) fn includes_package(&self, id: &SelectorIdentifier) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(selectors) => selectors.contains(&JobSelector::Package(id.clone())),
+        }
+    }
+
+    pub(crate) fn includes_action(&self, id: &SelectorIdentifier) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(selectors) => selectors.contains(&JobSelector::Action(id.clone())),
+        }
+    }
+
+    pub(crate) fn includes_link(&self, id: &SelectorIdentifier) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(selectors) => selectors.contains(&JobSelector::Link(id.clone())),
+        }
     }
 }

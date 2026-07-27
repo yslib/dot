@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dot::action::ExecutionEnvironment;
 use dot::interpolation::{DotPaths, XdgPaths};
+use dot::job::JobSelection;
 use dot::link::{self, LinkError, LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner};
@@ -80,7 +81,7 @@ fn plan_fixture(
     let dot_paths = DotPaths::new(&config_path, workspace.path(), workspace.path());
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect("test execution plan should build")
 }
 

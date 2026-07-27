@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use dot::action::ExecutionEnvironment;
 use dot::dry_run;
 use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
-use dot::job::{JobKind, JobSelection};
+use dot::job::{JobKind, JobSelection, JobSelector};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlanner, PlannedProviderInstall, PlanningError};
+use dot::plan::{ExecutionPlanError, ExecutionPlanner, PlannedProviderInstall, PlanningError};
 use dot::platform::PlatformInfo;
 use dot::report::{
     ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus, ReportSubject,
@@ -109,7 +109,7 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
     let xdg = XdgPaths::detect();
     let platform = platform();
     let plan = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform)
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect("execution should plan");
 
     let ids = plan
@@ -131,6 +131,39 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
 }
 
 #[test]
+fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
+    let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
+    let loaded =
+        dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let config_dir = path.parent().expect("fixture path should have a parent");
+    let planner = ExecutionPlanner::new(
+        &environment,
+        DotPaths::new(&path, config_dir, Path::new(TEST_CWD)),
+        &xdg,
+        &platform,
+    );
+    let plan = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Link(
+                "nvim".try_into().expect("test selector should be valid"),
+            )),
+        )
+        .expect("unselected runtime values must remain unresolved");
+
+    let report = dry_run::build_report(&path, &plan);
+
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].id, "nvim");
+    assert!(matches!(report.items[0].subject, ReportSubject::Link(_)));
+}
+
+#[test]
 fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
     let manifest = select_named_fixture(
         "dry-run/valid-deferred-expression-errors.toml",
@@ -143,7 +176,7 @@ fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let plan = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect("deferred runtime values must not affect the selected plan");
 
     assert_eq!(plan.target(), "selected");
@@ -205,22 +238,22 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
     let cases = [
         (
             "malformed",
-            "action `malformed-action`",
+            "selected job `action:malformed-action` field `exec.program`",
             ExpectedError::UnclosedResolver,
         ),
         (
             "unknown",
-            "action `unknown-action`",
+            "selected job `action:unknown-action` field `exec.program`",
             ExpectedError::UnknownResolver,
         ),
         (
             "unavailable",
-            "action `unavailable-action`",
+            "selected job `action:unavailable-action` field `exec.program`",
             ExpectedError::ResolverUnavailable,
         ),
         (
             "wrong-output",
-            "provider `catalog` install unit `wrong-output-package`",
+            "selected job `package:wrong-output-package` field `provider.install.args`",
             ExpectedError::ListResolverMustOccupyArgument,
         ),
     ];
@@ -237,9 +270,10 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
         let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
         let error = planner
-            .plan(&manifest)
+            .plan(&manifest, &JobSelection::All)
             .expect_err("the selected expression error must fail planning");
-        let PlanningError::Interpolation { context, source } = error else {
+        let ExecutionPlanError::Planning(PlanningError::Interpolation { context, source }) = error
+        else {
             panic!("unexpected planning error for profile `{profile}`: {error}");
         };
 
@@ -278,12 +312,12 @@ fn rejects_an_unknown_provider_before_invalid_literal_provider_args() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect_err("provider lookup must precede provider_args validation");
 
     assert!(matches!(
         error,
-        PlanningError::UnknownProvider { package, provider }
+        ExecutionPlanError::Planning(PlanningError::UnknownProvider { package, provider })
             if package == "invalid-args" && provider == "missing"
     ));
 }
@@ -296,7 +330,9 @@ fn plans_provider_install_units_independently_and_resolves_their_environment() {
     let platform = platform();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let plan = planner.plan(&manifest).expect("execution should plan");
+    let plan = planner
+        .plan(&manifest, &JobSelection::All)
+        .expect("execution should plan");
 
     let providers = plan.providers().collect::<Vec<_>>();
     assert_eq!(providers.len(), 1);
@@ -364,12 +400,10 @@ fn projects_one_dry_run_item_per_provider_install_unit() {
     let xdg = XdgPaths::detect();
     let platform = platform();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
-    let plan = planner.plan(&manifest).expect("execution should plan");
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
-
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &selected);
+    let plan = planner
+        .plan(&manifest, &JobSelection::All)
+        .expect("execution should plan");
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
 
     assert_eq!(report.items.len(), 4);
     assert_eq!(report.items[1].id, "alpha");
@@ -404,12 +438,13 @@ fn rejects_an_empty_provider_package_batch() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect_err("an empty batch must fail");
 
     assert!(matches!(
         error,
-        PlanningError::EmptyPackageBatch { package } if package == "empty-tools"
+        ExecutionPlanError::Planning(PlanningError::EmptyPackageBatch { package })
+            if package == "empty-tools"
     ));
 }
 
@@ -422,12 +457,12 @@ fn rejects_a_duplicate_name_inside_one_provider_package_batch() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect_err("a duplicate batch name must fail");
 
     assert!(matches!(
         error,
-        PlanningError::DuplicatePackageBatchName { package, name }
+        ExecutionPlanError::Planning(PlanningError::DuplicatePackageBatchName { package, name })
             if package == "duplicate-tools" && name == "ripgrep"
     ));
 }
@@ -448,17 +483,20 @@ fn nonempty_provider_args_require_exactly_one_install_list_resolver() {
         let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
         let error = planner
-            .plan(&manifest)
+            .plan(&manifest, &JobSelection::All)
             .expect_err("nonempty provider args must not be silently discarded");
 
         assert!(
             matches!(
                 error,
-                PlanningError::ProviderArgsResolverCount {
+                ExecutionPlanError::Planning(PlanningError::ProviderArgsResolverCount {
+                    ref package,
                     ref provider,
                     actual,
-                }
-                    if provider == "brew" && actual == expected_count
+                })
+                    if package == "app"
+                        && provider == "brew"
+                        && actual == expected_count
             ),
             "unexpected error for {fixture_name}: {error}"
         );
@@ -473,7 +511,9 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
     let platform = platform();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let plan = planner.plan(&manifest).expect("execution should plan");
+    let plan = planner
+        .plan(&manifest, &JobSelection::All)
+        .expect("execution should plan");
 
     let manual_packages = plan.manual_packages().collect::<Vec<_>>();
     assert_eq!(manual_packages.len(), 1);
@@ -516,11 +556,10 @@ fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
     let platform = platform();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
-    let plan = planner.plan(&manifest).expect("execution should plan");
-    let selected = plan
-        .select(&JobSelection::All)
-        .expect("all jobs should select");
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &selected);
+    let plan = planner
+        .plan(&manifest, &JobSelection::All)
+        .expect("execution should plan");
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
 
     assert_eq!(report.command, ReportCommand::DryRun);
     assert_eq!(report.status, ReportStatus::Planned);
@@ -566,12 +605,12 @@ fn rejects_a_package_that_references_an_unknown_effective_provider() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect_err("unknown providers must fail planning");
 
     assert!(matches!(
         error,
-        PlanningError::UnknownProvider { package, provider }
+        ExecutionPlanError::Planning(PlanningError::UnknownProvider { package, provider })
             if package == "alpha" && provider == "missing"
     ));
 }
@@ -585,12 +624,12 @@ fn rejects_a_link_target_that_is_not_absolute_after_interpolation() {
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
     let error = planner
-        .plan(&manifest)
+        .plan(&manifest, &JobSelection::All)
         .expect_err("relative link targets must fail planning");
 
     assert!(matches!(
         error,
-        PlanningError::RelativeLinkTarget { link, target }
+        ExecutionPlanError::Planning(PlanningError::RelativeLinkTarget { link, target })
             if link == "invalid" && target == Path::new("relative/target")
     ));
 }

@@ -4,10 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use dot::action::ExecutionEnvironment;
+use dot::config::LoadedConfig;
 use dot::interpolation::{DotPaths, XdgPaths};
 use dot::job::{JobId, JobKind, JobSelection, JobSelector, JobSelectorParseError};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlan, ExecutionPlanner, JobSelectionError, PlannedJob};
+use dot::plan::{
+    ExecutionPlan, ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlannedJob,
+    PlanningError,
+};
 use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, EnvironmentName, Identifier, ResolvedEnvironmentPatch, ResolvedString,
@@ -40,18 +44,17 @@ fn selector_id(value: &str) -> SelectorIdentifier {
     SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
-fn plan_fixture() -> ExecutionPlan {
-    let input = fixture::read("dry-run/valid-human-readable-plan.toml");
-    let config: Config = toml::from_str(&input).expect("test config should deserialize");
-    let platform = PlatformInfo {
+fn platform() -> PlatformInfo {
+    PlatformInfo {
         os: "linux".into(),
         arch: "x86_64".into(),
         distro: Some("test".into()),
         distro_families: BTreeSet::new(),
         environments: BTreeSet::from(["native".into()]),
-    };
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    }
+}
+
+fn environment() -> ExecutionEnvironment {
     let mut environment = ExecutionEnvironment::empty();
     environment
         .apply_patch(&ResolvedEnvironmentPatch {
@@ -73,6 +76,20 @@ fn plan_fixture() -> ExecutionPlan {
             ]),
         })
         .expect("test environment should be valid");
+    environment
+}
+
+fn plan_fixture(selection: &JobSelection) -> ExecutionPlan {
+    plan_named_fixture("dry-run/valid-human-readable-plan.toml", selection)
+}
+
+fn plan_named_fixture(name: &str, selection: &JobSelection) -> ExecutionPlan {
+    let input = fixture::read(name);
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
     let xdg = XdgPaths::detect();
     let dot_paths = DotPaths::new(
         Path::new(TEST_CONFIG),
@@ -81,7 +98,7 @@ fn plan_fixture() -> ExecutionPlan {
     );
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
-        .plan(&manifest)
+        .plan(&manifest, selection)
         .expect("execution should plan")
 }
 
@@ -180,16 +197,39 @@ fn job_ids_display_the_canonical_spelling() {
 }
 
 #[test]
-fn selecting_provider_package_adds_only_its_provider() {
-    let plan = plan_fixture();
-    let selected = plan
-        .select(&JobSelection::only(JobSelector::Package(selector_id(
-            "alpha",
-        ))))
-        .expect("package should select");
+fn selected_link_does_not_resolve_an_unselected_action() {
+    let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
+    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let config_dir = path.parent().expect("fixture path should have a parent");
+    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
+
+    let plan = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Link(selector_id("nvim"))),
+        )
+        .expect("an unselected runtime value must not be resolved");
 
     assert_eq!(
-        selected.jobs().map(PlannedJob::id).collect::<Vec<_>>(),
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
+        [JobId::Link(selector_id("nvim"))]
+    );
+}
+
+#[test]
+fn selecting_provider_package_adds_only_its_provider() {
+    let plan = plan_fixture(&JobSelection::only(JobSelector::Package(selector_id(
+        "alpha",
+    ))));
+
+    assert_eq!(
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
         [
             JobId::Provider(provider_id("system")),
             JobId::Package(selector_id("alpha")),
@@ -198,8 +238,25 @@ fn selecting_provider_package_adds_only_its_provider() {
 }
 
 #[test]
+fn selecting_two_packages_that_share_a_provider_adds_the_provider_once() {
+    let selection = JobSelection::Only(BTreeSet::from([
+        JobSelector::Package(selector_id("alpha")),
+        JobSelector::Package(selector_id("beta")),
+    ]));
+    let plan = plan_named_fixture("dry-run/valid-provider-install-units.toml", &selection);
+
+    assert_eq!(
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
+        [
+            JobId::Provider(provider_id("brew")),
+            JobId::Package(selector_id("alpha")),
+            JobId::Package(selector_id("beta")),
+        ]
+    );
+}
+
+#[test]
 fn selecting_manual_action_or_link_adds_no_provider() {
-    let plan = plan_fixture();
     for (selector, expected) in [
         (
             JobSelector::Package(selector_id("manual")),
@@ -214,47 +271,162 @@ fn selecting_manual_action_or_link_adds_no_provider() {
             JobId::Link(selector_id("gitconfig")),
         ),
     ] {
-        let selected = plan
-            .select(&JobSelection::only(selector))
-            .expect("job should select");
+        let plan = plan_fixture(&JobSelection::only(selector));
         assert_eq!(
-            selected.jobs().map(PlannedJob::id).collect::<Vec<_>>(),
+            plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
             [expected]
         );
     }
 }
 
 #[test]
-fn unknown_typed_selector_fails_before_execution() {
-    let plan = plan_fixture();
-    let error = plan
-        .select(&JobSelection::only(JobSelector::Action(selector_id(
-            "missing",
-        ))))
+fn all_includes_every_effective_provider_and_job() {
+    let plan = plan_fixture(&JobSelection::All);
+
+    assert_eq!(
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
+        [
+            JobId::Provider(provider_id("system")),
+            JobId::Package(selector_id("alpha")),
+            JobId::Package(selector_id("manual")),
+            JobId::Action(selector_id("configure")),
+            JobId::Link(selector_id("gitconfig")),
+        ]
+    );
+}
+
+#[test]
+fn unknown_typed_selector_fails_before_planning() {
+    let input = fixture::read("dry-run/valid-human-readable-plan.toml");
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let planner = ExecutionPlanner::new(
+        &environment,
+        DotPaths::new(
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
+            Path::new(TEST_CWD),
+        ),
+        &xdg,
+        &platform,
+    );
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("missing"))),
+        )
         .expect_err("unknown action should fail");
 
     assert!(matches!(
         error,
-        JobSelectionError::Unknown(JobSelector::Action(ref id))
+        ExecutionPlanError::Selection(JobSelectionError::Unknown(
+            JobSelector::Action(ref id)
+        ))
             if id.as_str() == "missing"
     ));
 }
 
 #[test]
-fn mixed_selection_with_an_unknown_selector_returns_unknown() {
-    let plan = plan_fixture();
+fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
+    let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
+    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let config_dir = path.parent().expect("fixture path should have a parent");
+    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
     let selection = JobSelection::Only(BTreeSet::from([
-        JobSelector::Package(selector_id("manual")),
-        JobSelector::Action(selector_id("missing")),
+        JobSelector::Action(selector_id("setup-editor")),
+        JobSelector::Link(selector_id("missing")),
     ]));
 
-    let error = plan
-        .select(&selection)
+    let error = planner
+        .plan(&manifest, &selection)
         .expect_err("an unknown selector should fail the complete selection");
 
     assert!(matches!(
         error,
-        JobSelectionError::Unknown(JobSelector::Action(ref id))
+        ExecutionPlanError::Selection(JobSelectionError::Unknown(
+            JobSelector::Link(ref id)
+        ))
             if id.as_str() == "missing"
     ));
+}
+
+#[test]
+fn selected_provider_package_reports_a_missing_provider_before_promotion() {
+    let input = fixture::read("dry-run/invalid-unknown-provider-before-args.toml");
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let planner = ExecutionPlanner::new(
+        &environment,
+        DotPaths::new(
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
+            Path::new(TEST_CWD),
+        ),
+        &xdg,
+        &platform,
+    );
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Package(selector_id("invalid-args"))),
+        )
+        .expect_err("the provider closure should fail before provider args promotion");
+
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Selection(JobSelectionError::MissingProvider {
+            package,
+            provider,
+        }) if package.as_str() == "invalid-args" && provider.as_str() == "missing"
+    ));
+}
+
+#[test]
+fn selected_interpolation_failure_identifies_the_canonical_job_and_field() {
+    let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
+    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let platform = platform();
+    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let config_dir = path.parent().expect("fixture path should have a parent");
+    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("setup-editor"))),
+        )
+        .expect_err("the selected runtime value should fail atomically");
+
+    assert!(
+        matches!(
+            &error,
+            ExecutionPlanError::Planning(PlanningError::Interpolation { context, .. })
+                if context == "selected job `action:setup-editor` field `exec.program`"
+        ),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "failed to resolve selected job `action:setup-editor` field `exec.program`: environment variable `DOT_INTENTIONALLY_MISSING` is not defined"
+    );
 }
