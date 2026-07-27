@@ -13,10 +13,14 @@ use dot::link::{self, LinkError, LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner};
 use dot::platform::PlatformInfo;
-use dot::schema::Config;
+use dot::schema::{Config, SelectorIdentifier};
 use support::fixture;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
+}
 
 struct TempWorkspace(PathBuf);
 
@@ -73,7 +77,8 @@ fn plan_fixture(
     }
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = PlatformInfo::detect();
-    let manifest = EffectiveManifest::select(&config, &platform, Some("machine"), None)
+    let target = selector_id("machine");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::capture();
     let xdg = XdgPaths::detect();

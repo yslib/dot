@@ -277,68 +277,10 @@ fn unresolved_jobs_borrow_records_in_execution_category_order() {
 }
 
 #[test]
-fn legacy_selection_wrapper_preserves_string_selection() {
-    let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
-
-    let legacy =
-        EffectiveManifest::select(&config, &platform("linux"), Some("linux-machine"), None)
-            .expect("the legacy wrapper should still select by string");
-    let target = selector_id("linux-machine");
-    let typed =
-        EffectiveManifest::select_for_execution(&config, &platform("linux"), Some(&target), None)
-            .expect("typed selection should select the same manifest");
-
-    assert_eq!(legacy, typed);
-}
-
-#[test]
-fn legacy_selection_wrapper_reports_a_malformed_profile_as_unknown() {
-    let config = parse_fixture("manifest/valid-profile-tree.toml");
-
-    let error = EffectiveManifest::select(
-        &config,
-        &platform("linux"),
-        Some("machine"),
-        Some("malformed/profile"),
-    )
-    .expect_err("a malformed legacy profile should retain the unknown-profile error");
-
-    assert_eq!(
-        error,
-        ManifestError::UnknownProfile {
-            target: "machine".into(),
-            requested: "malformed/profile".into(),
-            available: vec!["desktop".into(), "laptop".into(), "server".into()],
-        }
-    );
-}
-
-#[test]
-fn legacy_selection_wrapper_prioritizes_a_malformed_target_over_profile() {
-    let config = parse_fixture("manifest/valid-profile-tree.toml");
-
-    let error = EffectiveManifest::select(
-        &config,
-        &platform("linux"),
-        Some("malformed/target"),
-        Some("malformed/profile"),
-    )
-    .expect_err("a malformed target should fail before a malformed profile");
-
-    assert_eq!(
-        error,
-        ManifestError::UnknownTarget {
-            requested: "malformed/target".into(),
-            available: vec!["machine".into()],
-        }
-    );
-}
-
-#[test]
 fn selects_the_only_target_when_no_target_is_requested() {
     let config = parse_fixture("manifest/valid-single-target.toml");
 
-    let manifest = EffectiveManifest::select(&config, &platform("linux"), None, None)
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
         .expect("the only compatible target should be selected");
 
     assert_eq!(manifest.target(), "only");
@@ -350,7 +292,7 @@ fn selects_the_only_target_when_no_target_is_requested() {
 fn requires_a_target_when_the_config_contains_multiple_targets() {
     let config = parse_fixture("manifest/invalid-ambiguous-targets.toml");
 
-    let error = EffectiveManifest::select(&config, &platform("linux"), None, None)
+    let error = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
         .expect_err("ambiguous target selection should fail");
 
     assert_eq!(
@@ -364,9 +306,11 @@ fn requires_a_target_when_the_config_contains_multiple_targets() {
 #[test]
 fn reports_an_unknown_explicit_target() {
     let config = parse_fixture("manifest/invalid-unknown-target.toml");
+    let missing = selector_id("missing");
 
-    let error = EffectiveManifest::select(&config, &platform("linux"), Some("missing"), None)
-        .expect_err("unknown target should fail");
+    let error =
+        EffectiveManifest::select_for_execution(&config, &platform("linux"), Some(&missing), None)
+            .expect_err("unknown target should fail");
 
     assert_eq!(
         error,
@@ -381,8 +325,9 @@ fn reports_an_unknown_explicit_target() {
 fn rejects_a_target_that_does_not_match_the_current_platform() {
     let config = parse_fixture("manifest/invalid-incompatible-platform.toml");
     let actual = platform("linux");
+    let macos = selector_id("macos");
 
-    let error = EffectiveManifest::select(&config, &actual, Some("macos"), None)
+    let error = EffectiveManifest::select_for_execution(&config, &actual, Some(&macos), None)
         .expect_err("incompatible target should fail");
 
     match error {
@@ -402,10 +347,16 @@ fn rejects_a_target_that_does_not_match_the_current_platform() {
 #[test]
 fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
     let config = parse_fixture("manifest/valid-profile-tree.toml");
+    let machine = selector_id("machine");
+    let laptop = selector_id("laptop");
 
-    let manifest =
-        EffectiveManifest::select(&config, &platform("linux"), Some("machine"), Some("laptop"))
-            .expect("nested profile should be selected by its unique name");
+    let manifest = EffectiveManifest::select_for_execution(
+        &config,
+        &platform("linux"),
+        Some(&machine),
+        Some(&laptop),
+    )
+    .expect("nested profile should be selected by its unique name");
 
     assert_eq!(manifest.target(), "machine");
     assert_eq!(manifest.profile(), Some("laptop"));
@@ -441,9 +392,11 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
 #[test]
 fn selecting_no_profile_uses_only_the_target_root() {
     let config = parse_fixture("manifest/valid-profile-tree.toml");
+    let machine = selector_id("machine");
 
-    let manifest = EffectiveManifest::select(&config, &platform("linux"), Some("machine"), None)
-        .expect("target root should be a complete selection");
+    let manifest =
+        EffectiveManifest::select_for_execution(&config, &platform("linux"), Some(&machine), None)
+            .expect("target root should be a complete selection");
 
     assert_eq!(manifest.profile(), None);
     assert!(manifest.packages().contains_key("base"));
@@ -459,10 +412,16 @@ fn selecting_no_profile_uses_only_the_target_root() {
 #[test]
 fn rejects_duplicate_profile_names_anywhere_in_a_target_tree() {
     let config = parse_fixture("manifest/invalid-duplicate-profile-name.toml");
+    let machine = selector_id("machine");
+    let shared = selector_id("shared");
 
-    let error =
-        EffectiveManifest::select(&config, &platform("linux"), Some("machine"), Some("shared"))
-            .expect_err("duplicate profile names should fail before selection");
+    let error = EffectiveManifest::select_for_execution(
+        &config,
+        &platform("linux"),
+        Some(&machine),
+        Some(&shared),
+    )
+    .expect_err("duplicate profile names should fail before selection");
 
     assert_eq!(
         error,
@@ -478,12 +437,14 @@ fn rejects_duplicate_profile_names_anywhere_in_a_target_tree() {
 #[test]
 fn reports_an_unknown_profile_with_available_node_names() {
     let config = parse_fixture("manifest/valid-profile-tree.toml");
+    let machine = selector_id("machine");
+    let missing = selector_id("missing");
 
-    let error = EffectiveManifest::select(
+    let error = EffectiveManifest::select_for_execution(
         &config,
         &platform("linux"),
-        Some("machine"),
-        Some("missing"),
+        Some(&machine),
+        Some(&missing),
     )
     .expect_err("unknown profile should fail");
 

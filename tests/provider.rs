@@ -159,7 +159,7 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
         )]),
     };
     let platform = PlatformInfo::detect();
-    let manifest = EffectiveManifest::select(&config, &platform, None, None)
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, None, None)
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::empty();
     let xdg = XdgPaths::detect();

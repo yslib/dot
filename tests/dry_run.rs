@@ -15,7 +15,7 @@ use dot::report::{
 };
 use dot::schema::{
     Config, EnvironmentName, LinkConflict, LinkMissingParent, ResolvedEnvironmentPatch,
-    ResolvedString,
+    ResolvedString, SelectorIdentifier,
 };
 use support::fixture;
 
@@ -44,6 +44,10 @@ fn platform() -> PlatformInfo {
         distro_families: BTreeSet::new(),
         environments: BTreeSet::from(["native".into()]),
     }
+}
+
+fn selector_id(value: &str) -> SelectorIdentifier {
+    SelectorIdentifier::new(value).expect("test selector identifier should be valid")
 }
 
 fn environment() -> ExecutionEnvironment {
@@ -98,7 +102,9 @@ fn select_fixture(name: &str) -> EffectiveManifest {
 fn select_named_fixture(name: &str, target: &str, profile: Option<&str>) -> EffectiveManifest {
     let input = fixture::read(name);
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
-    EffectiveManifest::select(&config, &platform(), Some(target), profile)
+    let target = selector_id(target);
+    let profile = profile.map(selector_id);
+    EffectiveManifest::select_for_execution(&config, &platform(), Some(&target), profile.as_ref())
         .expect("test manifest should select")
 }
 
@@ -136,8 +142,10 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
     let loaded =
         dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
     let platform = platform();
-    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    let target = selector_id("machine");
+    let manifest =
+        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
+            .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
@@ -309,8 +317,10 @@ fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let loaded =
         dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
     let platform = platform();
-    let manifest = EffectiveManifest::select(loaded.config(), &platform, Some("machine"), None)
-        .expect("test manifest should select");
+    let target = selector_id("machine");
+    let manifest =
+        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
+            .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
