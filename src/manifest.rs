@@ -417,6 +417,9 @@ pub enum ManifestError {
 impl fmt::Display for ManifestError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoCompatibleTargets { available } if available.is_empty() => {
+                formatter.write_str("no configured targets are compatible with this platform")
+            }
             Self::NoCompatibleTargets { available } => write!(
                 formatter,
                 "no configured targets are compatible with this platform; available targets: {}",

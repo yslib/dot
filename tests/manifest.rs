@@ -69,6 +69,29 @@ fn execution_reports_no_compatible_targets_for_an_empty_target_map() {
 }
 
 #[test]
+fn no_compatible_targets_display_omits_available_suffix_when_empty() {
+    let error = ManifestError::NoCompatibleTargets { available: vec![] };
+
+    assert_eq!(
+        error.to_string(),
+        "no configured targets are compatible with this platform"
+    );
+}
+
+#[test]
+fn no_compatible_targets_display_lists_nonempty_available_targets() {
+    let error = ManifestError::NoCompatibleTargets {
+        available: vec!["linux-machine".into(), "windows-machine".into()],
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "no configured targets are compatible with this platform; available targets: \
+         linux-machine, windows-machine"
+    );
+}
+
+#[test]
 fn execution_reports_only_compatible_targets_when_inference_is_ambiguous() {
     let config = parse_fixture("manifest/invalid-ambiguous-targets.toml");
 
@@ -266,6 +289,49 @@ fn legacy_selection_wrapper_preserves_string_selection() {
             .expect("typed selection should select the same manifest");
 
     assert_eq!(legacy, typed);
+}
+
+#[test]
+fn legacy_selection_wrapper_reports_a_malformed_profile_as_unknown() {
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
+
+    let error = EffectiveManifest::select(
+        &config,
+        &platform("linux"),
+        Some("machine"),
+        Some("malformed/profile"),
+    )
+    .expect_err("a malformed legacy profile should retain the unknown-profile error");
+
+    assert_eq!(
+        error,
+        ManifestError::UnknownProfile {
+            target: "machine".into(),
+            requested: "malformed/profile".into(),
+            available: vec!["desktop".into(), "laptop".into(), "server".into()],
+        }
+    );
+}
+
+#[test]
+fn legacy_selection_wrapper_prioritizes_a_malformed_target_over_profile() {
+    let config = parse_fixture("manifest/valid-profile-tree.toml");
+
+    let error = EffectiveManifest::select(
+        &config,
+        &platform("linux"),
+        Some("malformed/target"),
+        Some("malformed/profile"),
+    )
+    .expect_err("a malformed target should fail before a malformed profile");
+
+    assert_eq!(
+        error,
+        ManifestError::UnknownTarget {
+            requested: "malformed/target".into(),
+            available: vec!["machine".into()],
+        }
+    );
 }
 
 #[test]
