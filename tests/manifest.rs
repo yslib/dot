@@ -54,6 +54,21 @@ fn execution_reports_when_no_targets_are_compatible() {
 }
 
 #[test]
+fn execution_reports_no_compatible_targets_for_an_empty_target_map() {
+    let config = Config {
+        targets: Default::default(),
+    };
+
+    let error = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
+        .expect_err("an empty target map has no compatible targets");
+
+    assert_eq!(
+        error,
+        ManifestError::NoCompatibleTargets { available: vec![] }
+    );
+}
+
+#[test]
 fn execution_reports_only_compatible_targets_when_inference_is_ambiguous() {
     let config = parse_fixture("manifest/invalid-ambiguous-targets.toml");
 
