@@ -538,9 +538,9 @@ actions by action id
 links by link id
 ```
 
-Both map types are BTreeMap-backed. Exact selection filters the canonical
-sequence without reordering it; selector occurrence order and TOML declaration
-order are not execution order.
+Entries<T> and SelectableEntries<T> are BTreeMap-backed. Exact selection
+filters the canonical sequence without reordering it; selector occurrence
+order and TOML declaration order are not execution order.
 
 ExecutionPlan is an internal Rust data model, not a serialized configuration
 format or public compatibility boundary. Runtime observations such as probe or
@@ -687,8 +687,9 @@ facts cannot be mistaken for full platform emulation. Without the feature,
 
 List commands are a stable machine-facing query surface. They load and
 statically validate the complete configuration, then stop at structural,
-unresolved data. They do not read runtime resolver values, inspect filesystem
-state, or run commands.
+unresolved data. They may detect host compatibility facts, which can read OS
+or container metadata for target labels, filtering, and inference. They do not
+inspect managed link or source state, resolve runtime values, or run commands.
 
 `list targets` returns only compatible targets by default; `--all` returns
 every target with a compatibility label. `list profiles` returns `@root`
@@ -712,10 +713,45 @@ list jobs:
 SELECTOR  KIND  ID  VIA  DETAIL
 ```
 
+The target columns have these stable meanings:
+
+- TARGET is the typed target ID.
+- COMPATIBILITY is `compatible` or `incompatible` relative to the active
+  PlatformInfo.
+- OS, ARCH, DISTRO, DISTRO_FAMILY, and ENVIRONMENT are the target's typed
+  platform constraints. A One value is emitted directly, a Many value is
+  comma-joined in its configured order, and an absent optional constraint is
+  an empty field. OS is required by the schema and is therefore never absent.
+  Rows use stable target-ID order.
+
+The profile columns have these stable meanings:
+
+- PROFILE is `@root` for the target root or the typed profile ID for a declared
+  profile.
+- PATH is `<root>` for the target root or the slash-joined typed profile IDs
+  from the target root to that profile.
+- DEPTH is numeric: `0` for the root and otherwise the number of profile IDs in
+  PATH. The root row comes first; declared profiles then use stable sibling-ID
+  preorder, so each parent precedes its descendants.
+
+The job columns have these stable meanings:
+
+- SELECTOR is the canonical reusable `package:ID`, `action:ID`, or `link:ID`.
+- KIND is `package`, `action`, or `link`, matching SELECTOR.
+- ID is the typed package, action, or link ID.
+- VIA is the provider ID for a provider-backed package, `manual` for a manual
+  package, `exec` for an action, or `builtin` for a link.
+- DETAIL is the effective package name (the job ID) for a provider-backed
+  Single, the effective provider-backed Batch names comma-joined in configured
+  order, the deserialized unresolved install or exec program source for a
+  manual package or action, or the unresolved `source -> target` pair for a
+  link.
+
 The canonical reusable selector is the first field and is emitted verbatim.
 Backslash, tab, carriage return, and newline in later display fields are
 escaped as `\\`, `\t`, `\r`, and `\n`. Later fields are stable display
-columns, not a reversible serialization of the complete domain record.
+columns with the meanings above, not a reversible serialization of the
+complete domain record.
 
 Every typed record and all of its fields are prepared before stdout is written.
 Configuration, validation, or scope errors therefore leave stdout empty. A
