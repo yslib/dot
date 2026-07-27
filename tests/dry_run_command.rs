@@ -41,7 +41,7 @@ fn dry_run_prints_the_resolved_plan_without_executing_or_inspecting() {
     let manifest = TempManifest::write(&contents);
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
-        .args(["--dry-run", "--config"])
+        .args(["dry-run", "--config"])
         .arg(manifest.path())
         .output()
         .expect("dot should start");
@@ -70,7 +70,7 @@ fn dry_run_selects_against_the_injected_platform() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_dot"))
         .args([
-            "--dry-run",
+            "dry-run",
             "--platform",
             r#"{ os = "windows", arch = "x86_64" }"#,
             "--config",

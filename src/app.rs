@@ -2,60 +2,100 @@ mod apply;
 mod check_providers;
 mod command;
 mod dry_run;
+mod list_jobs;
+mod list_profiles;
+mod list_targets;
 
+use std::error::Error;
+use std::fmt;
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
-pub use command::{
-    Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection, Selection,
-};
+pub use command::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
 
-use crate::output::TableRenderer;
+use crate::config::ConfigLoadError;
+use crate::manifest::ManifestError;
+use crate::output::{TableRenderer, TsvRecord, TsvRenderer};
+use crate::platform::PlatformInfo;
 use crate::report::{CommandReport, ReportStatus};
 
 pub fn run(dispatch: Dispatch) -> ExitCode {
-    if dispatch.platform_override.is_some() {
-        match dispatch.operation {
-            Operation::Apply { dry_run: false } => {
-                eprintln!(
-                    "dot: warning: --platform is ignored by apply; detected host PlatformInfo will be used"
-                );
-            }
-            Operation::Apply { dry_run: true } | Operation::CheckProviders => {
-                eprintln!(
-                    "dot: warning: --platform overrides PlatformInfo for target selection only; commands, environment, XDG paths, and filesystem state still come from the host"
-                );
-            }
-        }
+    let Dispatch {
+        config,
+        operation,
+        platform_override,
+    } = dispatch;
+
+    if platform_override.is_some() {
+        print_platform_warning(&operation);
     }
 
-    match dispatch.operation {
-        Operation::Apply { dry_run: true } => {
-            match dry_run::run(&dispatch.selection, dispatch.platform_override.as_ref()) {
+    match operation {
+        Operation::Apply(request) => match apply::run(&config, &request) {
+            Ok(report) => render_report(&report),
+            Err(error) => command_error(error),
+        },
+        Operation::DryRun(request) => {
+            match dry_run::run(&config, &request, platform_override.as_ref()) {
                 Ok(report) => render_report(&report),
-                Err(error) => {
-                    eprintln!("dot: {error}");
-                    ExitCode::FAILURE
-                }
+                Err(error) => command_error(error),
             }
         }
-        Operation::Apply { dry_run: false } => match apply::run(&dispatch.selection) {
-            Ok(report) => render_report(&report),
-            Err(error) => {
-                eprintln!("dot: {error}");
-                ExitCode::FAILURE
-            }
-        },
-        Operation::CheckProviders => {
-            match check_providers::run(&dispatch.selection, dispatch.platform_override.as_ref()) {
+        Operation::CheckProviders(scope) => {
+            match check_providers::run(&config, &scope, platform_override.as_ref()) {
                 Ok(report) => render_report(&report),
-                Err(error) => {
-                    eprintln!("dot: {error}");
-                    ExitCode::FAILURE
-                }
+                Err(error) => command_error(error),
             }
+        }
+        Operation::ListTargets { all } => {
+            let platform = compatibility_platform(platform_override.as_ref());
+            render_list(list_targets::records(&config, &platform, all))
+        }
+        Operation::ListProfiles { target } => {
+            let platform = compatibility_platform(platform_override.as_ref());
+            render_list(list_profiles::records(&config, &platform, target.as_ref()))
+        }
+        Operation::ListJobs(scope) => {
+            let platform = compatibility_platform(platform_override.as_ref());
+            render_list(list_jobs::records(&config, &platform, &scope))
         }
     }
+}
+
+fn compatibility_platform(platform_override: Option<&PlatformInfo>) -> PlatformInfo {
+    platform_override
+        .cloned()
+        .unwrap_or_else(PlatformInfo::detect)
+}
+
+fn print_platform_warning(operation: &Operation) {
+    match operation {
+        Operation::Apply(_) => {
+            eprintln!(
+                "dot: warning: --platform is ignored by apply; detected host PlatformInfo will be used"
+            );
+        }
+        Operation::DryRun(_) | Operation::CheckProviders(_) => {
+            eprintln!(
+                "dot: warning: --platform affects target compatibility only; host environment, XDG paths, commands, and filesystem state remain unchanged"
+            );
+        }
+        Operation::ListTargets { .. } => {
+            eprintln!(
+                "dot: warning: --platform affects compatibility labels and default filtering for list targets"
+            );
+        }
+        Operation::ListProfiles { .. } | Operation::ListJobs(_) => {
+            eprintln!(
+                "dot: warning: --platform affects only omitted-target inference for this list command"
+            );
+        }
+    }
+}
+
+fn command_error(error: impl fmt::Display) -> ExitCode {
+    eprintln!("dot: {error}");
+    ExitCode::FAILURE
 }
 
 fn render_report(report: &CommandReport) -> ExitCode {
@@ -68,5 +108,89 @@ fn render_report(report: &CommandReport) -> ExitCode {
     match report.status {
         ReportStatus::Planned | ReportStatus::Succeeded => ExitCode::SUCCESS,
         ReportStatus::Failed => ExitCode::FAILURE,
+    }
+}
+
+fn render_list<R: TsvRecord>(records: Result<Vec<R>, ListCommandError>) -> ExitCode {
+    let records = match records {
+        Ok(records) => records,
+        Err(error) => return command_error(error),
+    };
+
+    let stdout = io::stdout();
+    match normalize_list_output(TsvRenderer.render(&records, &mut stdout.lock())) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("dot: failed to write list output: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn normalize_list_output(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
+
+#[derive(Debug)]
+enum ListCommandError {
+    Config(ConfigLoadError),
+    Manifest(ManifestError),
+}
+
+impl fmt::Display for ListCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(source) => source.fmt(formatter),
+            Self::Manifest(source) => source.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ListCommandError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Config(source) => Some(source),
+            Self::Manifest(source) => Some(source),
+        }
+    }
+}
+
+impl From<ConfigLoadError> for ListCommandError {
+    fn from(source: ConfigLoadError) -> Self {
+        Self::Config(source)
+    }
+}
+
+impl From<ManifestError> for ListCommandError {
+    fn from(source: ManifestError) -> Self {
+        Self::Manifest(source)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_list_output;
+    use std::io;
+
+    #[test]
+    fn list_output_treats_broken_pipe_as_success() {
+        let result =
+            normalize_list_output(Err(io::Error::new(io::ErrorKind::BrokenPipe, "injected")));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn list_output_preserves_other_io_errors() {
+        let error = normalize_list_output(Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "injected",
+        )))
+        .expect_err("non-pipe output errors should remain errors");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 }
