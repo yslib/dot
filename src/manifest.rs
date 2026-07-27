@@ -54,7 +54,7 @@ pub fn profile_entries<'a>(
     target_id: &SelectorIdentifier,
     target: &'a Target,
 ) -> Result<std::vec::IntoIter<ProfileEntry<'a>>, ManifestError> {
-    Ok(collect_profile_catalog(target_id, &target.profiles)?
+    Ok(profile_catalog(target_id, &target.profiles)?
         .into_iter()
         .map(|profile| profile.entry)
         .collect::<Vec<_>>()
@@ -168,7 +168,7 @@ impl EffectiveManifest {
         Self::from_declared_scope(target_id, target, requested_profile)
     }
 
-    pub(crate) fn from_declared_scope(
+    fn from_declared_scope(
         target_id: &SelectorIdentifier,
         target: &Target,
         requested_profile: Option<&SelectorIdentifier>,
@@ -186,28 +186,52 @@ impl EffectiveManifest {
             })
             .transpose()?;
 
+        Ok(match selected_profile {
+            Some((profile_id, selected)) => {
+                Self::from_profile_chain(target_id, target, Some(profile_id), &selected.chain)
+            }
+            None => Self::from_target_root(target_id, target),
+        })
+    }
+
+    pub(crate) fn from_target_root(target_id: &SelectorIdentifier, target: &Target) -> Self {
+        Self::from_profile_chain(target_id, target, None, &[])
+    }
+
+    pub(crate) fn from_catalog_profile(
+        target_id: &SelectorIdentifier,
+        target: &Target,
+        profile: &ProfileCatalogEntry<'_>,
+    ) -> Self {
+        Self::from_profile_chain(target_id, target, Some(profile.entry.id), &profile.chain)
+    }
+
+    fn from_profile_chain(
+        target_id: &SelectorIdentifier,
+        target: &Target,
+        profile_id: Option<&SelectorIdentifier>,
+        chain: &[&Profile],
+    ) -> Self {
         let mut providers = target.providers.clone();
         let mut packages = target.packages.clone();
         let mut links = target.links.clone();
         let mut actions = target.actions.clone();
 
-        if let Some((_, selected)) = selected_profile {
-            for profile in &selected.chain {
-                providers.extend(profile.providers.clone());
-                packages.extend(profile.packages.clone());
-                links.extend(profile.links.clone());
-                actions.extend(profile.actions.clone());
-            }
+        for profile in chain {
+            providers.extend(profile.providers.clone());
+            packages.extend(profile.packages.clone());
+            links.extend(profile.links.clone());
+            actions.extend(profile.actions.clone());
         }
 
-        Ok(Self {
+        Self {
             target: target_id.clone(),
-            profile: selected_profile.map(|(profile_id, _)| profile_id.clone()),
+            profile: profile_id.cloned(),
             providers,
             packages,
             links,
             actions,
-        })
+        }
     }
 
     pub fn target(&self) -> &str {
@@ -267,22 +291,28 @@ struct IndexedProfile<'a> {
     chain: Vec<&'a Profile>,
 }
 
-struct CollectedProfile<'a> {
+pub(crate) struct ProfileCatalogEntry<'a> {
     entry: ProfileEntry<'a>,
     chain: Vec<&'a Profile>,
 }
 
-fn collect_profile_catalog<'a>(
+impl<'a> ProfileCatalogEntry<'a> {
+    pub(crate) fn id(&self) -> &'a SelectorIdentifier {
+        self.entry.id
+    }
+}
+
+pub(crate) fn profile_catalog<'a>(
     target: &SelectorIdentifier,
     profiles: &'a SelectableEntries<Profile>,
-) -> Result<Vec<CollectedProfile<'a>>, ManifestError> {
+) -> Result<Vec<ProfileCatalogEntry<'a>>, ManifestError> {
     fn visit<'a>(
         target: &SelectorIdentifier,
         profiles: &'a SelectableEntries<Profile>,
         path: &mut Vec<&'a SelectorIdentifier>,
         chain: &mut Vec<&'a Profile>,
         seen: &mut BTreeMap<&'a SelectorIdentifier, String>,
-        catalog: &mut Vec<CollectedProfile<'a>>,
+        catalog: &mut Vec<ProfileCatalogEntry<'a>>,
     ) -> Result<(), ManifestError> {
         for (profile_id, profile) in profiles {
             path.push(profile_id);
@@ -303,7 +333,7 @@ fn collect_profile_catalog<'a>(
             }
 
             seen.insert(profile_id, current_path);
-            catalog.push(CollectedProfile {
+            catalog.push(ProfileCatalogEntry {
                 entry: ProfileEntry {
                     id: profile_id,
                     path: path.clone(),
@@ -336,7 +366,7 @@ fn index_profiles<'a>(
     profiles: &'a SelectableEntries<Profile>,
 ) -> Result<BTreeMap<SelectorIdentifier, IndexedProfile<'a>>, ManifestError> {
     let mut index = BTreeMap::new();
-    for profile in collect_profile_catalog(target, profiles)? {
+    for profile in profile_catalog(target, profiles)? {
         index.insert(
             profile.entry.id.clone(),
             IndexedProfile {

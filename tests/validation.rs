@@ -222,16 +222,20 @@ install = { program = "brew", args = ["${package:provider_args}", "${package:nam
 [targets.machine.packages]
 app = { provider = "brew", provider_args = ["--cask"] }
 
-[targets.machine.profiles.broken.providers.brew]
-probe = { program = "profile-brew" }
-install = { program = "profile-brew", args = ["${package:names}"] }
+[targets.machine.profiles.workstation.providers.brew]
+probe = { program = "workstation-brew" }
+install = { program = "workstation-brew", args = ["${package:provider_args}", "${package:names}"] }
+
+[targets.machine.profiles.workstation.profiles.leaf.providers.brew]
+probe = { program = "leaf-brew" }
+install = { program = "leaf-brew", args = ["${package:names}"] }
 "#;
     let config: Config = toml::from_str(input).expect("test config should deserialize");
 
     let error = validate_config(&config)
         .expect_err("the inherited package must use the effective provider definition");
 
-    assert_eq!(error.profile.as_ref().map(AsRef::as_ref), Some("broken"));
+    assert_eq!(error.profile.as_ref().map(AsRef::as_ref), Some("leaf"));
     assert_eq!(
         error.job,
         Some(ConfigValidationJob::Package(
@@ -247,6 +251,7 @@ install = { program = "profile-brew", args = ["${package:names}"] }
             actual: 0,
         } if provider.as_str() == "brew"
     ));
+    assert_eq!(error.field.as_deref(), Some("provider.install.args"));
 }
 
 #[test]

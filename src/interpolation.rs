@@ -363,7 +363,7 @@ pub fn promote_provider_install_args(
     Ok(ProviderInstallArgs::validated(parts))
 }
 
-pub fn provider_args_resolver_count(expression: &ProviderInstallArgs) -> usize {
+pub(crate) fn provider_args_resolver_count(expression: &ProviderInstallArgs) -> usize {
     expression
         .parts()
         .iter()
