@@ -67,9 +67,12 @@ pub(super) struct ProfileRecord<'a> {
 impl TsvRecord for ProfileRecord<'_> {
     fn fields(&self) -> Vec<Cow<'_, str>> {
         let (profile, path) = match &self.profile {
-            ProfileSelection::Root => (Cow::Borrowed("@root"), Cow::Borrowed("<root>")),
-            ProfileSelection::Named(profile) => (
-                Cow::Borrowed(profile.as_str()),
+            ProfileSelection::Root => (
+                Cow::Owned(self.profile.to_string()),
+                Cow::Borrowed("<root>"),
+            ),
+            ProfileSelection::Named(_) => (
+                Cow::Owned(self.profile.to_string()),
                 Cow::Owned(
                     self.path
                         .iter()

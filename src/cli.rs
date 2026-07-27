@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
-use clap::{Args, Error, Parser, Subcommand};
+use clap::{Args, CommandFactory, Error, Parser, Subcommand};
 
 use crate::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
 use crate::job::{JobSelection, JobSelector};
@@ -64,8 +64,10 @@ impl Cli {
         let platform_override = None;
 
         let operation = match self.command {
-            Command::Apply(args) => Operation::Apply(args.into_request()?),
-            Command::DryRun(args) => Operation::DryRun(args.into_request()?),
+            Command::Apply(args) => Operation::Apply(args.into_request(ExecutionCommand::Apply)?),
+            Command::DryRun(args) => {
+                Operation::DryRun(args.into_request(ExecutionCommand::DryRun)?)
+            }
             Command::Check {
                 command: CheckCommand::Providers(args),
             } => Operation::CheckProviders(args.into_scope()),
@@ -140,17 +142,14 @@ struct ExecutionArgs {
 }
 
 impl ExecutionArgs {
-    fn into_request(self) -> Result<ExecutionRequest, Error> {
+    fn into_request(self, command: ExecutionCommand) -> Result<ExecutionRequest, Error> {
         let jobs = if self.job.is_empty() {
             JobSelection::All
         } else {
             let mut unique = BTreeSet::new();
             for selector in self.job {
                 if !unique.insert(selector.clone()) {
-                    return Err(Error::raw(
-                        ErrorKind::ArgumentConflict,
-                        format!("job selector `{selector}` was supplied more than once"),
-                    ));
+                    return Err(duplicate_job_error(&selector, command));
                 }
             }
             JobSelection::Only(unique)
@@ -161,6 +160,33 @@ impl ExecutionArgs {
             jobs,
         })
     }
+}
+
+#[derive(Clone, Copy)]
+enum ExecutionCommand {
+    Apply,
+    DryRun,
+}
+
+impl ExecutionCommand {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::DryRun => "dry-run",
+        }
+    }
+}
+
+fn duplicate_job_error(selector: &JobSelector, leaf: ExecutionCommand) -> Error {
+    let mut command = Cli::command();
+    command.build();
+    command
+        .find_subcommand_mut(leaf.name())
+        .expect("the execution leaf came from the CLI command model")
+        .error(
+            ErrorKind::ArgumentConflict,
+            format!("job selector `{selector}` was supplied more than once"),
+        )
 }
 
 #[derive(Debug, Args)]

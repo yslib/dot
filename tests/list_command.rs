@@ -118,3 +118,42 @@ fn list_errors_leave_stdout_empty() {
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     assert!(!output.stderr.is_empty());
 }
+
+#[cfg(feature = "dev-platform-override")]
+const NEVER_PLATFORM: &str = r#"{ os = "never-os", arch = "x86_64", distro = "never-distro", distro_family = "never-family", environment = "never-environment" }"#;
+
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn list_targets_warns_that_override_affects_labels_and_filtering() {
+    let output = dot(&["list", "targets", "--platform", NEVER_PLATFORM]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        concat!(
+            "never\tcompatible\tnever-os\tx86_64,aarch64\tnever-distro\t",
+            "never-family,other-family\tnever-environment\n",
+        )
+    );
+    assert!(
+        stderr.contains("compatibility labels and default filtering"),
+        "{stderr}"
+    );
+}
+
+#[cfg(feature = "dev-platform-override")]
+#[test]
+fn profile_and_job_lists_warn_that_override_affects_only_target_inference() {
+    for leaf in ["profiles", "jobs"] {
+        let output = dot(&["list", leaf, "--platform", NEVER_PLATFORM]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(!output.stdout.is_empty());
+        assert!(
+            stderr.contains("--platform affects only omitted-target inference"),
+            "{stderr}"
+        );
+    }
+}

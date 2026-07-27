@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::io::{self, Write};
 
 use dot::output::{TsvRecord, TsvRenderer};
@@ -33,6 +34,34 @@ struct EmptyRow;
 impl TsvRecord for EmptyRow {
     fn fields(&self) -> Vec<Cow<'_, str>> {
         Vec::new()
+    }
+}
+
+struct CountingRow<'a> {
+    calls: &'a Cell<usize>,
+}
+
+impl TsvRecord for CountingRow<'_> {
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        self.calls.set(self.calls.get() + 1);
+        vec![Cow::Borrowed("selector"), Cow::Borrowed("detail")]
+    }
+}
+
+#[derive(Default)]
+struct TouchTrackingWriter {
+    touched: bool,
+}
+
+impl Write for TouchTrackingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.touched = true;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.touched = true;
+        Ok(())
     }
 }
 
@@ -141,6 +170,37 @@ fn rejects_records_without_fields() {
         error.to_string().contains("at least one field"),
         "error should explain the invalid record: {error}"
     );
+}
+
+#[test]
+fn preparation_materializes_fields_before_rendering() {
+    let calls = Cell::new(0);
+    let records = [CountingRow { calls: &calls }];
+
+    let prepared = TsvRenderer
+        .prepare(&records)
+        .expect("valid records should prepare");
+    assert_eq!(calls.get(), 1);
+
+    let mut output = Vec::new();
+    prepared
+        .render(&mut output)
+        .expect("prepared rows should render");
+
+    assert_eq!(calls.get(), 1, "rendering must not revisit domain records");
+    assert_eq!(output, b"selector\tdetail\n");
+}
+
+#[test]
+fn zero_field_validation_happens_before_a_writer_is_touched() {
+    let mut output = TouchTrackingWriter::default();
+
+    let error = TsvRenderer
+        .render(&[EmptyRow], &mut output)
+        .expect_err("empty rows should fail during preparation");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(!output.touched, "record validation must precede output");
 }
 
 #[test]

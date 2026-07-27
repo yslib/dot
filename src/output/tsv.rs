@@ -12,6 +12,26 @@ pub trait TsvRecord {
 pub struct TsvRenderer;
 
 impl TsvRenderer {
+    /// Materializes and validates every record field before output begins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] when any record has no fields.
+    pub fn prepare<'a, R: TsvRecord>(&self, records: &'a [R]) -> io::Result<PreparedTsv<'a>> {
+        let mut rows = Vec::with_capacity(records.len());
+        for record in records {
+            let fields = record.fields();
+            if fields.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "TSV records must contain at least one field",
+                ));
+            }
+            rows.push(fields);
+        }
+        Ok(PreparedTsv { rows })
+    }
+
     /// Renders headerless records with one newline after each record.
     ///
     /// The first field is emitted verbatim; later fields escape backslash, tab,
@@ -22,15 +42,26 @@ impl TsvRenderer {
     /// Returns [`io::ErrorKind::InvalidInput`] for a record without fields and
     /// propagates writer errors unchanged.
     pub fn render<R: TsvRecord>(&self, records: &[R], output: &mut dyn Write) -> io::Result<()> {
-        for record in records {
-            let fields = record.fields();
-            let Some((first, remaining)) = fields.split_first() else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "TSV records must contain at least one field",
-                ));
-            };
+        self.prepare(records)?.render(output)
+    }
+}
 
+/// A complete validated set of TSV fields ready for output.
+pub struct PreparedTsv<'a> {
+    rows: Vec<Vec<Cow<'a, str>>>,
+}
+
+impl PreparedTsv<'_> {
+    /// Escapes and writes the prepared rows without revisiting domain records.
+    ///
+    /// # Errors
+    ///
+    /// Propagates writer errors unchanged.
+    pub fn render(&self, output: &mut dyn Write) -> io::Result<()> {
+        for fields in &self.rows {
+            let (first, remaining) = fields
+                .split_first()
+                .expect("preparation rejects records without fields");
             output.write_all(first.as_bytes())?;
             for field in remaining {
                 output.write_all(b"\t")?;
