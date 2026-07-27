@@ -3,3 +3,6 @@ platform = { os = "linux" }
 
 [targets.second]
 platform = { os = "linux" }
+
+[targets.windows]
+platform = { os = "windows" }
