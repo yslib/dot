@@ -11,7 +11,7 @@ use dot::plan::{ExecutionPlan, ExecutionPlanner, JobSelectionError, PlannedJob};
 use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, EnvironmentName, Identifier, ResolvedEnvironmentPatch, ResolvedString,
-    SelectorIdentifier,
+    SelectorIdentifier, SelectorIdentifierError,
 };
 use support::fixture;
 
@@ -145,6 +145,26 @@ fn job_selector_parse_errors_distinguish_invalid_inputs() {
         "provider:brew".parse::<JobSelector>(),
         Err(JobSelectorParseError::ProviderNotSelectable)
     );
+}
+
+#[test]
+fn job_selector_parse_error_precedence_is_stable() {
+    for (spelling, expected) in [
+        (
+            "package:editors:extra",
+            JobSelectorParseError::InvalidIdentifier(SelectorIdentifierError),
+        ),
+        (
+            "service:bad/id",
+            JobSelectorParseError::UnknownKind("service".into()),
+        ),
+        (
+            "provider:bad/id",
+            JobSelectorParseError::ProviderNotSelectable,
+        ),
+    ] {
+        assert_eq!(spelling.parse::<JobSelector>(), Err(expected), "{spelling}");
+    }
 }
 
 #[test]
