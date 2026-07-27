@@ -1,0 +1,38 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.providers.selected-provider]
+activate = { variables = { DOT_EXACT_PROVIDER = "selected-provider" } }
+probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "selected-provider-probe", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+install = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "selected-provider-install", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+
+[targets.current.providers.unrelated-provider]
+activate = { variables = { DOT_EXACT_PROVIDER = "unrelated-provider" } }
+probe = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "unrelated-provider-probe", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+install = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "unrelated-provider-install", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+
+[targets.current.packages.selected]
+provider = "selected-provider"
+
+[targets.current.packages.same-provider-other]
+provider = "selected-provider"
+
+[targets.current.packages.other-provider-package]
+provider = "unrelated-provider"
+
+[targets.current.packages.manual-package.install]
+exec = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "manual-package", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+
+[targets.current.actions.runnable-action]
+exec = { program = __PROGRAM__, args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "runnable-action", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+
+[targets.current.actions.missing-runtime]
+exec = { program = "${env:DOT_INTENTIONALLY_MISSING}", args = ["--exact", "helper_process", "--nocapture"], env = { variables = { DOT_EXACT_HELPER = "missing-runtime", DOT_EXACT_EVENTS = "${dot:config_dir}/events" } } }
+
+[targets.current.links.selected-link]
+source = "selected-source.txt"
+target = "${dot:config_dir}/selected-linked.txt"
+
+[targets.current.links.unselected-link]
+source = "unselected-source.txt"
+target = "${dot:config_dir}/unselected-linked.txt"
