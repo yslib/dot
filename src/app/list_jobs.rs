@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::config::LoadedConfig;
+use crate::config::LoadedConfigDocument;
 use crate::job::JobSelector;
 use crate::manifest::{EffectiveManifest, ManifestJobRef};
 use crate::output::TsvRecord;
@@ -19,7 +19,7 @@ impl Catalog {
         platform: &PlatformInfo,
         scope: &ScopeSelection,
     ) -> Result<Self, ListCommandError> {
-        let loaded = LoadedConfig::load(config)?;
+        let loaded = LoadedConfigDocument::load(config)?;
         let manifest = EffectiveManifest::select_for_inspection(
             loaded.config(),
             platform,

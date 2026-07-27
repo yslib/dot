@@ -10,19 +10,17 @@ use crate::schema::Config;
 use crate::validation::{ConfigValidationError, validate_config};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoadedConfig {
+pub(crate) struct LoadedConfigDocument {
     config: Config,
     path: PathBuf,
     directory: PathBuf,
     invocation_cwd: PathBuf,
-    environment: ExecutionEnvironment,
 }
 
-impl LoadedConfig {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
+impl LoadedConfigDocument {
+    pub(crate) fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
         let invocation_cwd =
             env::current_dir().map_err(|source| ConfigLoadError::CurrentDirectory { source })?;
-        let environment = ExecutionEnvironment::capture();
         let path = absolute_path(path.as_ref(), &invocation_cwd);
         let source = fs::read_to_string(&path).map_err(|source| ConfigLoadError::Read {
             path: path.clone(),
@@ -46,24 +44,57 @@ impl LoadedConfig {
             path,
             directory,
             invocation_cwd,
+        })
+    }
+
+    pub(crate) fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    pub(crate) fn invocation_cwd(&self) -> &Path {
+        &self.invocation_cwd
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedConfig {
+    document: LoadedConfigDocument,
+    environment: ExecutionEnvironment,
+}
+
+impl LoadedConfig {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
+        let document = LoadedConfigDocument::load(path)?;
+        let environment = ExecutionEnvironment::capture();
+
+        Ok(Self {
+            document,
             environment,
         })
     }
 
     pub fn config(&self) -> &Config {
-        &self.config
+        self.document.config()
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.document.path()
     }
 
     pub fn directory(&self) -> &Path {
-        &self.directory
+        self.document.directory()
     }
 
     pub fn invocation_cwd(&self) -> &Path {
-        &self.invocation_cwd
+        self.document.invocation_cwd()
     }
 
     pub fn environment(&self) -> &ExecutionEnvironment {
@@ -139,5 +170,25 @@ impl Error for ConfigLoadError {
             Self::Parse { source, .. } => Some(source),
             Self::Validation { source, .. } => Some(source.as_ref()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_document_loads_config_and_absolute_path_metadata() {
+        let invocation_cwd = env::current_dir().expect("test should have a current directory");
+        let relative_path = Path::new("tests/fixtures/dot.toml");
+        let expected_path = invocation_cwd.join(relative_path);
+
+        let loaded = LoadedConfigDocument::load(relative_path).expect("fixture should load");
+
+        assert_eq!(loaded.config().targets.len(), 6);
+        assert_eq!(loaded.path(), expected_path);
+        assert!(loaded.path().is_absolute());
+        assert_eq!(loaded.directory(), expected_path.parent().unwrap());
+        assert_eq!(loaded.invocation_cwd(), invocation_cwd);
     }
 }
