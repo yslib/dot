@@ -80,6 +80,149 @@ fn helper_exec(mode: &str) -> String {
     )
 }
 
+fn exact_manifest(workspace: &TempWorkspace) -> PathBuf {
+    workspace.write_source("selected-source.txt");
+    workspace.write_source("unselected-source.txt");
+    workspace.write_manifest(&fixture::read(
+        "selection/valid-exact-command-template.toml",
+    ))
+}
+
+fn run_exact_apply(manifest: &Path, selectors: &[&str]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_dot"));
+    command
+        .arg("--config")
+        .arg(manifest)
+        .arg("apply")
+        .env_remove("DOT_INTENTIONALLY_MISSING");
+    for selector in selectors {
+        command.args(["--job", selector]);
+    }
+    command.output().expect("dot apply should start")
+}
+
+fn report_job_rows(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let cells = line
+                .trim_matches('│')
+                .split('┆')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            let [kind, id, ..] = cells.as_slice() else {
+                return None;
+            };
+            matches!(*kind, "provider" | "package" | "action" | "link")
+                .then(|| format!("{kind}:{id}"))
+        })
+        .collect()
+}
+
+fn assert_exact_workspace_untouched(workspace: &TempWorkspace) {
+    assert!(
+        !workspace.events().exists(),
+        "an atomic planning failure must not create an event log"
+    );
+    assert!(
+        !workspace.path("selected-linked.txt").exists(),
+        "an atomic planning failure must not create the selected link"
+    );
+    assert!(
+        !workspace.path("unselected-linked.txt").exists(),
+        "an atomic planning failure must not create the unselected link"
+    );
+}
+
+#[test]
+fn exact_apply_executes_only_selected_jobs_in_stable_plan_order() {
+    for selectors in [
+        ["package:selected", "link:selected-link"],
+        ["link:selected-link", "package:selected"],
+    ] {
+        let workspace = TempWorkspace::new();
+        let manifest = exact_manifest(&workspace);
+        let output = run_exact_apply(&manifest, &selectors);
+        let stdout = String::from_utf8(output.stdout).expect("apply report should be UTF-8");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            report_job_rows(&stdout),
+            [
+                "provider:selected-provider",
+                "package:selected",
+                "link:selected-link",
+            ],
+            "{stdout}"
+        );
+        assert_eq!(
+            workspace.recorded_events(),
+            ["selected-provider-probe", "selected-provider-install"]
+        );
+        assert_eq!(
+            fs::canonicalize(workspace.path("selected-linked.txt"))
+                .expect("selected link should resolve"),
+            fs::canonicalize(workspace.path("selected-source.txt"))
+                .expect("selected source should resolve")
+        );
+        assert!(
+            !workspace.path("unselected-linked.txt").exists(),
+            "unselected link must remain absent"
+        );
+        assert!(
+            stdout.contains("SUCCESS · 3 items · 1 provider · 1 package · 0 actions · 1 link"),
+            "{stdout}"
+        );
+    }
+}
+
+#[test]
+fn exact_apply_rejects_an_unknown_selector_atomically() {
+    let workspace = TempWorkspace::new();
+    let manifest = exact_manifest(&workspace);
+    let output = run_exact_apply(
+        &manifest,
+        &["package:selected", "link:selected-link", "action:unknown"],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown action job `unknown`"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_exact_workspace_untouched(&workspace);
+}
+
+#[test]
+fn exact_apply_rejects_a_selected_runtime_failure_atomically() {
+    let workspace = TempWorkspace::new();
+    let manifest = exact_manifest(&workspace);
+    let output = run_exact_apply(
+        &manifest,
+        &[
+            "package:selected",
+            "action:missing-runtime",
+            "link:selected-link",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("environment variable `DOT_INTENTIONALLY_MISSING` is not defined"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_exact_workspace_untouched(&workspace);
+}
+
 #[test]
 fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
     let workspace = TempWorkspace::new();
@@ -252,6 +395,25 @@ platform = { os = "__OS__" }
 
 #[test]
 fn helper_process() {
+    if let Ok(mode) = env::var("DOT_EXACT_HELPER") {
+        let events = PathBuf::from(
+            env::var_os("DOT_EXACT_EVENTS").expect("exact-selection event path should be present"),
+        );
+        let expected_provider = match mode.as_str() {
+            "selected-provider-probe" | "selected-provider-install" => Some("selected-provider"),
+            "unrelated-provider-probe" | "unrelated-provider-install" => Some("unrelated-provider"),
+            "manual-package" | "runnable-action" | "missing-runtime" => None,
+            unknown => panic!("unknown exact-selection helper mode: {unknown}"),
+        };
+        assert_eq!(
+            env::var("DOT_EXACT_PROVIDER").ok().as_deref(),
+            expected_provider,
+            "only provider phases should receive provider activation"
+        );
+        record(&events, &mode);
+        return;
+    }
+
     let Ok(mode) = env::var("DOT_APPLY_HELPER") else {
         return;
     };

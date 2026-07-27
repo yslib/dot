@@ -1,8 +1,17 @@
 mod support;
 
+use std::collections::BTreeSet;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use dot::job::JobSelector;
 use support::fixture;
+
+static NEXT_EXACT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
 fn dot(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_dot"))
@@ -22,6 +31,168 @@ fn success_stdout(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("list output should be UTF-8")
+}
+
+struct ExactCatalogWorkspace {
+    directory: PathBuf,
+    manifest: PathBuf,
+}
+
+impl ExactCatalogWorkspace {
+    fn new() -> Self {
+        let sequence = NEXT_EXACT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
+        let directory = env::temp_dir().join(format!(
+            "dot-list-command-exact-{}-{sequence}",
+            process::id()
+        ));
+        fs::create_dir(&directory).expect("exact-selection workspace should be created");
+        fs::write(directory.join("selected-source.txt"), "selected")
+            .expect("selected link source should be written");
+        fs::write(directory.join("unselected-source.txt"), "unselected")
+            .expect("unselected link source should be written");
+        let manifest = directory.join("dot.toml");
+        let program = format!(
+            "{:?}",
+            env::current_exe()
+                .expect("test executable should have a path")
+                .to_string_lossy()
+        );
+        let contents = fixture::read("selection/valid-exact-command-template.toml")
+            .replace("__OS__", env::consts::OS)
+            .replace("__PROGRAM__", &program);
+        fs::write(&manifest, contents).expect("exact-selection manifest should be written");
+        Self {
+            directory,
+            manifest,
+        }
+    }
+}
+
+impl Drop for ExactCatalogWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn report_job_rows(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let cells = line
+                .trim_matches('│')
+                .split('┆')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            let [kind, id, ..] = cells.as_slice() else {
+                return None;
+            };
+            matches!(*kind, "provider" | "package" | "action" | "link")
+                .then(|| format!("{kind}:{id}"))
+        })
+        .collect()
+}
+
+fn expected_exact_rows(selector: &JobSelector) -> Vec<String> {
+    let mut rows = Vec::new();
+    if let JobSelector::Package(package) = selector {
+        match package.as_str() {
+            "selected" | "same-provider-other" => {
+                rows.push("provider:selected-provider".to_owned());
+            }
+            "other-provider-package" => {
+                rows.push("provider:unrelated-provider".to_owned());
+            }
+            "manual-package" => {}
+            unknown => panic!("unexpected package selector in exact fixture: {unknown}"),
+        }
+    }
+    rows.push(selector.to_string());
+    rows
+}
+
+#[test]
+fn listed_job_selectors_round_trip_through_exact_dry_run() {
+    let workspace = ExactCatalogWorkspace::new();
+    let list = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .arg("--config")
+        .arg(&workspace.manifest)
+        .args(["list", "jobs"])
+        .env_remove("DOT_INTENTIONALLY_MISSING")
+        .output()
+        .expect("dot list jobs should start");
+    assert!(
+        list.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&list.stdout),
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let list_stdout = String::from_utf8(list.stdout).expect("job list should be UTF-8");
+    let fields = list_stdout
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.split_once('\t')
+                .expect("every job record should contain multiple TSV fields")
+                .0
+        })
+        .collect::<Vec<_>>();
+    let unique_fields = fields.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        unique_fields,
+        BTreeSet::from([
+            "package:manual-package",
+            "package:other-provider-package",
+            "package:same-provider-other",
+            "package:selected",
+            "action:missing-runtime",
+            "action:runnable-action",
+            "link:selected-link",
+            "link:unselected-link",
+        ]),
+        "{list_stdout}"
+    );
+    assert_eq!(
+        fields.len(),
+        unique_fields.len(),
+        "job selectors must be unique:\n{list_stdout}"
+    );
+
+    for field in fields {
+        assert!(
+            !field.starts_with("provider:"),
+            "providers must not appear as selectable TSV records: {field}"
+        );
+        let selector = field
+            .parse::<JobSelector>()
+            .unwrap_or_else(|error| panic!("listed selector `{field}` should parse: {error}"));
+        assert_eq!(
+            selector.to_string(),
+            field,
+            "the first field should use canonical selector syntax"
+        );
+
+        let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+            .arg("--config")
+            .arg(&workspace.manifest)
+            .args(["dry-run", "--job", field])
+            .env(
+                "DOT_INTENTIONALLY_MISSING",
+                env::current_exe().expect("test executable should have a path"),
+            )
+            .output()
+            .expect("dot dry-run should start");
+        let stdout = String::from_utf8(output.stdout).expect("dry-run report should be UTF-8");
+        assert!(
+            output.status.success(),
+            "selector: {field}\nstdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            report_job_rows(&stdout),
+            expected_exact_rows(&selector),
+            "selector: {field}\n{stdout}"
+        );
+    }
 }
 
 #[test]
