@@ -115,6 +115,98 @@ fn check_providers_ignores_expression_errors_outside_activate_and_probe() {
 }
 
 #[test]
+fn check_providers_runs_no_probe_when_complete_static_validation_fails() {
+    let contents = format!(
+        r#"
+[targets.current]
+platform = {{ os = {:?} }}
+
+[targets.current.providers.would-run]
+activate = {{ variables = {{ PROVIDER_VALUE = "ready" }} }}
+probe = {{ program = {}, args = ["--exact", "helper_process", "--nocapture"], env = {{ variables = {{ DOT_CHECK_COMMAND_HELPER = "ready" }} }} }}
+install = {{ program = "unused-install" }}
+
+[targets.unselected]
+platform = {{ os = "other" }}
+
+[targets.unselected.actions.invalid]
+exec = {{ program = "${{unknown:value}}" }}
+"#,
+        env::consts::OS,
+        helper_program_toml()
+    );
+    let manifest = TempManifest::write(&contents);
+    let marker = TempMarker::new();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["check", "providers", "--config"])
+        .arg(manifest.path())
+        .env("DOT_CHECK_COMMAND_MARKER", marker.path())
+        .output()
+        .expect("dot should start");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stdout:\n{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("failed to validate configuration"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("unknown resolver `unknown`"), "{stderr}");
+    assert!(
+        !marker.path().exists(),
+        "provider probe must not run after a static load failure"
+    );
+}
+
+#[test]
+fn check_providers_continues_after_one_runtime_resolution_failure() {
+    let contents = fixture::read("check/valid-runtime-resolution-continuation-template.toml")
+        .replace("__OS__", env::consts::OS)
+        .replace("__PROGRAM__", &helper_program_toml());
+    let manifest = TempManifest::write(&contents);
+    let marker = TempMarker::new();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["check", "providers", "--config"])
+        .arg(manifest.path())
+        .env_remove("DOT_INTENTIONALLY_MISSING")
+        .env("DOT_CHECK_COMMAND_MARKER", marker.path())
+        .output()
+        .expect("dot should start");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("│ provider ┆ a-runtime-broken"), "{stdout}");
+    assert!(stdout.contains("│ provider ┆ b-ready"), "{stdout}");
+    assert!(stdout.contains("NOT_READY"), "{stdout}");
+    assert!(stdout.contains("READY"), "{stdout}");
+    assert!(stdout.contains("environment variable"), "{stdout}");
+    assert!(
+        stdout.contains("`DOT_INTENTIONALLY_MISSING` is not defined"),
+        "{stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(marker.path()).expect("the second provider probe should run"),
+        format!(
+            "provider-probe-ran:{}/ready",
+            manifest
+                .path()
+                .parent()
+                .expect("manifest should have a parent")
+                .to_string_lossy()
+        )
+    );
+    assert!(stdout.contains("FAILED · 2 items"), "{stdout}");
+}
+
+#[test]
 fn check_providers_runs_the_selected_manifest_and_sets_the_exit_code() {
     let manifest = provider_manifest();
 

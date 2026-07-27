@@ -18,3 +18,4 @@ pub mod platform;
 pub mod provider;
 pub mod report;
 pub mod schema;
+pub mod validation;

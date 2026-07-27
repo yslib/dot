@@ -1,0 +1,15 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.system]
+probe = { program = "system", args = ["--version"] }
+install = { program = "system", args = ["install", "${package:names}"] }
+
+[targets.machine.packages]
+tool = { provider = "system" }
+
+[targets.machine.profiles.working.packages]
+tool = { provider = "system" }
+
+[targets.machine.profiles.broken.packages]
+tool = { provider = "missing" }

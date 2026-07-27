@@ -165,6 +165,14 @@ impl EffectiveManifest {
             });
         }
 
+        Self::from_declared_scope(target_id, target, requested_profile)
+    }
+
+    pub(crate) fn from_declared_scope(
+        target_id: &SelectorIdentifier,
+        target: &Target,
+        requested_profile: Option<&SelectorIdentifier>,
+    ) -> Result<Self, ManifestError> {
         let profiles = index_profiles(target_id, &target.profiles)?;
         let selected_profile = requested_profile
             .map(|profile| {

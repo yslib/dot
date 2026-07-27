@@ -6,6 +6,8 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use dot::config::{ConfigLoadError, LoadedConfig};
+use dot::manifest::ManifestError;
+use dot::validation::ConfigValidationErrorKind;
 use support::fixture;
 
 fn relative_fixture(name: &str) -> (PathBuf, PathBuf) {
@@ -66,6 +68,40 @@ fn reports_the_manifest_path_when_toml_is_invalid() {
     match &error {
         ConfigLoadError::Parse { path, .. } => assert_eq!(path, &expected_path),
         other => panic!("expected a parse error, got {other:?}"),
+    }
+    assert!(
+        error
+            .to_string()
+            .contains(expected_path.to_string_lossy().as_ref())
+    );
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn reports_the_absolute_path_when_the_complete_manifest_is_invalid() {
+    let (relative_path, expected_path) =
+        relative_fixture("manifest/invalid-duplicate-profile-name.toml");
+
+    let error =
+        LoadedConfig::load(&relative_path).expect_err("duplicate profiles must fail validation");
+
+    match &error {
+        ConfigLoadError::Validation { path, source } => {
+            assert_eq!(path, &expected_path);
+            assert!(matches!(
+                source.kind.as_ref(),
+                ConfigValidationErrorKind::Manifest(ManifestError::DuplicateProfile {
+                    target,
+                    profile,
+                    first_path,
+                    second_path,
+                }) if target == "machine"
+                    && profile == "shared"
+                    && first_path == "desktop/shared"
+                    && second_path == "server/shared"
+            ));
+        }
+        other => panic!("expected a validation error, got {other:?}"),
     }
     assert!(
         error

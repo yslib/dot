@@ -363,6 +363,21 @@ pub fn promote_provider_install_args(
     Ok(ProviderInstallArgs::validated(parts))
 }
 
+pub fn provider_args_resolver_count(expression: &ProviderInstallArgs) -> usize {
+    expression
+        .parts()
+        .iter()
+        .filter(|part| {
+            matches!(
+                part,
+                FlatListPart::Many(variable)
+                    if variable.reference().resolver() == "package"
+                        && variable.reference().payload() == "provider_args"
+            )
+        })
+        .count()
+}
+
 pub fn resolve_literal_string(
     source: &LiteralStringSource,
 ) -> Result<ResolvedString, InterpolationError> {
