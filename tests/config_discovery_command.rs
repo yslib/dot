@@ -31,6 +31,7 @@ impl TempWorkspace {
         let root =
             fs::canonicalize(root).expect("temporary workspace should have an absolute path");
         let cwd = root.join("cwd");
+        #[cfg(unix)]
         let home = root.join("home");
         Self {
             root,
