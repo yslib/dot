@@ -47,7 +47,10 @@ pub enum ConfigRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum UserConfigRoot {
+    // Keep both variants available so path construction stays unit-testable on either host.
+    #[cfg_attr(windows, allow(dead_code))]
     Home(PathBuf),
+    #[cfg_attr(not(windows), allow(dead_code))]
     Roaming(PathBuf),
 }
 
