@@ -103,7 +103,7 @@ from `SCHEMA.txt`. Provider IDs remain broad identifiers.
 The command pipeline is:
 
 ```text
-dot.toml
+.dot.toml
    |
    | parse + whole-configuration static validation
    v
