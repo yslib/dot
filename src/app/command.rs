@@ -1,6 +1,6 @@
 use std::fmt;
-use std::path::PathBuf;
 
+use crate::config::ConfigRequest;
 use crate::job::JobSelection;
 use crate::platform::PlatformInfo;
 use crate::schema::{SelectorIdentifier, SelectorIdentifierError};
@@ -60,7 +60,7 @@ pub enum Operation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dispatch {
-    pub config: PathBuf,
+    pub config: ConfigRequest,
     pub operation: Operation,
     pub platform_override: Option<PlatformInfo>,
 }

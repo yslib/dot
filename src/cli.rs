@@ -6,6 +6,7 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Error, Parser, Subcommand};
 
 use crate::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
+use crate::config::ConfigRequest;
 use crate::job::{JobSelection, JobSelector};
 use crate::schema::SelectorIdentifier;
 
@@ -31,15 +32,9 @@ where
     subcommand_required = true
 )]
 struct Cli {
-    /// Path to the TOML manifest
-    #[arg(
-        short,
-        long,
-        global = true,
-        value_name = "PATH",
-        default_value = "./dot.toml"
-    )]
-    config: PathBuf,
+    /// Path to the TOML manifest; defaults to ./.dot.toml, then the user fallback
+    #[arg(short, long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
 
     /// Inject PlatformInfo for development-time compatibility selection; host environment, XDG
     /// paths, commands, and filesystem state remain unchanged
@@ -85,7 +80,9 @@ impl Cli {
         };
 
         Ok(Dispatch {
-            config: self.config,
+            config: self
+                .config
+                .map_or(ConfigRequest::Discover, ConfigRequest::Explicit),
             operation,
             platform_override,
         })
