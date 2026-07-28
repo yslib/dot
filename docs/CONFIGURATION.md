@@ -6,6 +6,22 @@ configuration. This document is the human-facing explanation of that schema;
 boundaries. When they differ, update `SCHEMA.txt` first and then synchronize
 this reference.
 
+## Configuration discovery
+
+`dot` chooses one configuration using this exact precedence:
+
+1. the path from an explicit `--config PATH`, when supplied;
+2. `.dot.toml` in the current working directory;
+3. `~/.config/dot/.dot.toml` on Linux and macOS, or
+   `%APPDATA%\dot\.dot.toml` on Windows.
+
+An explicit path is used as given, may have any filename, and bypasses the
+remaining discovery candidates. Among the automatic candidates, the first
+whose filesystem entry exists is chosen. Read, parse, or validation failures
+for the chosen path are reported immediately; `dot` does not fall back to
+another candidate. It does not search parent directories recursively, merge
+configuration files, or recognize `dot.toml` as a legacy default.
+
 ## Type index
 
 - [Foundational types](#foundational-types): [`string`](#string),

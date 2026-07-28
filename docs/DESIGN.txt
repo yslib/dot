@@ -652,7 +652,16 @@ dot list jobs
 ```
 
 There is no default operation. `dot` without a subcommand prints help and is an
-error. `--config PATH` is global and defaults to `./dot.toml`.
+error. `--config PATH` is global. The CLI represents its presence or absence as
+a typed ConfigRequest, and the central application facade resolves that request
+exactly once before dispatching an operation. An explicit path bypasses
+discovery and may use any filename. Otherwise dot checks `./.dot.toml`, then
+`~/.config/dot/.dot.toml` on Linux and macOS or
+`%APPDATA%\dot\.dot.toml` on Windows. The first existing filesystem entry is
+selected; load, parse, and validation failures do not fall through. Discovery
+does not recursively search, merge files, or recognize `dot.toml` as a legacy
+default. It uses native host paths and is not affected by an injected
+PlatformInfo.
 
 Target and profile options belong to `apply`, `dry-run`, `check providers`, and
 `list jobs`. `list profiles` accepts only the target option. `list targets`

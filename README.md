@@ -43,7 +43,7 @@ The binary is written to `target/release/dot` (`dot.exe` on Windows).
 
 ## Quick start
 
-Create `dot.toml` in the directory containing the files you want to manage:
+Create `.dot.toml` in the directory containing the files you want to manage:
 
 ```toml
 [targets.workstation]
@@ -79,9 +79,13 @@ Apply the environment:
 dot apply --target workstation
 ```
 
-The default configuration path is `./dot.toml`; use `--config PATH` to select
-another file. `--target` may be omitted when exactly one configured target is
-compatible with the current platform.
+Without `--config`, `dot` checks `./.dot.toml` first, then
+`~/.config/dot/.dot.toml` on Linux and macOS or
+`%APPDATA%\dot\.dot.toml` on Windows. The first candidate whose filesystem
+entry exists is selected; load, parse, or validation errors for that path do
+not fall through to another candidate. An explicit `--config PATH` bypasses
+discovery and may use any filename. `--target` may be omitted when exactly one
+configured target is compatible with the current platform.
 
 ## Command line
 

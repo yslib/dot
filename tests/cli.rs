@@ -376,3 +376,22 @@ fn exposes_standard_help_and_version_flags() {
     assert_eq!(help.kind(), ErrorKind::DisplayHelp);
     assert_eq!(version.kind(), ErrorKind::DisplayVersion);
 }
+
+#[test]
+fn help_documents_config_discovery() {
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .arg("--help")
+        .output()
+        .expect("dot should start");
+    let stdout = String::from_utf8(output.stdout).expect("help stdout should be UTF-8");
+    let normalized_help = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(output.status.success(), "{stdout}");
+    assert!(normalized_help.contains("--config <PATH>"), "{stdout}");
+    assert!(stdout.contains("./.dot.toml"), "{stdout}");
+    assert!(normalized_help.contains("user fallback"), "{stdout}");
+    assert!(
+        !normalized_help.contains("[default: ./dot.toml]"),
+        "{stdout}"
+    );
+}
