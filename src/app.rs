@@ -26,6 +26,11 @@ pub fn run(dispatch: Dispatch) -> ExitCode {
         platform_override,
     } = dispatch;
 
+    let config = match config.resolve() {
+        Ok(path) => path,
+        Err(error) => return command_error(error),
+    };
+
     if platform_override.is_some() {
         print_platform_warning(&operation);
     }

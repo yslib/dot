@@ -5,6 +5,7 @@ use std::process::Command;
 use clap::error::ErrorKind;
 use dot::app::{Dispatch, ExecutionRequest, Operation, ProfileSelection, ScopeSelection};
 use dot::cli;
+use dot::config::ConfigRequest;
 use dot::job::{JobSelection, JobSelector};
 #[cfg(feature = "dev-platform-override")]
 use dot::platform::PlatformInfo;
@@ -49,7 +50,7 @@ fn parses_explicit_apply_with_root_scope_and_all_jobs() {
     assert_eq!(
         dispatch,
         Dispatch {
-            config: PathBuf::from("./dot.toml"),
+            config: ConfigRequest::Discover,
             operation: Operation::Apply(ExecutionRequest {
                 scope: root_scope(None),
                 jobs: JobSelection::All,
@@ -77,7 +78,10 @@ fn parses_dry_run_selection_and_repeatable_jobs() {
     ])
     .expect("dry-run arguments should parse");
 
-    assert_eq!(dispatch.config, PathBuf::from("config/dev.toml"));
+    assert_eq!(
+        dispatch.config,
+        ConfigRequest::Explicit(PathBuf::from("config/dev.toml"))
+    );
     assert_eq!(
         dispatch.operation,
         Operation::DryRun(ExecutionRequest {
@@ -194,7 +198,10 @@ fn parses_check_and_list_operations() {
         "laptop",
     ])
     .expect("check providers should parse");
-    assert_eq!(check.config, PathBuf::from("config/dev.toml"));
+    assert_eq!(
+        check.config,
+        ConfigRequest::Explicit(PathBuf::from("config/dev.toml"))
+    );
     assert_eq!(
         check.operation,
         Operation::CheckProviders(ScopeSelection {
