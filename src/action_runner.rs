@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt;
 
 use crate::action::{
@@ -116,16 +115,21 @@ impl<'a> ActionRunner<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ActionRunError {
+    #[error("failed to prepare action {stage}: {source}")]
     Preparation {
         stage: ActionStage,
+        #[source]
         source: CommandPreparationError,
     },
+    #[error("failed to execute action {stage}: {source}")]
     Execution {
         stage: ActionStage,
+        #[source]
         source: ExecutionError,
     },
+    #[error("action {stage} returned {}", .result.status())]
     UnsuccessfulExit {
         stage: ActionStage,
         result: ExecutionResult,
@@ -145,32 +149,6 @@ impl ActionRunError {
         match self {
             Self::UnsuccessfulExit { result, .. } => Some(result),
             Self::Preparation { .. } | Self::Execution { .. } => None,
-        }
-    }
-}
-
-impl fmt::Display for ActionRunError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Preparation { stage, source } => {
-                write!(formatter, "failed to prepare action {stage}: {source}")
-            }
-            Self::Execution { stage, source } => {
-                write!(formatter, "failed to execute action {stage}: {source}")
-            }
-            Self::UnsuccessfulExit { stage, result } => {
-                write!(formatter, "action {stage} returned {}", result.status())
-            }
-        }
-    }
-}
-
-impl Error for ActionRunError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Preparation { source, .. } => Some(source),
-            Self::Execution { source, .. } => Some(source),
-            Self::UnsuccessfulExit { .. } => None,
         }
     }
 }
