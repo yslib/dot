@@ -1,5 +1,7 @@
-// Keep validation kinds direct so Error::source exposes their concrete type.
-#![allow(clippy::result_large_err)]
+#![expect(
+    clippy::result_large_err,
+    reason = "direct typed error sources preserve Error::source downcasts"
+)]
 
 use std::collections::BTreeSet;
 use std::fmt;
