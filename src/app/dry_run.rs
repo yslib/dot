@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt;
-
 use super::ExecutionRequest;
 use crate::config::{ConfigLoadError, LoadedConfig};
 use crate::dry_run::build_report;
@@ -33,47 +30,14 @@ pub(super) fn run(
     Ok(build_report(loaded.path(), &plan))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum CommandError {
-    Config(ConfigLoadError),
-    Manifest(ManifestError),
-    Plan(ExecutionPlanError),
-}
+    #[error("{0}")]
+    Config(#[from] ConfigLoadError),
 
-impl fmt::Display for CommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(source) => source.fmt(formatter),
-            Self::Manifest(source) => source.fmt(formatter),
-            Self::Plan(source) => source.fmt(formatter),
-        }
-    }
-}
+    #[error("{0}")]
+    Manifest(#[from] ManifestError),
 
-impl Error for CommandError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Config(source) => Some(source),
-            Self::Manifest(source) => Some(source),
-            Self::Plan(source) => Some(source),
-        }
-    }
-}
-
-impl From<ConfigLoadError> for CommandError {
-    fn from(source: ConfigLoadError) -> Self {
-        Self::Config(source)
-    }
-}
-
-impl From<ManifestError> for CommandError {
-    fn from(source: ManifestError) -> Self {
-        Self::Manifest(source)
-    }
-}
-
-impl From<ExecutionPlanError> for CommandError {
-    fn from(source: ExecutionPlanError) -> Self {
-        Self::Plan(source)
-    }
+    #[error("{0}")]
+    Plan(#[from] ExecutionPlanError),
 }

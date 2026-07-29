@@ -6,7 +6,6 @@ mod list_jobs;
 mod list_profiles;
 mod list_targets;
 
-use std::error::Error;
 use std::fmt;
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
@@ -151,40 +150,13 @@ fn normalize_list_output(result: io::Result<()>) -> io::Result<()> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum ListCommandError {
-    Config(ConfigLoadError),
-    Manifest(ManifestError),
-}
+    #[error("{0}")]
+    Config(#[from] ConfigLoadError),
 
-impl fmt::Display for ListCommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(source) => source.fmt(formatter),
-            Self::Manifest(source) => source.fmt(formatter),
-        }
-    }
-}
-
-impl Error for ListCommandError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Config(source) => Some(source),
-            Self::Manifest(source) => Some(source),
-        }
-    }
-}
-
-impl From<ConfigLoadError> for ListCommandError {
-    fn from(source: ConfigLoadError) -> Self {
-        Self::Config(source)
-    }
-}
-
-impl From<ManifestError> for ListCommandError {
-    fn from(source: ManifestError) -> Self {
-        Self::Manifest(source)
-    }
+    #[error("{0}")]
+    Manifest(#[from] ManifestError),
 }
 
 #[cfg(test)]
