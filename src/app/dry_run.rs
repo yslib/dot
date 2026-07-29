@@ -1,9 +1,9 @@
-use super::ExecutionRequest;
-use crate::config::{ConfigLoadError, LoadedConfig};
+use super::{ExecutionCommandError, ExecutionRequest};
+use crate::config::LoadedConfig;
 use crate::dry_run::build_report;
 use crate::interpolation::{DotPaths, XdgPaths};
-use crate::manifest::{EffectiveManifest, ManifestError};
-use crate::plan::{ExecutionPlanError, ExecutionPlanner};
+use crate::manifest::EffectiveManifest;
+use crate::plan::ExecutionPlanner;
 use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
@@ -11,7 +11,7 @@ pub(super) fn run(
     config: &std::path::Path,
     request: &ExecutionRequest,
     platform_override: Option<&PlatformInfo>,
-) -> Result<CommandReport, CommandError> {
+) -> Result<CommandReport, ExecutionCommandError> {
     let loaded = LoadedConfig::load(config)?;
     let platform = platform_override
         .cloned()
@@ -28,16 +28,4 @@ pub(super) fn run(
     let plan = planner.plan(&manifest, &request.jobs)?;
 
     Ok(build_report(loaded.path(), &plan))
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum CommandError {
-    #[error("{0}")]
-    Config(#[from] ConfigLoadError),
-
-    #[error("{0}")]
-    Manifest(#[from] ManifestError),
-
-    #[error("{0}")]
-    Plan(#[from] ExecutionPlanError),
 }

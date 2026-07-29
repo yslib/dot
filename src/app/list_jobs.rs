@@ -7,7 +7,7 @@ use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
 use crate::schema::{Package, ProviderPackage};
 
-use super::{ListCommandError, ScopeSelection};
+use super::{ManifestCommandError, ScopeSelection};
 
 pub(super) struct Catalog {
     manifest: EffectiveManifest,
@@ -18,7 +18,7 @@ impl Catalog {
         config: &std::path::Path,
         platform: &PlatformInfo,
         scope: &ScopeSelection,
-    ) -> Result<Self, ListCommandError> {
+    ) -> Result<Self, ManifestCommandError> {
         let loaded = LoadedConfigDocument::load(config)?;
         let manifest = EffectiveManifest::select_for_inspection(
             loaded.config(),

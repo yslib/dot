@@ -6,7 +6,7 @@ use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
 use crate::schema::SelectorIdentifier;
 
-use super::{ListCommandError, ProfileSelection};
+use super::{ManifestCommandError, ProfileSelection};
 
 pub(super) struct Catalog {
     loaded: LoadedConfigDocument,
@@ -18,7 +18,7 @@ impl Catalog {
         config: &std::path::Path,
         platform: &PlatformInfo,
         requested_target: Option<&SelectorIdentifier>,
-    ) -> Result<Self, ListCommandError> {
+    ) -> Result<Self, ManifestCommandError> {
         let loaded = LoadedConfigDocument::load(config)?;
         let selected = EffectiveManifest::select_for_inspection(
             loaded.config(),
