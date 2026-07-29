@@ -6,14 +6,14 @@ use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
 use crate::schema::{Identifier, OneOrMany, PlatformConstraint, SelectorIdentifier};
 
-use super::ListCommandError;
+use super::ManifestCommandError;
 
 pub(super) struct Catalog {
     loaded: LoadedConfigDocument,
 }
 
 impl Catalog {
-    pub(super) fn load(config: &std::path::Path) -> Result<Self, ListCommandError> {
+    pub(super) fn load(config: &std::path::Path) -> Result<Self, ManifestCommandError> {
         Ok(Self {
             loaded: LoadedConfigDocument::load(config)?,
         })

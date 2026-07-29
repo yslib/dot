@@ -1,17 +1,16 @@
 use std::path::Path;
 
-use super::ExecutionRequest;
+use super::{ExecutionCommandError, ExecutionRequest};
 use crate::action::ExecutionResult;
 use crate::action_runner::{ActionOutcome, ActionRunError, ActionStage};
-use crate::config::{ConfigLoadError, LoadedConfig};
+use crate::config::LoadedConfig;
 use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
 use crate::job_runner::{BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState};
 use crate::link::LinkOutcome;
-use crate::manifest::{EffectiveManifest, ManifestError};
+use crate::manifest::EffectiveManifest;
 use crate::plan::{
-    ExecutionPlan, ExecutionPlanError, ExecutionPlanner, PlannedJob, PlannedPackage,
-    PlannedProviderInstall,
+    ExecutionPlan, ExecutionPlanner, PlannedJob, PlannedPackage, PlannedProviderInstall,
 };
 use crate::platform::PlatformInfo;
 use crate::provider::{
@@ -26,7 +25,7 @@ use crate::report::{
 pub(super) fn run(
     config: &Path,
     request: &ExecutionRequest,
-) -> Result<CommandReport, CommandError> {
+) -> Result<CommandReport, ExecutionCommandError> {
     let loaded = LoadedConfig::load(config)?;
     let platform = PlatformInfo::detect();
     let manifest = EffectiveManifest::select_for_execution(
@@ -421,18 +420,6 @@ fn captured_text(output: Option<&[u8]>) -> Option<String> {
     output
         .filter(|output| !output.is_empty())
         .map(|output| String::from_utf8_lossy(output).into_owned())
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum CommandError {
-    #[error("{0}")]
-    Config(#[from] ConfigLoadError),
-
-    #[error("{0}")]
-    Manifest(#[from] ManifestError),
-
-    #[error("{0}")]
-    Plan(#[from] ExecutionPlanError),
 }
 
 #[cfg(test)]

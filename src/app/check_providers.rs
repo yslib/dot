@@ -1,8 +1,8 @@
-use super::ScopeSelection;
+use super::{ManifestCommandError, ScopeSelection};
 use crate::check::{ProviderChecker, build_report};
-use crate::config::{ConfigLoadError, LoadedConfig};
+use crate::config::LoadedConfig;
 use crate::interpolation::{DotPaths, XdgPaths};
-use crate::manifest::{EffectiveManifest, ManifestError};
+use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::report::CommandReport;
 
@@ -10,7 +10,7 @@ pub(super) fn run(
     config: &std::path::Path,
     scope: &ScopeSelection,
     platform_override: Option<&PlatformInfo>,
-) -> Result<CommandReport, CommandError> {
+) -> Result<CommandReport, ManifestCommandError> {
     let loaded = LoadedConfig::load(config)?;
     let platform = platform_override
         .cloned()
@@ -34,13 +34,4 @@ pub(super) fn run(
         manifest.providers(),
         &checks,
     ))
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum CommandError {
-    #[error("{0}")]
-    Config(#[from] ConfigLoadError),
-
-    #[error("{0}")]
-    Manifest(#[from] ManifestError),
 }

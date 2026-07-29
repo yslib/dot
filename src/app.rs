@@ -20,6 +20,7 @@ pub use command::{Dispatch, ExecutionRequest, Operation, ProfileSelection, Scope
 use crate::config::ConfigLoadError;
 use crate::manifest::ManifestError;
 use crate::output::{TableRenderer, TsvRecord, TsvRenderer};
+use crate::plan::ExecutionPlanError;
 use crate::platform::PlatformInfo;
 use crate::report::{CommandReport, ReportStatus};
 
@@ -156,12 +157,24 @@ fn normalize_list_output(result: io::Result<()>) -> io::Result<()> {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum ListCommandError {
+enum ManifestCommandError {
     #[error("{0}")]
     Config(#[from] ConfigLoadError),
 
     #[error("{0}")]
     Manifest(#[from] ManifestError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ExecutionCommandError {
+    #[error("{0}")]
+    Config(#[from] ConfigLoadError),
+
+    #[error("{0}")]
+    Manifest(#[from] ManifestError),
+
+    #[error("{0}")]
+    Plan(#[from] ExecutionPlanError),
 }
 
 #[cfg(test)]
