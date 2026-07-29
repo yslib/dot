@@ -1,6 +1,7 @@
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
 use std::path::Path;
 
 use dot::action::ExecutionEnvironment;
@@ -333,6 +334,17 @@ fn unknown_typed_selector_fails_before_planning() {
         ))
             if id.as_str() == "missing"
     ));
+}
+
+#[test]
+fn execution_plan_error_exposes_its_contained_error_as_the_immediate_source() {
+    let error = ExecutionPlanError::from(JobSelectionError::Unknown(JobSelector::Action(
+        selector_id("missing"),
+    )));
+
+    let source = Error::source(&error).expect("wrapper error should expose its contained error");
+
+    assert!(source.is::<JobSelectionError>());
 }
 
 #[test]
