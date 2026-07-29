@@ -147,6 +147,8 @@ pub(crate) struct LoadedConfigDocument {
     config: Config,
     path: PathBuf,
     directory: PathBuf,
+    real_path: PathBuf,
+    real_directory: PathBuf,
     invocation_cwd: PathBuf,
 }
 
@@ -155,7 +157,12 @@ impl LoadedConfigDocument {
         let invocation_cwd =
             env::current_dir().map_err(|source| ConfigLoadError::CurrentDirectory { source })?;
         let path = absolute_path(path.as_ref(), &invocation_cwd);
-        let source = fs::read_to_string(&path).map_err(|source| ConfigLoadError::Read {
+        let real_path =
+            fs::canonicalize(&path).map_err(|source| ConfigLoadError::Canonicalize {
+                path: path.clone(),
+                source,
+            })?;
+        let source = fs::read_to_string(&real_path).map_err(|source| ConfigLoadError::Read {
             path: path.clone(),
             source,
         })?;
@@ -171,11 +178,17 @@ impl LoadedConfigDocument {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| invocation_cwd.clone());
+        let real_directory = real_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| invocation_cwd.clone());
 
         Ok(Self {
             config,
             path,
             directory,
+            real_path,
+            real_directory,
             invocation_cwd,
         })
     }
@@ -190,6 +203,14 @@ impl LoadedConfigDocument {
 
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
+    }
+
+    pub(crate) fn real_path(&self) -> &Path {
+        &self.real_path
+    }
+
+    pub(crate) fn real_directory(&self) -> &Path {
+        &self.real_directory
     }
 
     pub(crate) fn invocation_cwd(&self) -> &Path {
@@ -226,6 +247,14 @@ impl LoadedConfig {
         self.document.directory()
     }
 
+    pub fn real_path(&self) -> &Path {
+        self.document.real_path()
+    }
+
+    pub fn real_directory(&self) -> &Path {
+        self.document.real_directory()
+    }
+
     pub fn invocation_cwd(&self) -> &Path {
         self.document.invocation_cwd()
     }
@@ -247,6 +276,15 @@ fn absolute_path(path: &Path, invocation_cwd: &Path) -> PathBuf {
 pub enum ConfigLoadError {
     #[error("failed to determine the invocation directory: {source}")]
     CurrentDirectory {
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "failed to canonicalize configuration `{}`: {source}",
+        .path.display()
+    )]
+    Canonicalize {
+        path: PathBuf,
         #[source]
         source: io::Error,
     },
@@ -555,7 +593,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn dangling_symlink_is_present_but_subsequent_read_fails() {
+    fn dangling_symlink_is_present_but_cannot_be_canonicalized() {
         let directory = unique_temp_path("dangling-config");
         fs::create_dir(&directory).expect("temporary directory should be created");
         let candidate = directory.join(".dot.toml");
@@ -571,9 +609,43 @@ mod tests {
 
         assert!(present);
         match load_error {
-            ConfigLoadError::Read { path, source } => {
+            ConfigLoadError::Canonicalize { path, source } => {
                 assert_eq!(path, candidate);
                 assert_eq!(source.kind(), io::ErrorKind::NotFound);
+            }
+            other => panic!("expected canonicalize error, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalizable_directory_entry_fails_during_read() {
+        let root = unique_temp_path("directory-config");
+        fs::create_dir(&root).expect("temporary root should be created");
+        let entity = root.join("config-directory");
+        fs::create_dir(&entity).expect("directory entity should be created");
+        let entry = root.join(".dot.toml");
+        std::os::unix::fs::symlink(&entity, &entry)
+            .expect("configuration symlink should be created");
+
+        let result = LoadedConfig::load(&entry);
+
+        fs::remove_file(&entry).expect("temporary symlink should be removed");
+        fs::remove_dir(&entity).expect("directory entity should be removed");
+        fs::remove_dir(&root).expect("temporary root should be removed");
+
+        let error = result.expect_err("directory configuration should fail during read");
+        let immediate_source =
+            Error::source(&error).expect("read error should have an immediate source");
+        assert!(
+            immediate_source.downcast_ref::<io::Error>().is_some(),
+            "read error source should be an io::Error"
+        );
+        match error {
+            ConfigLoadError::Read { path, source } => {
+                assert_eq!(path, entry);
+                assert_ne!(path, entity);
+                assert_eq!(source.kind(), io::ErrorKind::IsADirectory);
             }
             other => panic!("expected read error, got {other:?}"),
         }
@@ -584,6 +656,8 @@ mod tests {
         let invocation_cwd = env::current_dir().expect("test should have a current directory");
         let relative_path = Path::new("tests/fixtures/dot.toml");
         let expected_path = invocation_cwd.join(relative_path);
+        let expected_real_path =
+            fs::canonicalize(relative_path).expect("fixture path should canonicalize");
 
         let loaded = LoadedConfigDocument::load(relative_path).expect("fixture should load");
 
@@ -591,6 +665,35 @@ mod tests {
         assert_eq!(loaded.path(), expected_path);
         assert!(loaded.path().is_absolute());
         assert_eq!(loaded.directory(), expected_path.parent().unwrap());
+        assert_eq!(loaded.real_path(), expected_real_path);
+        assert_eq!(
+            loaded.real_directory(),
+            expected_real_path
+                .parent()
+                .expect("canonical fixture should have a parent")
+        );
         assert_eq!(loaded.invocation_cwd(), invocation_cwd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_document_distinguishes_a_symlink_entry_from_the_real_config() {
+        let directory = unique_temp_path("config-symlink");
+        fs::create_dir(&directory).expect("temporary directory should be created");
+        let entry = directory.join(".dot.toml");
+        let real =
+            fs::canonicalize("tests/fixtures/dot.toml").expect("fixture should canonicalize");
+        std::os::unix::fs::symlink(&real, &entry).expect("configuration symlink should be created");
+
+        let result = LoadedConfigDocument::load(&entry);
+
+        fs::remove_file(&entry).expect("temporary symlink should be removed");
+        fs::remove_dir(&directory).expect("temporary directory should be removed");
+
+        let loaded = result.expect("configuration symlink should load");
+        assert_eq!(loaded.path(), entry);
+        assert_eq!(loaded.directory(), directory);
+        assert_eq!(loaded.real_path(), real);
+        assert_eq!(loaded.real_directory(), real.parent().unwrap());
     }
 }

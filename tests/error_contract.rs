@@ -177,6 +177,10 @@ fn config_discovery_errors_expose_io_errors() {
 #[test]
 fn config_load_errors_expose_their_immediate_errors() {
     let current_directory = ConfigLoadError::CurrentDirectory { source: io_error() };
+    let canonicalize = ConfigLoadError::Canonicalize {
+        path: PathBuf::from("dot.toml"),
+        source: io_error(),
+    };
     let read = ConfigLoadError::Read {
         path: PathBuf::from("dot.toml"),
         source: io_error(),
@@ -187,6 +191,7 @@ fn config_load_errors_expose_their_immediate_errors() {
     };
 
     assert_source_is::<io::Error>(&current_directory);
+    assert_source_is::<io::Error>(&canonicalize);
     assert_source_is::<io::Error>(&read);
     assert_source_is::<toml::de::Error>(&parse);
 }
