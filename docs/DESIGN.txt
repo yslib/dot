@@ -36,6 +36,29 @@ compare versions, select downloads, or implement package installation. Its
 finite TOML schema is not a general-purpose configuration or execution DSL.
 
 
+### configuration entry and entity
+
+Configuration discovery or `--config` selects one filesystem entry. dot first
+converts that selection to an absolute path without following symbolic links;
+this retained entry path is the source of `${dot:config}`, and its parent is
+`${dot:config_dir}`.
+
+Loading then eagerly calls `std::fs::canonicalize` on the entry path before
+reading the file. The canonical result is the filesystem entity path exposed
+as `${dot:real_config}`, and its parent is `${dot:real_config_dir}`. A broken,
+dangling, or otherwise unresolvable entry fails loading for every command,
+whether or not the configuration uses either real-path resolver. Reading and
+subsequent parse or validation diagnostics continue to identify the selected
+entry path.
+
+Canonical entity paths retain the exact spelling returned by Rust and the host
+operating system. In particular, Windows canonicalization may return a
+verbatim `\\?\` path; dot does not strip or normalize that prefix.
+These retained facts are native paths. Like every path-to-string resolver, a
+`dot` path resolver uses `Path::to_str()` without lossy replacement and fails
+at resolution time if that exact path is not Unicode-representable.
+
+
 ### target
 
 A target is a complete base environment declaration.
@@ -352,8 +375,9 @@ Each effective link record is one native symbolic-link intent from source to
 target. Link ids are used for map replacement, diagnostics, and result
 reporting. They are not referenced by other declarations.
 
-- A relative source is resolved against the directory containing the loaded
-  configuration file. An absolute source is used as declared.
+- A relative source is resolved against the selected configuration entry
+  directory (`${dot:config_dir}`). It is not implicitly rebased to the
+  canonical entity directory. An absolute source is used as declared.
 - target must resolve to an absolute path.
 - During apply, source must exist and be a regular file or directory.
 - v0.0.1 creates native symbolic links only. It does not fall back to hard
@@ -435,8 +459,13 @@ v0.0.1 statically defines only these resolver calls:
 - ${package:names}: the complete package-name list for the current provider
   install unit;
 - ${package:provider_args}: the provider argument list for that install unit;
-- ${dot:config}: absolute path of the loaded TOML file;
-- ${dot:config_dir}: directory containing the TOML file;
+- ${dot:config}: absolute selected configuration entry path, retaining a
+  selected symlink path;
+- ${dot:config_dir}: parent directory of that entry path;
+- ${dot:real_config}: string form of the canonical filesystem entity path
+  retained exactly as returned by Rust/OS canonicalization;
+- ${dot:real_config_dir}: string form of that canonical entity path's parent
+  directory;
 - ${dot:cwd}: working directory from which dot was started;
 - ${xdg:home}: the current user's home directory;
 - ${xdg:config} and ${xdg:config_local}: the standard configuration directory
@@ -462,8 +491,8 @@ Resolver availability is contextual:
   package:provider_args.
 
 Resolution receives an explicit context containing the current effective
-child environment, dot invocation paths, a snapshot of standard user
-directories, and an optional provider-package install unit.
+child environment, dot invocation entry and canonical entity paths, a snapshot
+of standard user directories, and an optional provider-package install unit.
 Environment patches are resolved against the effective environment that exists
 immediately before that patch is applied. Later stages therefore observe
 successful provider activation changes without introducing implicit global
@@ -563,15 +592,31 @@ Provider install commands are fully resolved once per selected Single or Batch
 install unit, including list-valued package interpolation. A Single uses the
 package key as its item name; a Batch uses its stable logical key and retains
 its complete names list. Relative link sources are joined to the configuration
-directory and link targets must resolve to absolute paths.
+entry directory, not the canonical entity directory, and link targets must
+resolve to absolute paths. A repository-relative source behind a symlinked
+configuration must explicitly use `${dot:real_config_dir}`. On Unix and macOS,
+for example:
+
+```
+source = "${dot:real_config_dir}/home/.config/nvim"
+```
+
+On Windows, canonicalization may yield a verbatim `\\?\` path. A textual `/`
+suffix is not a Windows separator in that path form, so the suffix uses
+backslashes; a TOML literal string avoids basic-string escape processing:
+
+```
+source = '${dot:real_config_dir}\home\.config\nvim'
+```
 
 Dry-run does not probe, ensure, or install providers; run manual-package or
 global-action checks and execs; inspect link state; or reconcile links. It does
-not test link-source existence, canonicalize paths, inspect conflicts, or
-modify the filesystem. Its output describes selected intent, not runtime
-outcome: a provider may be missing, a package may already be installed, an
-action check may skip exec, and a link may already be satisfied or may fail
-during apply.
+not test link-source existence, canonicalize link paths, inspect conflicts, or
+modify the filesystem. Configuration loading has nevertheless already
+canonicalized the selected configuration entry before dry-run planning begins.
+Its output describes selected intent, not runtime outcome: a provider may be
+missing, a package may already be installed, an action check may skip exec,
+and a link may already be satisfied or may fail during apply.
 
 Selected planning is atomic. Every selector is valid and every selected
 provider and job is resolved before an ExecutionPlan exists, so apply executes
@@ -661,7 +706,9 @@ discovery and may use any filename. Otherwise dot checks `./.dot.toml`, then
 selected; load, parse, and validation failures do not fall through. Discovery
 does not recursively search, merge files, or recognize `dot.toml` as a legacy
 default. It uses native host paths and is not affected by an injected
-PlatformInfo.
+PlatformInfo. Once selected, the entry is made absolute without following
+symlinks, then eagerly canonicalized and read through its canonical entity
+path as described above.
 
 Target and profile options belong to `apply`, `dry-run`, `check providers`, and
 `list jobs`. `list profiles` accepts only the target option. `list targets`
@@ -699,6 +746,8 @@ statically validate the complete configuration, then stop at structural,
 unresolved data. They may detect host compatibility facts, which can read OS
 or container metadata for target labels, filtering, and inference. They do not
 inspect managed link or source state, resolve runtime values, or run commands.
+Their shared configuration load still canonicalizes the selected entry before
+reading it.
 
 `list targets` returns only compatible targets by default; `--all` returns
 every target with a compatibility label. `list profiles` returns `@root`
@@ -781,7 +830,8 @@ Every successfully constructed command result is represented in memory by one
 CommandReport before presentation. It contains:
 
 - the command kind: dry-run, apply, or check providers;
-- context: absolute config path, target, optional profile, and PlatformInfo;
+- context: absolute configuration entry path, target, optional profile, and
+  PlatformInfo;
 - overall status: PLANNED, SUCCESS, or FAILED;
 - one logical item per provider or user job in the selected execution closure,
   or one item per effective provider for provider check;
@@ -822,9 +872,11 @@ separate list-command TSV format is the stable machine-facing catalog contract.
 
 ### apply pipeline
 
-1. Load the configuration, parse all TOML records structurally, promote every
-   source expression, and validate provider rules against every effective
-   target-root/profile merge.
+1. Make the selected configuration entry absolute, canonicalize it eagerly,
+   read the canonical entity, parse all TOML records structurally, promote
+   every source expression, and validate provider rules against every
+   effective target-root/profile merge. Diagnostics and later report metadata
+   retain the entry path.
 2. Detect the platform, select one compatible target and zero or one profile,
    and reject ambiguity or incompatibility.
 3. Overlay target and profile declarations from root to the selected node,

@@ -248,6 +248,8 @@ The accepted string-valued calls in v0.0.1 are:
 - `${env:NAME}`;
 - `${dot:config}`;
 - `${dot:config_dir}`;
+- `${dot:real_config}`;
+- `${dot:real_config_dir}`;
 - `${dot:cwd}`;
 - `${xdg:home}`;
 - `${xdg:config}`;
@@ -269,6 +271,24 @@ interpolation, resolver argument lists, defaults, and expressions are invalid.
 
 ### validation boundaries
 
+Before TOML deserialization, the selected configuration entry is converted to
+an absolute entry path without following symbolic links. Loading then eagerly
+calls `std::fs::canonicalize` on that entry and reads the resulting canonical
+filesystem entity path. The loader retains both pairs of path facts:
+
+- entry path and entry directory for `dot:config` and `dot:config_dir`;
+- canonical entity path and entity directory for `dot:real_config` and
+  `dot:real_config_dir`.
+
+Canonicalization failure, including a dangling or otherwise unresolvable
+entry, fails configuration loading even when no `real_config` resolver appears
+in the configuration. Canonical paths are retained exactly as returned by the
+host Rust/OS filesystem API; the schema does not normalize away a Windows
+verbatim `\\?\` prefix. The path facts themselves remain native paths. Every
+path-to-string resolver, including `dot` and `xdg`, projects through
+`Path::to_str()` without lossy replacement and fails runtime resolution when
+the path is not Unicode-representable.
+
 Identifiers, environment names, fixed enums, and object shapes remain strict
 during TOML deserialization. All object shapes reject unknown fields. A
 malformed string source is retained during deserialization so loading can
@@ -281,14 +301,16 @@ deeper effective merge would replace. Unknown or malformed resolvers, invalid
 payloads, invalid result types for the source role, and invalid package list
 variable positions therefore fail every command at load time.
 
-Static loading does not evaluate resolver values. It does not read a named
-environment value, resolve a `dot` or `xdg` path, inject provider/package
-runtime context, inspect filesystem state, or run a command. Apply and dry-run
-perform that runtime resolution only after target/profile and job selection,
-and only for the selected execution closure. With complete job selection that
-closure contains every effective provider and job; with exact job selection it
-contains the selected package/action/link jobs plus only providers required by
-selected provider-backed packages.
+After the required configuration-entry canonicalization and read, static
+expression validation does not evaluate resolver values. It does not read a
+named environment value, resolve a `dot` or `xdg` value into a selected field,
+inject provider/package runtime context, inspect managed link or source state,
+or run a command. Apply and dry-run perform runtime resolver evaluation only
+after target/profile and job selection, and only for the selected execution
+closure. With complete job selection that closure contains every effective
+provider and job; with exact job selection it contains the selected
+package/action/link jobs plus only providers required by selected
+provider-backed packages.
 
 Loading also checks every target-root effective manifest and every effective
 root-to-profile merge. Every provider-backed package must reference a provider

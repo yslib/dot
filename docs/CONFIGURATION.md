@@ -15,12 +15,22 @@ this reference.
 3. `~/.config/dot/.dot.toml` on Linux and macOS, or
    `%APPDATA%\dot\.dot.toml` on Windows.
 
-An explicit path is used as given, may have any filename, and bypasses the
+An explicit path is selected as given, may have any filename, and bypasses the
 remaining discovery candidates. Among the automatic candidates, the first
 whose filesystem entry exists is chosen. Read, parse, or validation failures
 for the chosen path are reported immediately; `dot` does not fall back to
 another candidate. It does not search parent directories recursively, merge
 configuration files, or recognize `dot.toml` as a legacy default.
+
+After selection, `dot` makes the selected path absolute without following
+symbolic links. This is the **entry path**: when a symlink was selected, it is
+the absolute symlink path. Loading then eagerly calls
+`std::fs::canonicalize`, reads the resulting **canonical entity path**, and
+retains both paths and their parent directories. A dangling or otherwise
+unresolvable entry therefore fails every command during loading, even when the
+configuration never uses a `real_config` resolver. Canonical path spelling is
+kept exactly as the host Rust/OS filesystem API returns it. Read, parse, and
+validation diagnostics continue to identify the entry path.
 
 ## Type index
 
@@ -746,18 +756,37 @@ Contextual fragment:
 
 ```toml
 [targets.workstation.links.editor]
-source = "${dot:config_dir}/home/editor"
+source = "${dot:real_config_dir}/home/editor"
 target = "${xdg:config}/editor"
 on_conflict = "replace-link"
 on_missing_parent = "create"
 ```
 
-A relative source is resolved from the loaded configuration directory; target
-must resolve to an absolute path. Apply requires source to exist as a regular
-file or directory and creates a native symbolic link. A matching link is
-satisfied. All effective link paths resolve before mutation, and duplicate
-resolved targets prevent the link phase from starting. Link ids and policy
-literals do not interpolate; source and target accept string-valued resolvers.
+This Unix/macOS example deliberately asks for a source located under the
+canonical configuration entity's directory. On Windows, use a TOML literal
+string and a backslash suffix:
+
+```toml
+[targets.windows.links.editor]
+source = '${dot:real_config_dir}\home\AppData\Local\nvim'
+target = '${xdg:config_local}\nvim'
+```
+
+`std::fs::canonicalize` on Windows may return a verbatim path beginning with
+`\\?\`, and dot preserves it. Appending `/home/...` textually to that form
+does not add Windows path separators; the literal-string example above both
+uses backslashes and avoids TOML basic-string escape processing.
+
+An unqualified relative source such as `source = "home/editor"` is resolved
+from the selected configuration **entry directory**, not from
+`${dot:real_config_dir}`. Symlinked configurations therefore do not silently
+change the relative-source base to their repository or entity directory.
+Users who want that base must request it explicitly as above. Target must
+resolve to an absolute path. Apply requires source to exist as a regular file
+or directory and creates a native symbolic link. A matching link is satisfied.
+All effective link paths resolve before mutation, and duplicate resolved
+targets prevent the link phase from starting. Link ids and policy literals do
+not interpolate; source and target accept string-valued resolvers.
 
 ### LinkConflict
 
@@ -795,6 +824,11 @@ currently inapplicable and makes no mutation. This policy is independent of
 
 Validation and evaluation have four distinct boundaries:
 
+Configuration entry selection, absolute-path construction, eager
+canonicalization, and reading happen before these expression boundaries.
+Consequently every command, including dry-run and structural list commands,
+requires a resolvable selected configuration entry.
+
 1. **Parsing and deserialization** check TOML structure, field types, required
    fields, broad and selector identifier rules, environment-name rules, and
    fixed literals. All object shapes reject unknown fields. String-bearing
@@ -820,9 +854,11 @@ Validation and evaluation have four distinct boundaries:
    package/action/link jobs and providers required by selected
    provider-backed packages.
 4. **Execution** probes providers, runs processes, and reconciles links only
-   after planning succeeds. Dry-run stops before this boundary. Structural list
-   commands stop after complete validation and unresolved target/profile
-   selection; they do not evaluate runtime resolver values.
+   after planning succeeds. Dry-run stops before this boundary: it does not
+   inspect or canonicalize link sources, although loading has already
+   canonicalized the selected configuration entry. Structural list commands
+   stop after complete validation and unresolved target/profile selection;
+   they do not evaluate runtime resolver values.
 
 Omitted provider, package, link, action, and profile maps deserialize as empty
 maps. Omitted ExecAction `args` and EnvironmentPatch `variables` deserialize as
@@ -859,8 +895,10 @@ package:provider_args   -> list<string>
 | Resolver form | Resolved value |
 | --- | --- |
 | `${env:NAME}` | `NAME` from the current effective child environment |
-| `${dot:config}` | absolute path of the loaded TOML file |
-| `${dot:config_dir}` | directory containing the loaded TOML file |
+| `${dot:config}` | absolute selected configuration entry path; remains the symlink path when that entry is a symlink |
+| `${dot:config_dir}` | parent directory of the selected entry path |
+| `${dot:real_config}` | string form of the canonical filesystem entity path retained exactly as returned by Rust/OS canonicalization |
+| `${dot:real_config_dir}` | string form of the canonical entity path's parent directory |
 | `${dot:cwd}` | working directory from which dot was started |
 | `${xdg:home}` | current user's home directory |
 | `${xdg:config}` | standard user configuration directory |
@@ -873,10 +911,17 @@ package:provider_args   -> list<string>
 | `${xdg:executable}` | standard per-user executable directory, when defined |
 | `${xdg:documents}` | current user's Documents directory, when available |
 
-The `dot` values describe the current invocation. The `xdg` vocabulary follows
-XDG directories on Linux and platform-standard equivalents on Windows and
-macOS. A missing environment variable or an unavailable platform directory is
-an error; it never silently becomes an empty string.
+The `dot` values describe the current invocation. Configuration loading always
+computes both entry and canonical entity paths before any resolver evaluation;
+using `${dot:real_config}` is not what triggers canonicalization. On Windows,
+the real path values can contain the verbatim `\\?\` prefix returned by the
+host API. All five `dot` path calls share the same string-valued availability
+shown below. Like every path-to-string resolver, `dot` and `xdg` use Rust's
+`Path::to_str()` boundary without lossy replacement; resolution fails when a
+path is not Unicode-representable. The `xdg` vocabulary follows XDG directories
+on Linux and platform-standard equivalents on Windows and macOS. A missing
+environment variable or an unavailable platform directory is an error; it
+never silently becomes an empty string.
 
 ### Provider-package list-valued variables
 
