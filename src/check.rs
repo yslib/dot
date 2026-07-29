@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt;
-
 use crate::action::{
     CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
     PreparedCommand, ProcessExecutor,
@@ -149,49 +146,18 @@ fn captured_text(output: Option<&[u8]>) -> Option<String> {
         .map(|output| String::from_utf8_lossy(output).into_owned())
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProviderCheckError {
-    ActivateInterpolation(InterpolationError),
-    ActivatePreparation(CommandPreparationError),
-    ProbeInterpolation(InterpolationError),
-    ProbePreparation(CommandPreparationError),
-    Execution(ExecutionError),
-}
-
-impl fmt::Display for ProviderCheckError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ActivateInterpolation(source) => {
-                write!(formatter, "failed to resolve provider activate: {source}")
-            }
-            Self::ActivatePreparation(source) => {
-                write!(formatter, "failed to apply provider activate: {source}")
-            }
-            Self::ProbeInterpolation(source) => {
-                write!(formatter, "failed to resolve provider probe: {source}")
-            }
-            Self::ProbePreparation(source) => {
-                write!(formatter, "failed to prepare provider probe: {source}")
-            }
-            Self::Execution(source) => write!(formatter, "failed to execute probe: {source}"),
-        }
-    }
-}
-
-impl Error for ProviderCheckError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::ActivateInterpolation(source) | Self::ProbeInterpolation(source) => Some(source),
-            Self::ActivatePreparation(source) | Self::ProbePreparation(source) => Some(source),
-            Self::Execution(source) => Some(source),
-        }
-    }
-}
-
-impl From<ExecutionError> for ProviderCheckError {
-    fn from(source: ExecutionError) -> Self {
-        Self::Execution(source)
-    }
+    #[error("failed to resolve provider activate: {0}")]
+    ActivateInterpolation(#[source] InterpolationError),
+    #[error("failed to apply provider activate: {0}")]
+    ActivatePreparation(#[source] CommandPreparationError),
+    #[error("failed to resolve provider probe: {0}")]
+    ProbeInterpolation(#[source] InterpolationError),
+    #[error("failed to prepare provider probe: {0}")]
+    ProbePreparation(#[source] CommandPreparationError),
+    #[error("failed to execute probe: {0}")]
+    Execution(#[from] ExecutionError),
 }
 
 #[derive(Clone, Copy, Debug)]
