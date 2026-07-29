@@ -170,7 +170,7 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
 
     ExecutionPlanner::new(
         &environment,
-        DotPaths::new(config_path, config_dir, cwd),
+        DotPaths::new(config_path, config_dir, config_path, config_dir, cwd),
         &xdg,
         &platform,
     )

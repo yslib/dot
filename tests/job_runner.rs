@@ -106,7 +106,13 @@ fn plan_fixture(
     let environment = ExecutionEnvironment::empty();
     let xdg = XdgPaths::detect();
     let config_path = workspace.path("dot.toml");
-    let dot_paths = DotPaths::new(&config_path, &workspace.directory, &workspace.directory);
+    let dot_paths = DotPaths::new(
+        &config_path,
+        &workspace.directory,
+        &config_path,
+        &workspace.directory,
+        &workspace.directory,
+    );
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
         .plan(&manifest, selection)

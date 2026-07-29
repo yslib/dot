@@ -83,7 +83,13 @@ fn plan_fixture(
     let environment = ExecutionEnvironment::capture();
     let xdg = XdgPaths::detect();
     let config_path = workspace.path().join("dot.toml");
-    let dot_paths = DotPaths::new(&config_path, workspace.path(), workspace.path());
+    let dot_paths = DotPaths::new(
+        &config_path,
+        workspace.path(),
+        &config_path,
+        workspace.path(),
+        workspace.path(),
+    );
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
         .plan(&manifest, &JobSelection::All)

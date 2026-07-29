@@ -96,6 +96,8 @@ fn plan_named_fixture(name: &str, selection: &JobSelection) -> ExecutionPlan {
     let dot_paths = DotPaths::new(
         Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
+        Path::new(TEST_CONFIG),
+        Path::new(TEST_CONFIG_DIR),
         Path::new(TEST_CWD),
     );
 
@@ -239,7 +241,7 @@ fn selected_link_does_not_resolve_an_unselected_action() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
 
     let plan = planner
@@ -343,6 +345,8 @@ fn unknown_typed_selector_fails_before_planning() {
         DotPaths::new(
             Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),
         ),
         &xdg,
@@ -388,7 +392,7 @@ fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
     let selection = JobSelection::Only(BTreeSet::from([
         JobSelector::Action(selector_id("setup-editor")),
@@ -421,6 +425,8 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
     let planner = ExecutionPlanner::new(
         &environment,
         DotPaths::new(
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),
@@ -457,7 +463,7 @@ fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
 
     let selection = JobSelection::Only(BTreeSet::from([
@@ -495,6 +501,8 @@ fn multiple_unknown_selectors_report_the_first_in_btree_order() {
     let planner = ExecutionPlanner::new(
         &environment,
         DotPaths::new(
+            Path::new(TEST_CONFIG),
+            Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),

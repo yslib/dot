@@ -198,6 +198,8 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) ->
         DotPaths::new(
             Path::new("/tmp/dot-provider-batch-test/dot.toml"),
             Path::new("/tmp/dot-provider-batch-test"),
+            Path::new("/tmp/dot-provider-batch-test/dot.toml"),
+            Path::new("/tmp/dot-provider-batch-test"),
             Path::new("/tmp"),
         ),
         &xdg,
