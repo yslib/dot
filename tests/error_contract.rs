@@ -195,9 +195,7 @@ fn config_load_errors_expose_their_immediate_errors() {
 fn config_load_validation_preserves_all_three_immediate_source_layers() {
     let error = ConfigLoadError::Validation {
         path: PathBuf::from("dot.toml"),
-        source: Box::new(validation_error(ConfigValidationErrorKind::Expression(
-            interpolation_error(),
-        ))),
+        source: validation_error(ConfigValidationErrorKind::Expression(interpolation_error())),
     };
 
     let validation = assert_source_is::<ConfigValidationError>(&error);
@@ -362,7 +360,7 @@ fn source_less_selector_errors_have_no_source() {
 fn source_less_link_errors_have_no_source() {
     let errors = [
         LinkError::UnsupportedSourceType {
-            source: PathBuf::from("source"),
+            path: PathBuf::from("source"),
         },
         LinkError::ExistingNonLink {
             target: PathBuf::from("target"),

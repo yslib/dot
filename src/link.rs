@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
@@ -114,7 +113,7 @@ fn prepare_link(link: &PlannedLink, target: PathBuf) -> Result<PreparedLink<'_>,
         SourceKind::Directory
     } else {
         return Err(LinkError::UnsupportedSourceType {
-            source: link.source().to_owned(),
+            path: link.source().to_owned(),
         });
     };
     let source = fs::canonicalize(link.source())
@@ -346,16 +345,17 @@ fn paths_equivalent(left: &Path, right: &Path) -> bool {
         .eq_ignore_ascii_case(&right.to_string_lossy())
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LinkError {
     Io {
         operation: &'static str,
         path: PathBuf,
+        #[source]
         source: io::Error,
         diagnostic_operation: Option<Operation>,
     },
     UnsupportedSourceType {
-        source: PathBuf,
+        path: PathBuf,
     },
     ExistingNonLink {
         target: PathBuf,
@@ -426,10 +426,10 @@ impl fmt::Display for LinkError {
                 "failed to {operation} `{}`: {source}",
                 path.display()
             ),
-            Self::UnsupportedSourceType { source } => write!(
+            Self::UnsupportedSourceType { path } => write!(
                 formatter,
                 "link source `{}` is not a file or directory",
-                source.display()
+                path.display()
             ),
             Self::ExistingNonLink { target } => write!(
                 formatter,
@@ -476,38 +476,14 @@ impl fmt::Display for LinkError {
     }
 }
 
-impl Error for LinkError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::UnsupportedSourceType { .. }
-            | Self::ExistingNonLink { .. }
-            | Self::Conflict { .. }
-            | Self::InvalidTarget { .. }
-            | Self::ParentNotDirectory { .. }
-            | Self::VerificationMismatch { .. } => None,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LinkPhaseError {
+    #[error(
+        "links {links:?} resolve to the same target `{}`",
+        .target.display()
+    )]
     DuplicateTarget { target: PathBuf, links: Vec<String> },
 }
-
-impl fmt::Display for LinkPhaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateTarget { target, links } => write!(
-                formatter,
-                "links {links:?} resolve to the same target `{}`",
-                target.display()
-            ),
-        }
-    }
-}
-
-impl Error for LinkPhaseError {}
 
 #[cfg(test)]
 mod tests {
