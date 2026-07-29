@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -286,6 +287,7 @@ fn reports_a_failed_probe_when_no_ensure_is_declared() {
         error.exit_result().and_then(|result| result.code()),
         Some(1)
     );
+    assert!(error.source().is_none());
     assert_eq!(state.recorded_events(), ["probe"]);
 }
 
@@ -316,6 +318,7 @@ fn stops_the_ensure_list_at_the_first_failure() {
         error.exit_result().and_then(|result| result.code()),
         Some(19)
     );
+    assert!(error.source().is_none());
     assert_eq!(
         state.recorded_events(),
         ["probe", "ensure-first", "ensure-fail"]
@@ -345,6 +348,7 @@ fn requires_the_final_probe_to_succeed() {
         error.exit_result().and_then(|result| result.code()),
         Some(1)
     );
+    assert!(error.source().is_none());
     assert_eq!(state.recorded_events(), ["probe", "ensure-first", "probe"]);
 }
 
