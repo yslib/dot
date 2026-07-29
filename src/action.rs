@@ -1,7 +1,5 @@
 use std::env;
-use std::error::Error;
 use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -178,27 +176,13 @@ impl PreparedCommand {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CommandPreparationError {
-    InvalidPathEnvironment { source: env::JoinPathsError },
-}
-
-impl fmt::Display for CommandPreparationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPathEnvironment { .. } => {
-                formatter.write_str("the effective PATH contains an invalid path entry")
-            }
-        }
-    }
-}
-
-impl Error for CommandPreparationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::InvalidPathEnvironment { source } => Some(source),
-        }
-    }
+    #[error("the effective PATH contains an invalid path entry")]
+    InvalidPathEnvironment {
+        #[source]
+        source: env::JoinPathsError,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -306,39 +290,18 @@ impl ProcessExecutor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
+    #[error("failed to start `{}`: {source}", .program.to_string_lossy())]
     Spawn {
         program: OsString,
+        #[source]
         source: io::Error,
     },
+    #[error("failed while waiting for `{}`: {source}", .program.to_string_lossy())]
     Wait {
         program: OsString,
+        #[source]
         source: io::Error,
     },
-}
-
-impl fmt::Display for ExecutionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Spawn { program, source } => write!(
-                formatter,
-                "failed to start `{}`: {source}",
-                program.to_string_lossy()
-            ),
-            Self::Wait { program, source } => write!(
-                formatter,
-                "failed while waiting for `{}`: {source}",
-                program.to_string_lossy()
-            ),
-        }
-    }
-}
-
-impl Error for ExecutionError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Spawn { source, .. } | Self::Wait { source, .. } => Some(source),
-        }
-    }
 }
