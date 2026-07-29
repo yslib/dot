@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -420,10 +421,14 @@ fn a_failed_install_unit_does_not_stop_an_unrelated_unit() {
     let execution = runner.install_all(plan.provider_installs(), &readiness);
 
     assert_eq!(execution.statuses().len(), 2);
+    let error = execution.statuses()[0]
+        .error()
+        .expect("failed install should retain its error");
     assert!(matches!(
-        execution.statuses()[0].error(),
-        Some(ProviderInstallError::UnsuccessfulExit { result }) if result.code() == Some(23)
+        error,
+        ProviderInstallError::UnsuccessfulExit { result } if result.code() == Some(23)
     ));
+    assert!(error.source().is_none());
     assert!(matches!(
         execution.statuses()[1].outcome(),
         Ok(ProviderInstallOutcome::Executed { install }) if install.code() == Some(0)
