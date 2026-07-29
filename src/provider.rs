@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt;
 
 use crate::action::{
@@ -323,20 +322,27 @@ impl<'a> ProviderRunner<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
+    #[error("failed to apply provider {stage}: {source}")]
     Environment {
         stage: ProviderStage,
+        #[source]
         source: CommandPreparationError,
     },
+    #[error("failed to prepare provider {stage}: {source}")]
     Preparation {
         stage: ProviderStage,
+        #[source]
         source: CommandPreparationError,
     },
+    #[error("failed to execute provider {stage}: {source}")]
     Execution {
         stage: ProviderStage,
+        #[source]
         source: ExecutionError,
     },
+    #[error("provider {stage} returned {}", .result.status())]
     UnsuccessfulExit {
         stage: ProviderStage,
         result: ExecutionResult,
@@ -365,40 +371,21 @@ impl ProviderError {
     }
 }
 
-impl fmt::Display for ProviderError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Environment { stage, source } => {
-                write!(formatter, "failed to apply provider {stage}: {source}")
-            }
-            Self::Preparation { stage, source } => {
-                write!(formatter, "failed to prepare provider {stage}: {source}")
-            }
-            Self::Execution { stage, source } => {
-                write!(formatter, "failed to execute provider {stage}: {source}")
-            }
-            Self::UnsuccessfulExit { stage, result } => {
-                write!(formatter, "provider {stage} returned {}", result.status())
-            }
-        }
-    }
-}
-
-impl Error for ProviderError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Environment { source, .. } | Self::Preparation { source, .. } => Some(source),
-            Self::Execution { source, .. } => Some(source),
-            Self::UnsuccessfulExit { .. } => None,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProviderInstallError {
+    #[error("provider install expects provider `{expected}`, but received status for `{actual}`")]
     ProviderMismatch { expected: String, actual: String },
-    Preparation { source: CommandPreparationError },
-    Execution { source: ExecutionError },
+    #[error("failed to prepare provider install: {source}")]
+    Preparation {
+        #[source]
+        source: CommandPreparationError,
+    },
+    #[error("failed to execute provider install: {source}")]
+    Execution {
+        #[source]
+        source: ExecutionError,
+    },
+    #[error("provider install returned {}", .result.status())]
     UnsuccessfulExit { result: ExecutionResult },
 }
 
@@ -409,39 +396,6 @@ impl ProviderInstallError {
             Self::ProviderMismatch { .. } | Self::Preparation { .. } | Self::Execution { .. } => {
                 None
             }
-        }
-    }
-}
-
-impl fmt::Display for ProviderInstallError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ProviderMismatch { expected, actual } => {
-                write!(
-                    formatter,
-                    "provider install expects provider `{expected}`, but received status for `{actual}`"
-                )
-            }
-            Self::Preparation { source } => {
-                write!(formatter, "failed to prepare provider install: {source}")
-            }
-            Self::Execution { source } => {
-                write!(formatter, "failed to execute provider install: {source}")
-            }
-            Self::UnsuccessfulExit { result } => {
-                write!(formatter, "provider install returned {}", result.status())
-            }
-        }
-    }
-}
-
-impl Error for ProviderInstallError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::ProviderMismatch { .. } => None,
-            Self::Preparation { source } => Some(source),
-            Self::Execution { source } => Some(source),
-            Self::UnsuccessfulExit { .. } => None,
         }
     }
 }
