@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
@@ -96,38 +95,16 @@ impl FromStr for JobSelector {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum JobSelectorParseError {
+    #[error("a job selector must have a kind followed by ':'")]
     MissingKind,
-    InvalidIdentifier(SelectorIdentifierError),
+    #[error("invalid job selector identifier: {0}")]
+    InvalidIdentifier(#[source] SelectorIdentifierError),
+    #[error("unknown job selector kind '{0}'")]
     UnknownKind(String),
+    #[error("provider jobs cannot be selected directly")]
     ProviderNotSelectable,
-}
-
-impl fmt::Display for JobSelectorParseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingKind => {
-                formatter.write_str("a job selector must have a kind followed by ':'")
-            }
-            Self::InvalidIdentifier(error) => {
-                write!(formatter, "invalid job selector identifier: {error}")
-            }
-            Self::UnknownKind(kind) => write!(formatter, "unknown job selector kind '{kind}'"),
-            Self::ProviderNotSelectable => {
-                formatter.write_str("provider jobs cannot be selected directly")
-            }
-        }
-    }
-}
-
-impl Error for JobSelectorParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::InvalidIdentifier(error) => Some(error),
-            Self::MissingKind | Self::UnknownKind(_) | Self::ProviderNotSelectable => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

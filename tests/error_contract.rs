@@ -94,7 +94,7 @@ fn validation_error(kind: ConfigValidationErrorKind) -> ConfigValidationError {
         profile: Some(selector_identifier("profile")),
         job: Some(ConfigValidationJob::Provider(identifier("provider"))),
         field: Some("field".to_owned()),
-        kind: Box::new(kind),
+        kind,
     }
 }
 

@@ -1,5 +1,7 @@
+// Keep validation kinds direct so Error::source exposes their concrete type.
+#![allow(clippy::result_large_err)]
+
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt;
 
 use crate::interpolation::{
@@ -32,74 +34,38 @@ impl fmt::Display for ConfigValidationJob {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigValidationErrorKind {
-    Expression(InterpolationError),
+    #[error("{0}")]
+    Expression(#[source] InterpolationError),
+    #[error("package `{package}` references unknown provider `{provider}`")]
     UnknownProvider {
         package: SelectorIdentifier,
         provider: Identifier,
     },
-    EmptyPackageBatch {
-        package: SelectorIdentifier,
-    },
+    #[error("package batch `{package}` must contain at least one name")]
+    EmptyPackageBatch { package: SelectorIdentifier },
+    #[error("package batch `{package}` contains duplicate name `{name}`")]
     DuplicatePackageBatchName {
         package: SelectorIdentifier,
         name: Identifier,
     },
-    ProviderArgsResolverCount {
-        provider: Identifier,
-        actual: usize,
-    },
-    Manifest(ManifestError),
+    #[error(
+        "provider `{provider}` install must contain exactly one `${{package:provider_args}}` argument for an install unit with nonempty provider_args; found {actual}"
+    )]
+    ProviderArgsResolverCount { provider: Identifier, actual: usize },
+    #[error("{0}")]
+    Manifest(#[source] ManifestError),
 }
 
-impl fmt::Display for ConfigValidationErrorKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Expression(source) => source.fmt(formatter),
-            Self::UnknownProvider { package, provider } => write!(
-                formatter,
-                "package `{package}` references unknown provider `{provider}`"
-            ),
-            Self::EmptyPackageBatch { package } => {
-                write!(
-                    formatter,
-                    "package batch `{package}` must contain at least one name"
-                )
-            }
-            Self::DuplicatePackageBatchName { package, name } => write!(
-                formatter,
-                "package batch `{package}` contains duplicate name `{name}`"
-            ),
-            Self::ProviderArgsResolverCount { provider, actual } => write!(
-                formatter,
-                "provider `{provider}` install must contain exactly one `${{package:provider_args}}` argument for an install unit with nonempty provider_args; found {actual}"
-            ),
-            Self::Manifest(source) => source.fmt(formatter),
-        }
-    }
-}
-
-impl Error for ConfigValidationErrorKind {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Expression(source) => Some(source),
-            Self::Manifest(source) => Some(source),
-            Self::UnknownProvider { .. }
-            | Self::EmptyPackageBatch { .. }
-            | Self::DuplicatePackageBatchName { .. }
-            | Self::ProviderArgsResolverCount { .. } => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub struct ConfigValidationError {
     pub target: SelectorIdentifier,
     pub profile: Option<SelectorIdentifier>,
     pub job: Option<ConfigValidationJob>,
     pub field: Option<String>,
-    pub kind: Box<ConfigValidationErrorKind>,
+    #[source]
+    pub kind: ConfigValidationErrorKind,
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -115,12 +81,6 @@ impl fmt::Display for ConfigValidationError {
             write!(formatter, " field `{field}`")?;
         }
         write!(formatter, ": {}", self.kind)
-    }
-}
-
-impl Error for ConfigValidationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.kind.as_ref())
     }
 }
 
@@ -166,7 +126,7 @@ impl ValidationContext {
             profile: self.profile.clone(),
             job: self.job.clone(),
             field: field.map(Into::into),
-            kind: Box::new(kind),
+            kind,
         }
     }
 
