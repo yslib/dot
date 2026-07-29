@@ -1,3 +1,8 @@
+#![expect(
+    clippy::result_large_err,
+    reason = "direct typed error sources preserve Error::source downcasts"
+)]
+
 mod apply;
 mod check_providers;
 mod command;

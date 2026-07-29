@@ -1,6 +1,9 @@
+#![expect(
+    clippy::result_large_err,
+    reason = "direct typed error sources preserve Error::source downcasts"
+)]
+
 use std::env;
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -66,11 +69,29 @@ impl UserConfigRoot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigDiscoveryError {
-    CurrentDirectory { source: io::Error },
+    #[error("failed to determine the invocation directory: {source}")]
+    CurrentDirectory {
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to determine the user configuration directory")]
     UserDirectoryUnavailable,
-    Inspect { path: PathBuf, source: io::Error },
+    #[error(
+        "failed to inspect configuration candidate `{}`: {source}",
+        .path.display()
+    )]
+    Inspect {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "configuration not found; checked `{}` then `{}`; use --config PATH to select another file",
+        .local.display(),
+        .user.display()
+    )]
     NotFound { local: PathBuf, user: PathBuf },
 }
 
@@ -121,49 +142,6 @@ impl ConfigRequest {
     }
 }
 
-impl fmt::Display for ConfigDiscoveryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CurrentDirectory { source } => {
-                write!(
-                    formatter,
-                    "failed to determine the invocation directory: {source}"
-                )
-            }
-            Self::UserDirectoryUnavailable => {
-                write!(
-                    formatter,
-                    "failed to determine the user configuration directory"
-                )
-            }
-            Self::Inspect { path, source } => {
-                write!(
-                    formatter,
-                    "failed to inspect configuration candidate `{}`: {source}",
-                    path.display()
-                )
-            }
-            Self::NotFound { local, user } => {
-                write!(
-                    formatter,
-                    "configuration not found; checked `{}` then `{}`; use --config PATH to select another file",
-                    local.display(),
-                    user.display()
-                )
-            }
-        }
-    }
-}
-
-impl Error for ConfigDiscoveryError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::CurrentDirectory { source } | Self::Inspect { source, .. } => Some(source),
-            Self::UserDirectoryUnavailable | Self::NotFound { .. } => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LoadedConfigDocument {
     config: Config,
@@ -187,7 +165,7 @@ impl LoadedConfigDocument {
         })?;
         validate_config(&config).map_err(|source| ConfigLoadError::Validation {
             path: path.clone(),
-            source: Box::new(source),
+            source,
         })?;
         let directory = path
             .parent()
@@ -265,71 +243,40 @@ fn absolute_path(path: &Path, invocation_cwd: &Path) -> PathBuf {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigLoadError {
+    #[error("failed to determine the invocation directory: {source}")]
     CurrentDirectory {
+        #[source]
         source: io::Error,
     },
+    #[error("failed to read configuration `{}`: {source}", .path.display())]
     Read {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("failed to parse configuration `{}`: {source}", .path.display())]
     Parse {
         path: PathBuf,
+        #[source]
         source: toml::de::Error,
     },
+    #[error(
+        "failed to validate configuration `{}`: {source}",
+        .path.display()
+    )]
     Validation {
         path: PathBuf,
-        source: Box<ConfigValidationError>,
+        #[source]
+        source: ConfigValidationError,
     },
-}
-
-impl fmt::Display for ConfigLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CurrentDirectory { source } => {
-                write!(
-                    formatter,
-                    "failed to determine the invocation directory: {source}"
-                )
-            }
-            Self::Read { path, source } => {
-                write!(
-                    formatter,
-                    "failed to read configuration `{}`: {source}",
-                    path.display()
-                )
-            }
-            Self::Parse { path, source } => {
-                write!(
-                    formatter,
-                    "failed to parse configuration `{}`: {source}",
-                    path.display()
-                )
-            }
-            Self::Validation { path, source } => {
-                write!(
-                    formatter,
-                    "failed to validate configuration `{}`: {source}",
-                    path.display()
-                )
-            }
-        }
-    }
-}
-
-impl Error for ConfigLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::CurrentDirectory { source } | Self::Read { source, .. } => Some(source),
-            Self::Parse { source, .. } => Some(source),
-            Self::Validation { source, .. } => Some(source.as_ref()),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     fn unique_temp_path(label: &str) -> PathBuf {
