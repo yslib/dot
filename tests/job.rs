@@ -199,6 +199,35 @@ fn job_ids_display_the_canonical_spelling() {
 }
 
 #[test]
+fn job_selection_errors_use_canonical_job_selectors() {
+    let cases = [
+        (
+            JobSelectionError::Unknown(JobSelector::Package(selector_id("tool"))),
+            "unknown job `package:tool`",
+        ),
+        (
+            JobSelectionError::Unknown(JobSelector::Action(selector_id("setup"))),
+            "unknown job `action:setup`",
+        ),
+        (
+            JobSelectionError::Unknown(JobSelector::Link(selector_id("config"))),
+            "unknown job `link:config`",
+        ),
+        (
+            JobSelectionError::MissingProvider {
+                package: selector_id("tool"),
+                provider: provider_id("missing"),
+            },
+            "package job `tool` references missing provider job `missing`",
+        ),
+    ];
+
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
 fn selected_link_does_not_resolve_an_unselected_action() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
