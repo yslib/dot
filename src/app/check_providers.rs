@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt;
-
 use super::ScopeSelection;
 use crate::check::{ProviderChecker, build_report};
 use crate::config::{ConfigLoadError, LoadedConfig};
@@ -39,38 +36,11 @@ pub(super) fn run(
     ))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum CommandError {
-    Config(ConfigLoadError),
-    Manifest(ManifestError),
-}
+    #[error("{0}")]
+    Config(#[from] ConfigLoadError),
 
-impl fmt::Display for CommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(source) => source.fmt(formatter),
-            Self::Manifest(source) => source.fmt(formatter),
-        }
-    }
-}
-
-impl Error for CommandError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Config(source) => Some(source),
-            Self::Manifest(source) => Some(source),
-        }
-    }
-}
-
-impl From<ConfigLoadError> for CommandError {
-    fn from(source: ConfigLoadError) -> Self {
-        Self::Config(source)
-    }
-}
-
-impl From<ManifestError> for CommandError {
-    fn from(source: ManifestError) -> Self {
-        Self::Manifest(source)
-    }
+    #[error("{0}")]
+    Manifest(#[from] ManifestError),
 }
