@@ -34,7 +34,7 @@ fn rejects_a_static_expression_error_in_an_unselected_target() {
     );
     assert_eq!(source.field.as_deref(), Some("exec.program"));
     assert!(matches!(
-        source.kind.as_ref(),
+        &source.kind,
         ConfigValidationErrorKind::Expression(InterpolationError::UnknownResolver {
             name
         }) if name == "unknown"
@@ -83,7 +83,7 @@ fn rejects_an_unknown_provider_in_one_effective_profile_atomically() {
     );
     assert_eq!(source.field.as_deref(), Some("provider"));
     assert!(matches!(
-        source.kind.as_ref(),
+        &source.kind,
         ConfigValidationErrorKind::UnknownProvider { package, provider }
             if package.as_str() == "tool" && provider.as_str() == "missing"
     ));
@@ -160,7 +160,7 @@ target = "/target"
         assert_eq!(error.job, Some(expected_job));
         assert!(
             matches!(
-                error.kind.as_ref(),
+                &error.kind,
                 ConfigValidationErrorKind::Expression(
                     InterpolationError::UnknownResolver { .. }
                         | InterpolationError::ResolverInLiteralString { .. }
@@ -194,7 +194,7 @@ fn validates_package_batch_structure_during_load() {
         };
 
         assert!(
-            match source.kind.as_ref() {
+            match &source.kind {
                 ConfigValidationErrorKind::EmptyPackageBatch { package } => {
                     package.as_str() == expected_package && expected_duplicate.is_none()
                 }
@@ -241,7 +241,7 @@ app = { provider = "brew", provider_args = ["--cask"] }
         ))
     );
     assert!(matches!(
-        error.kind.as_ref(),
+        &error.kind,
         ConfigValidationErrorKind::ProviderArgsResolverCount {
             provider,
             actual: 0,
@@ -269,7 +269,7 @@ fn requires_one_exact_provider_args_resolver_during_load() {
 
         assert!(
             matches!(
-                source.kind.as_ref(),
+                &source.kind,
                 ConfigValidationErrorKind::ProviderArgsResolverCount {
                     provider,
                     actual,

@@ -89,7 +89,7 @@ fn reports_the_absolute_path_when_the_complete_manifest_is_invalid() {
         ConfigLoadError::Validation { path, source } => {
             assert_eq!(path, &expected_path);
             assert!(matches!(
-                source.kind.as_ref(),
+                &source.kind,
                 ConfigValidationErrorKind::Manifest(ManifestError::DuplicateProfile {
                     target,
                     profile,

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fmt;
 
 use crate::platform::PlatformInfo;
@@ -379,7 +378,7 @@ fn select_target<'a>(
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ManifestError {
     NoCompatibleTargets {
         available: Vec<String>,
@@ -460,5 +459,3 @@ impl fmt::Display for ManifestError {
         }
     }
 }
-
-impl Error for ManifestError {}

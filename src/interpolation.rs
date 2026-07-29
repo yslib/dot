@@ -1,8 +1,6 @@
 mod resolver;
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use directories::{BaseDirs, UserDirs};
@@ -597,128 +595,47 @@ fn evaluate_string_list_variable(
         .into_string_list(reference.resolver())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum InterpolationError {
-    UnclosedResolver {
-        offset: usize,
-    },
-    MissingPayloadSeparator {
-        offset: usize,
-    },
-    NestedResolver {
-        offset: usize,
-    },
-    UnknownResolver {
-        name: String,
-    },
-    InvalidResolverPayload {
-        resolver: String,
-        payload: String,
-    },
-    ResolverUnavailable {
-        resolver: String,
-    },
+    #[error("unclosed resolver call at byte {offset}")]
+    UnclosedResolver { offset: usize },
+    #[error("resolver call at byte {offset} is missing the `:` payload separator")]
+    MissingPayloadSeparator { offset: usize },
+    #[error("nested resolver call at byte {offset}")]
+    NestedResolver { offset: usize },
+    #[error("unknown resolver `{name}`")]
+    UnknownResolver { name: String },
+    #[error("invalid payload `{payload}` for resolver `{resolver}`")]
+    InvalidResolverPayload { resolver: String, payload: String },
+    #[error("resolver `{resolver}` is unavailable in this context")]
+    ResolverUnavailable { resolver: String },
+    #[error("resolver `{resolver}` has type {actual:?}, but this context requires {expected:?}")]
     ResolverTypeMismatch {
         resolver: String,
         expected: SchemaType,
         actual: SchemaType,
     },
+    #[error("resolver `{resolver}` returned {actual:?}, but declared {expected:?}")]
     ResolverContractViolation {
         resolver: String,
         expected: SchemaType,
         actual: SchemaType,
     },
-    ResolverInLiteralString {
-        resolver: String,
-    },
-    ListResolverMustOccupyArgument {
-        resolver: String,
-    },
-    MissingEnvironmentVariable {
-        name: String,
-    },
-    NonUnicodeEnvironmentVariable {
-        name: String,
-    },
-    UnavailablePath {
-        name: String,
-    },
-    NonUnicodePath {
-        name: String,
-    },
+    #[error("resolver `{resolver}` is not allowed in a literal string")]
+    ResolverInLiteralString { resolver: String },
+    #[error("list resolver `{resolver}` must occupy one complete argument")]
+    ListResolverMustOccupyArgument { resolver: String },
+    #[error("environment variable `{name}` is not defined")]
+    MissingEnvironmentVariable { name: String },
+    #[error("environment variable `{name}` is not Unicode")]
+    NonUnicodeEnvironmentVariable { name: String },
+    #[error("path value `{name}` is unavailable")]
+    UnavailablePath { name: String },
+    #[error("path value `{name}` is not Unicode")]
+    NonUnicodePath { name: String },
+    #[error("package resolver requires a provider package batch")]
     MissingPackageContext,
 }
-
-impl fmt::Display for InterpolationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnclosedResolver { offset } => {
-                write!(formatter, "unclosed resolver call at byte {offset}")
-            }
-            Self::MissingPayloadSeparator { offset } => write!(
-                formatter,
-                "resolver call at byte {offset} is missing the `:` payload separator"
-            ),
-            Self::NestedResolver { offset } => {
-                write!(formatter, "nested resolver call at byte {offset}")
-            }
-            Self::UnknownResolver { name } => write!(formatter, "unknown resolver `{name}`"),
-            Self::InvalidResolverPayload { resolver, payload } => {
-                write!(
-                    formatter,
-                    "invalid payload `{payload}` for resolver `{resolver}`"
-                )
-            }
-            Self::ResolverUnavailable { resolver } => {
-                write!(
-                    formatter,
-                    "resolver `{resolver}` is unavailable in this context"
-                )
-            }
-            Self::ResolverTypeMismatch {
-                resolver,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "resolver `{resolver}` has type {actual:?}, but this context requires {expected:?}"
-            ),
-            Self::ResolverContractViolation {
-                resolver,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "resolver `{resolver}` returned {actual:?}, but declared {expected:?}"
-            ),
-            Self::ResolverInLiteralString { resolver } => write!(
-                formatter,
-                "resolver `{resolver}` is not allowed in a literal string"
-            ),
-            Self::ListResolverMustOccupyArgument { resolver } => write!(
-                formatter,
-                "list resolver `{resolver}` must occupy one complete argument"
-            ),
-            Self::MissingEnvironmentVariable { name } => {
-                write!(formatter, "environment variable `{name}` is not defined")
-            }
-            Self::NonUnicodeEnvironmentVariable { name } => {
-                write!(formatter, "environment variable `{name}` is not Unicode")
-            }
-            Self::UnavailablePath { name } => {
-                write!(formatter, "path value `{name}` is unavailable")
-            }
-            Self::NonUnicodePath { name } => {
-                write!(formatter, "path value `{name}` is not Unicode")
-            }
-            Self::MissingPackageContext => {
-                formatter.write_str("package resolver requires a provider package batch")
-            }
-        }
-    }
-}
-
-impl Error for InterpolationError {}
 
 #[cfg(test)]
 mod tests {

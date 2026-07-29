@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -809,98 +808,44 @@ fn resolve_ensure(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PlanningError {
-    UnknownProvider {
-        package: String,
-        provider: String,
-    },
+    #[error(
+        "selected job `package:{package}` field `provider` references unknown provider `{provider}`"
+    )]
+    UnknownProvider { package: String, provider: String },
+    #[error("failed to resolve {context}: {source}")]
     Interpolation {
         context: String,
+        #[source]
         source: InterpolationError,
     },
+    #[error("failed to apply selected job `provider:{provider}` field `activate`: {source}")]
     EnvironmentPatch {
         provider: String,
+        #[source]
         source: CommandPreparationError,
     },
+    #[error(
+        "selected job `package:{package}` field `provider.install.args` from provider `{provider}` must contain exactly one `${{package:provider_args}}` argument for nonempty provider_args; found {actual}"
+    )]
     ProviderArgsResolverCount {
         package: String,
         provider: String,
         actual: usize,
     },
-    EmptyPackageBatch {
-        package: String,
-    },
-    DuplicatePackageBatchName {
-        package: String,
-        name: String,
-    },
-    RelativeLinkTarget {
-        link: String,
-        target: PathBuf,
-    },
+    #[error("selected job `package:{package}` field `names` must contain at least one name")]
+    EmptyPackageBatch { package: String },
+    #[error("selected job `package:{package}` field `names` contains duplicate name `{name}`")]
+    DuplicatePackageBatchName { package: String, name: String },
+    #[error(
+        "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
+        .target.display()
+    )]
+    RelativeLinkTarget { link: String, target: PathBuf },
 }
 
-impl fmt::Display for PlanningError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownProvider { package, provider } => {
-                write!(
-                    formatter,
-                    "selected job `package:{package}` field `provider` references unknown provider `{provider}`"
-                )
-            }
-            Self::Interpolation { context, source } => {
-                write!(formatter, "failed to resolve {context}: {source}")
-            }
-            Self::EnvironmentPatch { provider, source } => {
-                write!(
-                    formatter,
-                    "failed to apply selected job `provider:{provider}` field `activate`: {source}"
-                )
-            }
-            Self::ProviderArgsResolverCount {
-                package,
-                provider,
-                actual,
-            } => write!(
-                formatter,
-                "selected job `package:{package}` field `provider.install.args` from provider `{provider}` must contain exactly one `${{package:provider_args}}` argument for nonempty provider_args; found {actual}"
-            ),
-            Self::EmptyPackageBatch { package } => {
-                write!(
-                    formatter,
-                    "selected job `package:{package}` field `names` must contain at least one name"
-                )
-            }
-            Self::DuplicatePackageBatchName { package, name } => write!(
-                formatter,
-                "selected job `package:{package}` field `names` contains duplicate name `{name}`"
-            ),
-            Self::RelativeLinkTarget { link, target } => write!(
-                formatter,
-                "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
-                target.display()
-            ),
-        }
-    }
-}
-
-impl Error for PlanningError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::UnknownProvider { .. } => None,
-            Self::Interpolation { source, .. } => Some(source),
-            Self::EnvironmentPatch { source, .. } => Some(source),
-            Self::ProviderArgsResolverCount { .. } => None,
-            Self::EmptyPackageBatch { .. } => None,
-            Self::DuplicatePackageBatchName { .. } => None,
-            Self::RelativeLinkTarget { .. } => None,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum JobSelectionError {
     Unknown(JobSelector),
     MissingProvider {
@@ -928,8 +873,6 @@ impl fmt::Display for JobSelectionError {
         }
     }
 }
-
-impl Error for JobSelectionError {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionPlanError {
