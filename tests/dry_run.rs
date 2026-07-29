@@ -79,6 +79,8 @@ fn dot_paths() -> DotPaths<'static> {
     DotPaths::new(
         Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
+        Path::new(TEST_CONFIG),
+        Path::new(TEST_CONFIG_DIR),
         Path::new(TEST_CWD),
     )
 }
@@ -151,7 +153,7 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
     let config_dir = path.parent().expect("fixture path should have a parent");
     let planner = ExecutionPlanner::new(
         &environment,
-        DotPaths::new(&path, config_dir, Path::new(TEST_CWD)),
+        DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD)),
         &xdg,
         &platform,
     );
@@ -326,7 +328,7 @@ fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let config_dir = path.parent().expect("fixture path should have a parent");
     let planner = ExecutionPlanner::new(
         &environment,
-        DotPaths::new(&path, config_dir, Path::new(TEST_CWD)),
+        DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD)),
         &xdg,
         &platform,
     );

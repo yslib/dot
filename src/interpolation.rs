@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use directories::{BaseDirs, UserDirs};
 
 use crate::action::ExecutionEnvironment;
+use crate::config::LoadedConfig;
 use crate::schema::{
     EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType, LiteralString,
     LiteralStringSource, OneOrMany, ParsedStringForm, ParsedTemplate as ParsedStringTemplate,
@@ -21,14 +22,24 @@ use resolver::{ResolverEntry, lookup_resolver};
 pub struct DotPaths<'a> {
     config: &'a Path,
     config_dir: &'a Path,
+    real_config: &'a Path,
+    real_config_dir: &'a Path,
     cwd: &'a Path,
 }
 
 impl<'a> DotPaths<'a> {
-    pub const fn new(config: &'a Path, config_dir: &'a Path, cwd: &'a Path) -> Self {
+    pub const fn new(
+        config: &'a Path,
+        config_dir: &'a Path,
+        real_config: &'a Path,
+        real_config_dir: &'a Path,
+        cwd: &'a Path,
+    ) -> Self {
         Self {
             config,
             config_dir,
+            real_config,
+            real_config_dir,
             cwd,
         }
     }
@@ -38,10 +49,24 @@ impl<'a> DotPaths<'a> {
     }
 }
 
+impl<'a> From<&'a LoadedConfig> for DotPaths<'a> {
+    fn from(loaded: &'a LoadedConfig) -> Self {
+        Self::new(
+            loaded.path(),
+            loaded.directory(),
+            loaded.real_path(),
+            loaded.real_directory(),
+            loaded.invocation_cwd(),
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DotPath {
     Config,
     ConfigDir,
+    RealConfig,
+    RealConfigDir,
     Cwd,
 }
 
@@ -50,6 +75,8 @@ impl DotPath {
         match payload {
             "config" => Some(Self::Config),
             "config_dir" => Some(Self::ConfigDir),
+            "real_config" => Some(Self::RealConfig),
+            "real_config_dir" => Some(Self::RealConfigDir),
             "cwd" => Some(Self::Cwd),
             _ => None,
         }
@@ -61,6 +88,8 @@ impl DotPaths<'_> {
         match path {
             DotPath::Config => self.config,
             DotPath::ConfigDir => self.config_dir,
+            DotPath::RealConfig => self.real_config,
+            DotPath::RealConfigDir => self.real_config_dir,
             DotPath::Cwd => self.cwd,
         }
     }
@@ -645,6 +674,7 @@ mod tests {
     use directories::{BaseDirs, UserDirs};
 
     use crate::action::ExecutionEnvironment;
+    use crate::config::LoadedConfig;
     use crate::schema::{
         EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
         OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedEnvironmentPatch,
@@ -685,6 +715,8 @@ mod tests {
         DotPaths::new(
             Path::new("/repo/dot.toml"),
             Path::new("/repo"),
+            Path::new("/canonical/repo/dot.toml"),
+            Path::new("/canonical/repo"),
             Path::new("/work"),
         )
     }
@@ -887,17 +919,70 @@ mod tests {
     }
 
     #[test]
-    fn dot_resolver_produces_invocation_paths() {
+    fn dot_resolver_produces_entry_entity_and_invocation_paths() {
         let environment = environment(&[]);
         let xdg = xdg_paths(&[]);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
-        let template = StringExpressionSource::from("${dot:config}:${dot:config_dir}:${dot:cwd}");
+        let template = StringExpressionSource::from(
+            "${dot:config}|${dot:config_dir}|${dot:real_config}|${dot:real_config_dir}|${dot:cwd}",
+        );
 
         assert_eq!(
             resolve_string_expression(&template, &context)
                 .expect("template should resolve")
                 .value(),
-            "/repo/dot.toml:/repo:/work"
+            "/repo/dot.toml|/repo|/canonical/repo/dot.toml|/canonical/repo|/work"
+        );
+    }
+
+    #[test]
+    fn dot_paths_from_loaded_config_exposes_canonical_paths() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dot.toml");
+        let loaded = LoadedConfig::load(fixture).expect("fixture should load");
+        let xdg = xdg_paths(&[]);
+        let context = ResolveContext::new(loaded.environment(), DotPaths::from(&loaded), &xdg);
+
+        let real_config = resolve_string_expression(
+            &StringExpressionSource::from("${dot:real_config}"),
+            &context,
+        )
+        .expect("real config path should resolve");
+        let real_config_dir = resolve_string_expression(
+            &StringExpressionSource::from("${dot:real_config_dir}"),
+            &context,
+        )
+        .expect("real config directory should resolve");
+
+        assert_eq!(PathBuf::from(real_config.value()), loaded.real_path());
+        assert_eq!(
+            PathBuf::from(real_config_dir.value()),
+            loaded.real_directory()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_config_dir_preserves_a_verbatim_windows_path_with_backslash_suffixes() {
+        let environment = environment(&[]);
+        let xdg = xdg_paths(&[]);
+        let dot = DotPaths::new(
+            Path::new(r"C:\entry\.dot.toml"),
+            Path::new(r"C:\entry"),
+            Path::new(r"\\?\C:\repo\.dot.toml"),
+            Path::new(r"\\?\C:\repo"),
+            Path::new(r"C:\work"),
+        );
+        let context = ResolveContext::new(&environment, dot, &xdg);
+
+        let resolved = resolve_string_expression(
+            &StringExpressionSource::from(r"${dot:real_config_dir}\home\.config\nvim"),
+            &context,
+        )
+        .expect("verbatim path should resolve");
+
+        assert_eq!(
+            PathBuf::from(resolved.value()),
+            PathBuf::from(r"\\?\C:\repo\home\.config\nvim")
         );
     }
 

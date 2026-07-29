@@ -23,7 +23,7 @@ pub(super) fn run(
         request.scope.profile.named(),
     )?;
     let xdg_paths = XdgPaths::detect();
-    let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
+    let dot_paths = DotPaths::from(&loaded);
     let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
     let plan = planner.plan(&manifest, &request.jobs)?;
 

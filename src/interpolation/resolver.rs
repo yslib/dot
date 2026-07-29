@@ -344,6 +344,8 @@ mod tests {
         let dot = DotPaths::new(
             Path::new("/repo/dot.toml"),
             Path::new("/repo"),
+            Path::new("/repo/dot.toml"),
+            Path::new("/repo"),
             Path::new("/work"),
         );
         let xdg = XdgPaths::default();
@@ -442,7 +444,15 @@ mod tests {
 
         assert!(registry["env"].validate_payload("HOME"));
         assert!(!registry["env"].validate_payload(""));
-        assert!(registry["dot"].validate_payload("cwd"));
+        for payload in [
+            "config",
+            "config_dir",
+            "real_config",
+            "real_config_dir",
+            "cwd",
+        ] {
+            assert!(registry["dot"].validate_payload(payload));
+        }
         assert!(!registry["dot"].validate_payload("home"));
         assert!(registry["xdg"].validate_payload("executable"));
         assert!(!registry["xdg"].validate_payload("repository"));

@@ -22,7 +22,7 @@ pub(super) fn run(
         scope.profile.named(),
     )?;
     let xdg_paths = XdgPaths::detect();
-    let dot_paths = DotPaths::new(loaded.path(), loaded.directory(), loaded.invocation_cwd());
+    let dot_paths = DotPaths::from(&loaded);
     let checker = ProviderChecker::new(loaded.environment(), dot_paths, &xdg_paths);
     let checks = checker.check(manifest.providers());
 

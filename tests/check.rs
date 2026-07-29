@@ -94,6 +94,8 @@ fn dot_paths() -> DotPaths<'static> {
     DotPaths::new(
         Path::new("/repo/dot.toml"),
         Path::new("/repo"),
+        Path::new("/repo/dot.toml"),
+        Path::new("/repo"),
         Path::new("/work"),
     )
 }
