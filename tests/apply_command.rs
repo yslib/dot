@@ -192,7 +192,7 @@ fn exact_apply_rejects_an_unknown_selector_atomically() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unknown action job `unknown`"),
+        String::from_utf8_lossy(&output.stderr).contains("unknown job `action:unknown`"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

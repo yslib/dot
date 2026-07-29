@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
@@ -847,31 +846,14 @@ pub enum PlanningError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobSelectionError {
+    #[error("unknown job `{0}`")]
     Unknown(JobSelector),
+
+    #[error("package job `{package}` references missing provider job `{provider}`")]
     MissingProvider {
         package: SelectorIdentifier,
         provider: Identifier,
     },
-}
-
-impl fmt::Display for JobSelectionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown(JobSelector::Package(id)) => {
-                write!(formatter, "unknown package job `{id}`")
-            }
-            Self::Unknown(JobSelector::Action(id)) => {
-                write!(formatter, "unknown action job `{id}`")
-            }
-            Self::Unknown(JobSelector::Link(id)) => {
-                write!(formatter, "unknown link job `{id}`")
-            }
-            Self::MissingProvider { package, provider } => write!(
-                formatter,
-                "package job `{package}` references missing provider job `{provider}`"
-            ),
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
