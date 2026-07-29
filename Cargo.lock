@@ -182,6 +182,7 @@ dependencies = [
  "comfy-table",
  "directories",
  "serde",
+ "thiserror",
  "toml",
 ]
 
