@@ -931,38 +931,11 @@ impl fmt::Display for JobSelectionError {
 
 impl Error for JobSelectionError {}
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ExecutionPlanError {
-    Selection(JobSelectionError),
-    Planning(PlanningError),
-}
+    #[error("{0}")]
+    Selection(#[from] JobSelectionError),
 
-impl fmt::Display for ExecutionPlanError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Selection(source) => source.fmt(formatter),
-            Self::Planning(source) => source.fmt(formatter),
-        }
-    }
-}
-
-impl Error for ExecutionPlanError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Selection(source) => Some(source),
-            Self::Planning(source) => Some(source),
-        }
-    }
-}
-
-impl From<JobSelectionError> for ExecutionPlanError {
-    fn from(source: JobSelectionError) -> Self {
-        Self::Selection(source)
-    }
-}
-
-impl From<PlanningError> for ExecutionPlanError {
-    fn from(source: PlanningError) -> Self {
-        Self::Planning(source)
-    }
+    #[error("{0}")]
+    Planning(#[from] PlanningError),
 }
