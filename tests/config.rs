@@ -2,6 +2,7 @@ mod support;
 
 use std::env;
 use std::error::Error;
+use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
@@ -31,6 +32,15 @@ fn loads_a_relative_manifest_with_its_runtime_context() {
     assert_eq!(loaded.path(), expected_path);
     assert!(loaded.path().is_absolute());
     assert_eq!(loaded.directory(), expected_path.parent().unwrap());
+    let expected_real_path =
+        fs::canonicalize(&expected_path).expect("fixture path should canonicalize");
+    assert_eq!(loaded.real_path(), expected_real_path);
+    assert_eq!(
+        loaded.real_directory(),
+        expected_real_path
+            .parent()
+            .expect("canonical fixture should have a parent")
+    );
     assert_eq!(loaded.invocation_cwd(), invocation_cwd);
     assert_eq!(
         loaded.environment().get("PATH"),
@@ -39,17 +49,17 @@ fn loads_a_relative_manifest_with_its_runtime_context() {
 }
 
 #[test]
-fn reports_the_absolute_path_when_a_manifest_cannot_be_read() {
+fn reports_the_entry_path_when_a_manifest_cannot_be_canonicalized() {
     let (relative_path, expected_path) = relative_fixture("config/does-not-exist.toml");
 
     let error = LoadedConfig::load(&relative_path).expect_err("missing fixture should fail");
 
     match &error {
-        ConfigLoadError::Read { path, source } => {
+        ConfigLoadError::Canonicalize { path, source } => {
             assert_eq!(path, &expected_path);
             assert_eq!(source.kind(), ErrorKind::NotFound);
         }
-        other => panic!("expected a read error, got {other:?}"),
+        other => panic!("expected a canonicalize error, got {other:?}"),
     }
     assert!(
         error
