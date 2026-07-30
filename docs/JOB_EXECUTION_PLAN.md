@@ -1,6 +1,9 @@
 # Unified Serial Job Execution Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical document:** This plan was completed for v0.1.0 and is retained
+> only as implementation history. It is not an active task list or a normative
+> specification. See [JOB_EXECUTION.md](JOB_EXECUTION.md) and
+> [DESIGN.txt](DESIGN.txt) for the implemented behavior.
 
 **Goal:** Replace apply's phase-specific data paths with one strongly typed, serial job plan that dry-run, apply, and future exact package/action/link selection can share.
 

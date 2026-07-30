@@ -10,7 +10,7 @@ environment it describes.
 
 > [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete
 > application example used to develop `dot`. It describes an Arch Linux
-> base/desktop/laptop profile tree plus independent macOS and Windows
+> base/Hyprland/laptop profile tree plus independent macOS and Windows
 > environments.
 
 `dot` is intentionally not a package manager or a general-purpose
@@ -349,5 +349,7 @@ feature, `--platform` is not part of the CLI.
   boundaries, and explicit design decisions.
 - [Unified job execution](docs/JOB_EXECUTION.md) — selected-plan architecture,
   serial order, and failure behavior.
+- [Future directions](docs/FUTURE.md) — non-normative exploration plans and
+  product boundaries for possible post-v0.1.0 work.
 - [yslib/dotfiles](https://github.com/yslib/dotfiles) — complete real-world
   configuration for Linux, macOS, and Windows.
