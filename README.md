@@ -292,7 +292,7 @@ provider check is diagnostic, not a side-effect-free simulation.
 
 Apply and dry-run reports are human-readable tables, not stable serialized
 interfaces. The list-command TSV contract is the stable machine-facing
-interface. Version 0.0.1 does not provide `--json`.
+interface. Version 0.1.0 does not provide `--json`.
 
 ## Goals
 

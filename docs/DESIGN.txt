@@ -1,4 +1,4 @@
-# dot design (v0.0.1)
+# dot design (v0.1.0)
 
 The structural configuration schema is defined in SCHEMA.txt. This file
 describes runtime semantics and design boundaries.
@@ -342,7 +342,7 @@ specific knowledge remains in TOML or external scripts rather than Rust code.
   install, action exec, and manual-package exec inherit the terminal streams so
   the user sees interactive output as it happens.
 - Captured output may be stored as report evidence, but the table renderer does
-  not dump it verbatim and it is not a v0.0.1 output contract.
+  not dump it verbatim and it is not a v0.1.0 output contract.
 
 
 ### action lifecycle
@@ -380,7 +380,7 @@ reporting. They are not referenced by other declarations.
   canonical entity directory. An absolute source is used as declared.
 - target must resolve to an absolute path.
 - During apply, source must exist and be a regular file or directory.
-- v0.0.1 creates native symbolic links only. It does not fall back to hard
+- v0.1.0 creates native symbolic links only. It does not fall back to hard
   links, directory junctions, copies, or shell commands.
 - The implementation determines whether source is a file or directory and uses
   the corresponding native Windows link operation.
@@ -422,7 +422,7 @@ the final non-zero result. Link reconciliation uses Rust filesystem APIs rather
 than child commands.
 
 The filesystem is authoritative. dot stores no persistent link state. Removing
-a link declaration does not remove an existing link. v0.0.1 has no unlink,
+a link declaration does not remove an existing link. v0.1.0 has no unlink,
 garbage collection, or link query operation.
 
 
@@ -450,10 +450,10 @@ one complete static definition and tests.
 
 The registry is an implementation framework, not a configuration extension
 point. Users cannot register resolvers from TOML, scripts, plugins, environment
-variables, or command-line arguments. v0.0.1 does not use a mutable global
+variables, or command-line arguments. v0.1.0 does not use a mutable global
 registry, dynamic loading, or trait-object plugins.
 
-v0.0.1 statically defines only these resolver calls:
+v0.1.0 statically defines only these resolver calls:
 
 - ${env:NAME}: read NAME from the current effective environment;
 - ${package:names}: the complete package-name list for the current provider
@@ -506,7 +506,7 @@ non-empty names list. package:provider_args preserves declaration order; an
 omitted field expands to zero elements. If any package assigned to a provider
 has non-empty provider_args, that provider's install action must contain
 exactly one ${package:provider_args} element. provider_args values are literal:
-v0.0.1 does not interpolate their contents, and interpolation syntax in them
+v0.1.0 does not interpolate their contents, and interpolation syntax in them
 is an error. Scalar interpolation may be a complete string or part of a larger
 string. A list value cannot be embedded inside another string.
 
@@ -523,7 +523,7 @@ environment variable or unavailable path in an unselected job does not block
 an exact selection; the same missing value in the selected closure is a
 planning error. Values never silently become an empty string.
 
-v0.0.1 intentionally omits resolver defaults, nested interpolation,
+v0.1.0 intentionally omits resolver defaults, nested interpolation,
 configuration-node references, user-defined resolvers, expressions, automatic
 type conversion, and caching. Shell substitution such as $() and backticks has
 no implicit meaning, and resolved values are never reinterpreted by a shell.
@@ -672,7 +672,7 @@ diagnostics even though they map to NOT_READY.
 
 Provider check does not run provider ensure or install, refresh environment
 state after an ensure, resolve or inspect package install units, run
-manual-package or global action check/exec, or inspect/reconcile links. v0.0.1
+manual-package or global action check/exec, or inspect/reconcile links. v0.1.0
 defines no link, action, package, or aggregate check command.
 
 Provider check remains an independent probe-only path. It does not construct a
@@ -685,7 +685,7 @@ failures remain provider-local and do not stop later provider attempts.
 
 ### command surface
 
-The v0.0.1 command facade is explicit:
+The v0.1.0 command facade is explicit:
 
 ```
 dot apply
@@ -865,7 +865,7 @@ and exit non-zero. A constructed report controls the process exit status:
 PLANNED and SUCCESS exit zero, while FAILED exits non-zero.
 
 CommandReport separates result content from presentation so another renderer
-can be added later. Version 0.0.1 has no `--json` option, and neither the Rust
+can be added later. Version 0.1.0 has no `--json` option, and neither the Rust
 report shape nor human table text is a stable public data contract. The
 separate list-command TSV format is the stable machine-facing catalog contract.
 
@@ -907,7 +907,7 @@ termination use normal operating-system foreground-process behavior; dot adds
 no signal handling, process supervision, or platform-specific kill mechanism.
 
 
-### explicit non-goals for v0.0.1
+### explicit non-goals for v0.1.0
 
 - Heuristic target ranking, environment-quality detection, or implicit
   selection beyond the unique-compatible-target rule.

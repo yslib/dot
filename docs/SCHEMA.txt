@@ -1,4 +1,4 @@
-# dot configuration schema (v0.0.1)
+# dot configuration schema (v0.1.0)
 
 This file is the sole authoritative structural schema and field-level
 capability definition for dot configuration. Runtime evaluation semantics
@@ -243,7 +243,7 @@ xdg:*                       -> !string
 package:names               -> [!string]
 package:provider_args       -> [!string]
 
-The accepted string-valued calls in v0.0.1 are:
+The accepted string-valued calls in v0.1.0 are:
 
 - `${env:NAME}`;
 - `${dot:config}`;
