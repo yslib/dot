@@ -79,7 +79,6 @@ where
     A: From<&'static str>,
 {
     ExecAction {
-        kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
             .to_string_lossy()

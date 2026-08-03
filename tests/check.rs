@@ -48,7 +48,6 @@ fn resolved_environment_patch(variables: &[(&str, &str)]) -> ResolvedEnvironment
 
 fn helper_probe() -> ExecAction {
     ExecAction {
-        kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
             .to_string_lossy()
@@ -73,7 +72,6 @@ fn provider(mode: &str, value: &str) -> Provider {
         ])),
         ensure: None,
         install: ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
-            kind: None,
             program: "unused-install".into(),
             args: Vec::new(),
             cwd: None,
@@ -196,21 +194,18 @@ fn ignores_provider_ensure_and_install_expression_errors() {
     let mut ignored = provider("ready", "ignored-provider-fields");
     ignored.ensure = Some(OneOrMany::Many(vec![
         ExecAction {
-            kind: None,
             program: "${ensure-program".into(),
             args: Vec::new(),
             cwd: None,
             env: None,
         },
         ExecAction {
-            kind: None,
             program: "${unknown:ensure}".into(),
             args: Vec::new(),
             cwd: None,
             env: None,
         },
         ExecAction {
-            kind: None,
             program: "${package:names}".into(),
             args: Vec::new(),
             cwd: None,
@@ -218,7 +213,6 @@ fn ignores_provider_ensure_and_install_expression_errors() {
         },
     ]));
     ignored.install = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
-        kind: None,
         program: "${install-program".into(),
         args: vec![
             "${unknown:install}".into(),

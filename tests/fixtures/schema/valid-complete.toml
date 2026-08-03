@@ -6,7 +6,7 @@ activate = { path_prepend = ["/opt/homebrew/bin", "/usr/local/bin"], path_append
 probe = { program = "brew", args = ["--version"] }
 ensure = [
   { program = "bash", args = ["install-brew.sh"], cwd = "/tmp" },
-  { type = "exec", program = "brew", args = ["tap", "example/tools"], env = { variables = { CI = "1" } } },
+  { program = "brew", args = ["tap", "example/tools"], env = { variables = { CI = "1" } } },
 ]
 install = { program = "brew", args = ["install", "${package:provider_args}", "${package:names}"] }
 
@@ -21,7 +21,7 @@ config = { source = "home/config", target = "${env:HOME}/.config/tool", on_confl
 
 [targets.workstation.actions.setup]
 check = { program = "test", args = ["-e", "/tmp/ready"] }
-exec = { type = "exec", program = "touch", args = ["/tmp/ready"] }
+exec = { program = "touch", args = ["/tmp/ready"] }
 
 [targets.workstation.profiles.desktop.packages]
 compositor = { provider = "brew" }

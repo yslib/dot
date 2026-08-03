@@ -1,8 +1,8 @@
 mod support;
 
 use dot::schema::{
-    Config, EnvironmentName, EnvironmentPatch, ExecAction, ExecActionType, ExpressionParseError,
-    Identifier, LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
+    Config, EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError, Identifier,
+    LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
     ParsedStringForm, ParsedTemplatePart, ProviderInstallArgSource, ProviderPackage, RecordTypeId,
     ResolvedEnvironmentPatch, ResolvedString, SchemaType, SchemaTypeMarker, SelectorIdentifier,
     StringExpressionSource, StringKeyType, StringRefinementTypeId, StringType,
@@ -211,6 +211,16 @@ fn deserializes_the_repository_dotfile() {
 }
 
 #[test]
+fn rejects_legacy_exec_action_type() {
+    let input = fixture::read("schema/invalid-legacy-exec-type.toml");
+    let error = toml::from_str::<Config>(&input).expect_err("legacy type must be unknown");
+    assert!(
+        error.to_string().contains("unknown field `type`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn deserializes_the_complete_schema() {
     let input = fixture::read("schema/valid-complete.toml");
 
@@ -237,7 +247,6 @@ fn deserializes_the_complete_schema() {
         panic!("ensure should preserve its list form");
     };
     assert_eq!(ensure.len(), 2);
-    assert_eq!(ensure[1].kind, Some(ExecActionType::Exec));
 
     let Package::Provider(ProviderPackage::Single(app)) = &target.packages["app"] else {
         panic!("app should be a provider package");

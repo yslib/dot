@@ -32,7 +32,6 @@ fn patch(
 
 fn helper_action(mode: &str, cwd: Option<&Path>) -> ResolvedExecAction {
     ResolvedExecAction {
-        kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
             .into_os_string()
@@ -106,7 +105,6 @@ fn prepared_command_copies_process_fields_and_layers_action_environment() {
     ))
     .expect("base environment should be valid");
     let action = ResolvedExecAction {
-        kind: None,
         program: "example-program".into(),
         args: vec!["first".into(), "two words".into(), "".into()],
         cwd: Some("working-directory".into()),
@@ -235,7 +233,6 @@ fn inherit_returns_only_the_exit_status() {
 #[test]
 fn reports_a_program_that_cannot_be_started() {
     let action = ResolvedExecAction {
-        kind: None,
         program: "dot-program-that-must-not-exist-4d02a925".into(),
         args: Vec::new(),
         cwd: None,
