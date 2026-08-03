@@ -5,7 +5,7 @@ use crate::job::JobSelector;
 use crate::manifest::{EffectiveManifest, ManifestJobRef};
 use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
-use crate::schema::{Package, ProviderPackage};
+use crate::schema::{Action, Package, ProviderPackage};
 
 use super::{ManifestCommandError, ScopeSelection};
 
@@ -75,9 +75,17 @@ impl TsvRecord for JobRecord<'_> {
                 Cow::Borrowed("manual"),
                 Cow::Borrowed(package.install.exec.program.source_spelling()),
             ),
-            ManifestJobRef::Action(_, action) => (
+            ManifestJobRef::Action(_, Action::Command(action)) => (
                 Cow::Borrowed("exec"),
                 Cow::Borrowed(action.exec.program.source_spelling()),
+            ),
+            ManifestJobRef::Action(_, Action::FetchContent(action)) => (
+                Cow::Borrowed("fetch"),
+                Cow::Owned(format!(
+                    "{} -> {}",
+                    action.source.source_spelling(),
+                    action.target.source_spelling()
+                )),
             ),
             ManifestJobRef::Link(_, link) => (
                 Cow::Borrowed("builtin"),

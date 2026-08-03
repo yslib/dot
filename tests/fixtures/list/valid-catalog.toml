@@ -22,6 +22,10 @@ install = { exec = { program = "manual\\runner	phase" } }
 exec = { program = """configure
 runner""" }
 
+[targets.never.actions.remote-config]
+source = "https://example.com/config.toml"
+target = "configs/app.toml"
+
 [targets.never.links.config]
 source = "home\\config"
 target = "${env:HOME}/.config/tool"
@@ -35,3 +39,7 @@ exec = { program = "laptop-runner" }
 [targets.never.profiles.server.links.server]
 source = "server-source"
 target = "/server-target"
+
+[targets.never.profiles.server.actions.remote-config]
+source = "${env:DOT_INTENTIONALLY_MISSING}"
+target = "configs/server.toml"

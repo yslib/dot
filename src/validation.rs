@@ -14,7 +14,7 @@ use crate::manifest::{EffectiveManifest, ManifestError, profile_catalog};
 use crate::schema::{
     Action, EnvironmentPatch, ExecAction, Identifier, Link, OneOrMany, Package, Profile, Provider,
     ProviderInstallArgSource, ProviderPackage, SelectableEntries, SelectorIdentifier, SourceAction,
-    SourceExecAction, StringExpressionSource, Target,
+    SourceCommandAction, SourceExecAction, StringExpressionSource, Target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,7 +288,7 @@ fn validate_package(
             }
             Ok(())
         }
-        Package::Manual(package) => validate_action(&package.install, context, "install"),
+        Package::Manual(package) => validate_command_action(&package.install, context, "install"),
     }
 }
 
@@ -302,6 +302,23 @@ fn validate_link(link: &Link, context: &ValidationContext) -> Result<(), ConfigV
 
 fn validate_action(
     action: &SourceAction,
+    context: &ValidationContext,
+    prefix: &str,
+) -> Result<(), ConfigValidationError> {
+    match action {
+        Action::Command(action) => validate_command_action(action, context, prefix),
+        Action::FetchContent(action) => {
+            promote_string_expression(&action.source)
+                .map_err(|source| context.expression(field(prefix, "source"), source))?;
+            promote_string_expression(&action.target)
+                .map_err(|source| context.expression(field(prefix, "target"), source))?;
+            Ok(())
+        }
+    }
+}
+
+fn validate_command_action(
+    action: &SourceCommandAction,
     context: &ValidationContext,
     prefix: &str,
 ) -> Result<(), ConfigValidationError> {

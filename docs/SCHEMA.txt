@@ -221,14 +221,17 @@ recursive-flattening or implicit-stringification behavior exists.
 #source_action =
     #action<#string_expression_source, #string_expression_source>
 
+#source_command_action =
+    #command_action<#string_expression_source, #string_expression_source>
+
 #resolved_environment_patch =
     #environment_patch<#resolved_string>
 
 #resolved_exec_action =
     #exec_action<#resolved_string, #resolved_string>
 
-#resolved_action =
-    #action<#resolved_string, #resolved_string>
+#resolved_command_action =
+    #command_action<#resolved_string, #resolved_string>
 
 Resolved strings, argv elements, working directories, and environment values
 remain typed process data. They are not parsed again as templates and are not
@@ -413,7 +416,7 @@ id for the batch form.
 ### manual_package
 
 {
-install: #source_action,
+install: #source_command_action,
 }
 
 
@@ -447,7 +450,6 @@ variables?: { <name: #environment_name>: S },
 ### exec_action<S, A>
 
 {
-type?: "exec",
 program: S,
 args?: [A],
 cwd?: S,
@@ -485,7 +487,28 @@ When omitted, `on_conflict` defaults at runtime to `"replace-link"` and
 
 ### action<S, A>
 
+#command_action<S, A> | #fetch_content_action<S>
+
+
+### command_action<S, A>
+
 {
 check?: #exec_action<S, A>,
 exec: #exec_action<S, A>,
 }
+
+
+### fetch_content_action<S>
+
+{
+source: S,
+target: S,
+on_conflict?: #fetch_content_conflict,
+}
+
+
+### fetch_content_conflict
+
+"error" | "replace"
+
+When omitted, `on_conflict` defaults at runtime to `"error"`.

@@ -45,6 +45,66 @@ fn rejects_a_static_expression_error_in_an_unselected_target() {
 }
 
 #[test]
+fn rejects_a_fetch_source_expression_error_in_an_unselected_target() {
+    let path = fixture::path("validation/invalid-unselected-fetch-expression.toml");
+
+    let error = LoadedConfig::load(&path).expect_err("the complete config must be validated");
+    let ConfigLoadError::Validation { source, .. } = error else {
+        panic!("expected a validation error");
+    };
+
+    assert_eq!(source.target.as_str(), "unselected");
+    assert_eq!(source.profile, None);
+    assert_eq!(
+        source.job,
+        Some(ConfigValidationJob::Action(
+            "broken".try_into().expect("fixture action id is valid")
+        ))
+    );
+    assert_eq!(source.field.as_deref(), Some("source"));
+    assert!(matches!(
+        source.kind,
+        ConfigValidationErrorKind::Expression(InterpolationError::UnknownResolver { ref name })
+            if name == "unknown"
+    ));
+}
+
+#[test]
+fn rejects_a_fetch_target_expression_error_in_a_profile_replacement() {
+    let input = r#"
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.actions.remote-config]
+source = "https://example.com/base.toml"
+target = "configs/base.toml"
+
+[targets.machine.profiles.work.actions.remote-config]
+source = "https://example.com/work.toml"
+target = "${env"
+"#;
+    let config: Config = toml::from_str(input).expect("test config should deserialize");
+
+    let error = validate_config(&config).expect_err("profile replacement must be validated");
+
+    assert_eq!(error.target.as_str(), "machine");
+    assert_eq!(error.profile.as_ref().map(AsRef::as_ref), Some("work"));
+    assert_eq!(
+        error.job,
+        Some(ConfigValidationJob::Action(
+            "remote-config"
+                .try_into()
+                .expect("fixture action id is valid")
+        ))
+    );
+    assert_eq!(error.field.as_deref(), Some("target"));
+    assert!(matches!(
+        error.kind,
+        ConfigValidationErrorKind::Expression(InterpolationError::UnclosedResolver { offset: 0 })
+    ));
+}
+
+#[test]
 fn defers_a_missing_runtime_value_in_an_unselected_job() {
     let path = fixture::path("validation/valid-unselected-runtime-value.toml");
 
