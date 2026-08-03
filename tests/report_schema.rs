@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use dot::diagnostic::ErrorHint;
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
-    LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
-    ReportContext, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, Evidence, EvidenceStage,
+    ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource,
+    ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{
     FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedExecAction, SourceExecAction,
@@ -101,10 +101,10 @@ fn report_represents_each_logical_item_as_one_entry() {
             id: "setup-shell".to_owned(),
             status: ItemStatus::Executed,
             subject: ReportSubject::Action(ActionItem {
-                action: ActionInfo::Command {
+                action: ActionInfo::Command(CommandActionInfo {
                     check: None,
                     exec: command("sh", &["setup.sh"]),
-                },
+                }),
             }),
             evidence: Vec::new(),
         },

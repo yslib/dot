@@ -5,9 +5,9 @@ use dot::diagnostic::ErrorHint;
 use dot::output::TableRenderer;
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ActionInfo, ActionItem, CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus,
-    LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
-    ReportContext, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, Evidence, EvidenceStage,
+    ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource,
+    ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{FetchContentConflict, LinkConflict, LinkMissingParent};
 
@@ -16,6 +16,13 @@ fn command(program: &str, args: &[&str]) -> CommandInfo {
         program: program.to_owned(),
         args: args.iter().map(|argument| (*argument).to_owned()).collect(),
         cwd: None,
+    }
+}
+
+fn command_action(program: &str, args: &[&str]) -> CommandActionInfo {
+    CommandActionInfo {
+        check: None,
+        exec: command(program, args),
     }
 }
 
@@ -73,10 +80,7 @@ fn report() -> CommandReport {
                 id: "setup-shell".to_owned(),
                 status: ItemStatus::Executed,
                 subject: ReportSubject::Action(ActionItem {
-                    action: ActionInfo::Command {
-                        check: None,
-                        exec: command("sh", &["setup.sh"]),
-                    },
+                    action: ActionInfo::Command(command_action("sh", &["setup.sh"])),
                 }),
                 evidence: Vec::new(),
             },
@@ -94,6 +98,39 @@ fn report() -> CommandReport {
         ],
         diagnostics: Vec::new(),
     }
+}
+
+#[test]
+fn renders_manual_packages_from_command_facts() {
+    let mut report = report();
+    report.items.push(ReportItem {
+        id: "manual-tool".to_owned(),
+        status: ItemStatus::Installed,
+        subject: ReportSubject::Package(PackageItem {
+            source: PackageSource::Manual {
+                install: CommandActionInfo {
+                    check: Some(command("manual-tool", &["--version"])),
+                    exec: command("sh", &["install.sh"]),
+                },
+            },
+        }),
+        evidence: Vec::new(),
+    });
+
+    let mut output = Vec::new();
+    TableRenderer::new(false)
+        .render(&report, &mut output)
+        .expect("table should render");
+    let output = String::from_utf8(output).expect("table should be UTF-8");
+
+    assert!(
+        output.contains("│ package  ┆ manual-tool ┆ manual"),
+        "manual package row or VIA missing:\n{output}"
+    );
+    assert!(
+        output.contains("check: manual-tool --version; exec: sh install.sh"),
+        "manual command detail missing:\n{output}"
+    );
 }
 
 #[test]
@@ -189,10 +226,10 @@ fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     let ReportSubject::Action(action) = &mut report.items[3].subject else {
         panic!("fourth fixture item should be an action");
     };
-    let ActionInfo::Command { exec, .. } = &mut action.action else {
+    let ActionInfo::Command(command) = &mut action.action else {
         panic!("fourth fixture action should be a command");
     };
-    exec.args = vec!["x".repeat(240)];
+    command.exec.args = vec!["x".repeat(240)];
 
     let mut output = Vec::new();
     TableRenderer::new(false)

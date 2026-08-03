@@ -17,9 +17,10 @@ use crate::provider::{
     ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStage,
 };
 use crate::report::{
-    ActionInfo, ActionItem, CommandInfo, CommandReport, Diagnostic, DiagnosticLevel, Evidence,
-    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem,
-    ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, Diagnostic,
+    DiagnosticLevel, Evidence, EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource,
+    ProviderItem, ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus,
+    ReportSubject,
 };
 
 pub(super) fn run(
@@ -123,7 +124,7 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
                 status,
                 subject: ReportSubject::Package(PackageItem {
                     source: PackageSource::Manual {
-                        install: ActionInfo::from_resolved_command(package.install()),
+                        install: CommandActionInfo::from_resolved(package.install()),
                     },
                 }),
                 evidence,
