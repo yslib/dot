@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod diagnostic;
 pub mod dry_run;
+mod fetch_content;
 pub mod interpolation;
 pub mod job;
 mod job_executor;

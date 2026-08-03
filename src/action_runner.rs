@@ -1,5 +1,7 @@
 use std::fmt;
 
+pub use crate::fetch_content::{FetchContentError, FetchContentOutcome};
+
 use crate::action::{
     CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
     PreparedCommand, ProcessExecutor,
