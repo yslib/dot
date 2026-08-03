@@ -816,7 +816,7 @@ fn resolve_exec_action_fields(
         .map_err(|error| exec_action_field_error(error, prefix))
 }
 
-pub fn resolve_fetch_content_fields(
+pub(crate) fn resolve_fetch_content_fields(
     action_id: &SelectorIdentifier,
     action: &FetchContentAction,
     context: &ResolveContext<'_>,
@@ -843,6 +843,10 @@ pub fn resolve_fetch_content_fields(
         action.on_conflict.unwrap_or_default(),
     ))
 }
+
+const _: () = {
+    let _ = resolve_fetch_content_fields;
+};
 
 fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError> {
     let source =
@@ -1311,19 +1315,36 @@ mod tests {
                 )
                 .expect_err("disallowed source locator should fail");
 
+                assert!(
+                    error
+                        .to_string()
+                        .contains("selected job `action:download` field `source`"),
+                    "source `{source}` should identify the canonical source field: {error}"
+                );
                 match expected {
-                    "unsupported non-HTTPS source" | "missing-host source" => assert!(matches!(
-                        error,
-                        PlanningError::UnsupportedFetchContentSource { .. }
-                    )),
-                    "invalid relative source" | "malformed source" => assert!(matches!(
-                        error,
-                        PlanningError::InvalidFetchContentSourceUrl { .. }
-                    )),
-                    "authenticated source" => assert!(matches!(
-                        error,
-                        PlanningError::AuthenticatedFetchContentSource { .. }
-                    )),
+                    "unsupported non-HTTPS source" | "missing-host source" => {
+                        let PlanningError::UnsupportedFetchContentSource { action, .. } = error
+                        else {
+                            panic!("source `{source}` should reject as unsupported")
+                        };
+                        assert_eq!(action, "download");
+                    }
+                    "invalid relative source" | "malformed source" => {
+                        let PlanningError::InvalidFetchContentSourceUrl { action, value, .. } =
+                            error
+                        else {
+                            panic!("source `{source}` should reject as malformed")
+                        };
+                        assert_eq!(action, "download");
+                        assert_eq!(value, source);
+                    }
+                    "authenticated source" => {
+                        let PlanningError::AuthenticatedFetchContentSource { action, .. } = error
+                        else {
+                            panic!("source `{source}` should reject as authenticated")
+                        };
+                        assert_eq!(action, "download");
+                    }
                     _ => unreachable!("test source has an expected error variant"),
                 }
             }
@@ -1346,10 +1367,15 @@ mod tests {
             )
             .expect_err("URL target should fail");
 
-            assert!(matches!(
-                error,
-                PlanningError::UnsupportedFetchContentTarget { .. }
-            ));
+            assert_eq!(
+                error.to_string(),
+                "selected job `action:download` field `target` must be a native local path, not URL `https://example.test/config.toml`"
+            );
+            let PlanningError::UnsupportedFetchContentTarget { action, target } = error else {
+                panic!("URL target should reject as unsupported")
+            };
+            assert_eq!(action, "download");
+            assert_eq!(target, "https://example.test/config.toml");
         }
     }
 }
