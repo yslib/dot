@@ -5,9 +5,9 @@ use crate::plan::{
     PlannedProvider, PlannedProviderInstall,
 };
 use crate::report::{
-    ActionInfo, ActionItem, CommandInfo, CommandReport, ItemStatus, LinkItem, PackageItem,
-    PackageSource, ProviderItem, ProviderPackageSource, ReportCommand, ReportContext, ReportItem,
-    ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ItemStatus, LinkItem,
+    PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand, ReportContext,
+    ReportItem, ReportStatus, ReportSubject,
 };
 
 pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
@@ -84,7 +84,7 @@ fn manual_package_item(package: &PlannedManualPackage) -> ReportItem {
         status: ItemStatus::Planned,
         subject: ReportSubject::Package(PackageItem {
             source: PackageSource::Manual {
-                install: ActionInfo::from_resolved_command(package.install()),
+                install: CommandActionInfo::from_resolved(package.install()),
             },
         }),
         evidence: Vec::new(),

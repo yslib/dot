@@ -179,22 +179,17 @@ fn subject_columns(item: &ReportItem) -> (&'static str, String, String) {
                 }
                 ("package", provider.clone(), details.join("; "))
             }
-            PackageSource::Manual {
-                install: ActionInfo::Command { check, exec },
-            } => (
+            PackageSource::Manual { install } => (
                 "package",
                 "manual".to_owned(),
-                action_detail(check.as_ref(), exec),
+                action_detail(install.check.as_ref(), &install.exec),
             ),
-            PackageSource::Manual {
-                install: ActionInfo::FetchContent { .. },
-            } => unreachable!("manual package installation must be a command"),
         },
         ReportSubject::Action(action) => match &action.action {
-            ActionInfo::Command { check, exec } => (
+            ActionInfo::Command(command) => (
                 "action",
                 "exec".to_owned(),
-                action_detail(check.as_ref(), exec),
+                action_detail(command.check.as_ref(), &command.exec),
             ),
             ActionInfo::FetchContent { source, target, .. } => (
                 "action",
