@@ -13,5 +13,7 @@ comfy-table = "7.2"
 directories = "6.0"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2"
+tempfile = "3.27"
 toml = "1.1"
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }
 url = "2.5"
