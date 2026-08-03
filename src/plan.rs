@@ -845,6 +845,7 @@ pub(crate) fn resolve_fetch_content_fields(
 }
 
 const _: () = {
+    // Keeps the pure resolver lint-reachable until Task 6 wires it into planning.
     let _ = resolve_fetch_content_fields;
 };
 
@@ -852,27 +853,31 @@ fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError>
     let source =
         Url::parse(value).map_err(|source| PlanningError::InvalidFetchContentSourceUrl {
             action: action.to_owned(),
-            value: value.to_owned(),
             source,
         })?;
-    let missing_https_host = source.scheme() == "https"
-        && value.split_once(':').is_some_and(|(scheme, remainder)| {
-            scheme.eq_ignore_ascii_case("https")
-                && (remainder.starts_with("///") || remainder == "//")
-        });
-    if source.scheme() != "https" || source.host_str().is_none() || missing_https_host {
-        return Err(PlanningError::UnsupportedFetchContentSource {
-            action: action.to_owned(),
-            source_url: source,
-        });
-    }
     if !source.username().is_empty() || source.password().is_some() {
         return Err(PlanningError::AuthenticatedFetchContentSource {
             action: action.to_owned(),
-            source_url: source,
+        });
+    }
+    if !has_explicit_https_authority(value)
+        || source.scheme() != "https"
+        || source.host_str().is_none()
+    {
+        return Err(PlanningError::UnsupportedFetchContentSource {
+            action: action.to_owned(),
         });
     }
     Ok(source)
+}
+
+fn has_explicit_https_authority(value: &str) -> bool {
+    value.split_once(':').is_some_and(|(scheme, remainder)| {
+        scheme.eq_ignore_ascii_case("https")
+            && remainder.strip_prefix("//").is_some_and(|authority| {
+                !authority.is_empty() && !authority.starts_with(['/', '\\'])
+            })
+    })
 }
 
 fn resolve_fetch_target(
@@ -887,7 +892,6 @@ fn resolve_fetch_target(
     if Url::parse(value).is_ok() {
         return Err(PlanningError::UnsupportedFetchContentTarget {
             action: action.to_owned(),
-            target: value.to_owned(),
         });
     }
     Ok(config_dir.join(target))
@@ -954,27 +958,22 @@ pub enum PlanningError {
         "selected job `action:{action}` is a fetch content action that is not yet wired for planning"
     )]
     FetchContentNotYetWired { action: String },
-    #[error(
-        "selected job `action:{action}` field `source` contains an invalid URL `{value}`: {source}"
-    )]
+    #[error("selected job `action:{action}` field `source` contains an invalid URL: {source}")]
     InvalidFetchContentSourceUrl {
         action: String,
-        value: String,
         #[source]
         source: url::ParseError,
     },
     #[error(
-        "selected job `action:{action}` field `source` must be a public HTTPS URL with a host: `{source_url}`"
+        "selected job `action:{action}` field `source` must be a public HTTPS URL with an explicit authority and host"
     )]
-    UnsupportedFetchContentSource { action: String, source_url: Url },
+    UnsupportedFetchContentSource { action: String },
+    #[error("selected job `action:{action}` field `source` must not include URL userinfo")]
+    AuthenticatedFetchContentSource { action: String },
     #[error(
-        "selected job `action:{action}` field `source` must not include URL userinfo: `{source_url}`"
+        "selected job `action:{action}` field `target` must be a native local path, not a URL locator"
     )]
-    AuthenticatedFetchContentSource { action: String, source_url: Url },
-    #[error(
-        "selected job `action:{action}` field `target` must be a native local path, not URL `{target}`"
-    )]
-    UnsupportedFetchContentTarget { action: String, target: String },
+    UnsupportedFetchContentTarget { action: String },
     #[error(
         "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
         .target.display()
@@ -1092,6 +1091,24 @@ mod tests {
                 planned.source().as_str(),
                 "https://example.test/config.toml"
             );
+        }
+
+        #[test]
+        fn accepts_an_uppercase_https_scheme() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action("HTTPS://example.test/config.toml", "config.toml", None);
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("uppercase HTTPS scheme should resolve");
+
+            assert_eq!(planned.source().scheme(), "https");
         }
 
         #[test]
@@ -1305,6 +1322,10 @@ mod tests {
                     "https://user:password@example.test/config.toml",
                     "authenticated source",
                 ),
+                (
+                    "http://user:password@example.test/config.toml",
+                    "authenticated source",
+                ),
             ] {
                 let error = resolve_fetch(
                     &fetch_action(source, "config.toml", None),
@@ -1330,13 +1351,11 @@ mod tests {
                         assert_eq!(action, "download");
                     }
                     "invalid relative source" | "malformed source" => {
-                        let PlanningError::InvalidFetchContentSourceUrl { action, value, .. } =
-                            error
+                        let PlanningError::InvalidFetchContentSourceUrl { action, .. } = error
                         else {
                             panic!("source `{source}` should reject as malformed")
                         };
                         assert_eq!(action, "download");
-                        assert_eq!(value, source);
                     }
                     "authenticated source" => {
                         let PlanningError::AuthenticatedFetchContentSource { action, .. } = error
@@ -1351,13 +1370,73 @@ mod tests {
         }
 
         #[test]
-        fn rejects_url_targets() {
+        fn rejects_noncanonical_https_authority_spellings() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+
+            for source in [
+                "https:config.toml",
+                "https:/config.toml",
+                "https:///config.toml",
+                "https:////config.toml",
+                r"https:\\config.toml",
+                r"https://\config.toml",
+            ] {
+                let error = resolve_fetch(
+                    &fetch_action(source, "config.toml", None),
+                    &environment(&[]),
+                    &XdgPaths::default(),
+                    &entry_dir,
+                    &entity_dir,
+                )
+                .expect_err("noncanonical HTTPS authority spelling should fail");
+
+                assert!(matches!(
+                    &error,
+                    PlanningError::UnsupportedFetchContentSource { action, .. }
+                        if action == "download"
+                ));
+                assert_eq!(
+                    error.to_string(),
+                    "selected job `action:download` field `source` must be a public HTTPS URL with an explicit authority and host"
+                );
+            }
+        }
+
+        #[test]
+        fn locator_errors_do_not_disclose_source_userinfo() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+
+            for source in [
+                "https://account:topsecret@example.test/config.toml",
+                "http://account:topsecret@example.test/config.toml",
+                "https://account:topsecret@[::1",
+            ] {
+                let error = resolve_fetch(
+                    &fetch_action(source, "config.toml", None),
+                    &environment(&[]),
+                    &XdgPaths::default(),
+                    &entry_dir,
+                    &entity_dir,
+                )
+                .expect_err("credential-bearing source locator should fail");
+                let display = error.to_string();
+
+                assert!(display.contains("selected job `action:download` field `source`"));
+                assert!(!display.contains("account"));
+                assert!(!display.contains("topsecret"));
+            }
+        }
+
+        #[test]
+        fn rejects_url_targets_without_disclosing_userinfo() {
             let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
             let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
             let error = resolve_fetch(
                 &fetch_action(
                     "https://example.test/config.toml",
-                    "https://example.test/config.toml",
+                    "https://account:topsecret@example.test/config.toml",
                     None,
                 ),
                 &environment(&[]),
@@ -1369,13 +1448,14 @@ mod tests {
 
             assert_eq!(
                 error.to_string(),
-                "selected job `action:download` field `target` must be a native local path, not URL `https://example.test/config.toml`"
+                "selected job `action:download` field `target` must be a native local path, not a URL locator"
             );
-            let PlanningError::UnsupportedFetchContentTarget { action, target } = error else {
+            assert!(!error.to_string().contains("account"));
+            assert!(!error.to_string().contains("topsecret"));
+            let PlanningError::UnsupportedFetchContentTarget { action, .. } = error else {
                 panic!("URL target should reject as unsupported")
             };
             assert_eq!(action, "download");
-            assert_eq!(target, "https://example.test/config.toml");
         }
     }
 }
