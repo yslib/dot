@@ -6,8 +6,8 @@ use comfy_table::{
 };
 
 use crate::report::{
-    CommandInfo, CommandReport, DiagnosticLevel, EvidenceStage, ItemStatus, PackageSource,
-    ProviderPackageSource, ReportCommand, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, CommandInfo, CommandReport, DiagnosticLevel, EvidenceStage, ItemStatus,
+    PackageSource, ProviderPackageSource, ReportCommand, ReportItem, ReportStatus, ReportSubject,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -179,17 +179,29 @@ fn subject_columns(item: &ReportItem) -> (&'static str, String, String) {
                 }
                 ("package", provider.clone(), details.join("; "))
             }
-            PackageSource::Manual { install } => (
+            PackageSource::Manual {
+                install: ActionInfo::Command { check, exec },
+            } => (
                 "package",
                 "manual".to_owned(),
-                action_detail(install.check.as_ref(), &install.exec),
+                action_detail(check.as_ref(), exec),
+            ),
+            PackageSource::Manual {
+                install: ActionInfo::FetchContent { .. },
+            } => unreachable!("manual package installation must be a command"),
+        },
+        ReportSubject::Action(action) => match &action.action {
+            ActionInfo::Command { check, exec } => (
+                "action",
+                "exec".to_owned(),
+                action_detail(check.as_ref(), exec),
+            ),
+            ActionInfo::FetchContent { source, target, .. } => (
+                "action",
+                "fetch".to_owned(),
+                format!("{} → {}", source, target.display()),
             ),
         },
-        ReportSubject::Action(action) => (
-            "action",
-            "exec".to_owned(),
-            action_detail(action.action.check.as_ref(), &action.action.exec),
-        ),
         ReportSubject::Link(link) => (
             "link",
             "builtin".to_owned(),
