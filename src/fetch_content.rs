@@ -627,6 +627,59 @@ mod tests {
             .expect("directory symlink should be created");
     }
 
+    #[cfg(unix)]
+    struct PermissionGuard {
+        path: PathBuf,
+        original: fs::Permissions,
+    }
+
+    #[cfg(unix)]
+    impl PermissionGuard {
+        fn set(path: &Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            let original = fs::metadata(path)
+                .expect("guarded directory should be inspectable")
+                .permissions();
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))
+                .expect("guarded directory permissions should be changed");
+            Self {
+                path: path.to_owned(),
+                original,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PermissionGuard {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
+    #[cfg(unix)]
+    fn effective_uid() -> u32 {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+
+        // SAFETY: geteuid takes no arguments and has no memory-safety preconditions.
+        unsafe { geteuid() }
+    }
+
+    #[cfg(unix)]
+    fn drop_staging_helper_privileges() {
+        unsafe extern "C" {
+            fn setuid(uid: u32) -> i32;
+        }
+
+        assert_eq!(effective_uid(), 0, "staging helper should start as root");
+        // SAFETY: UID 65534 is passed by value and setuid has no pointer arguments.
+        let result = unsafe { setuid(65_534) };
+        assert_eq!(result, 0, "staging helper should drop root privileges");
+        assert_ne!(effective_uid(), 0, "staging helper must not remain root");
+    }
+
     #[test]
     fn missing_target_creates_missing_parents_and_returns_created() {
         let directory = tempdir().expect("temporary directory should be created");
@@ -864,6 +917,93 @@ mod tests {
         assert_eq!(error.stage(), FetchContentStage::Prepare);
         assert_eq!(transport.calls.get(), 0);
         assert!(error.source().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_file_creation_failure_preserves_existing_target_before_transport() {
+        use std::process::Command;
+
+        const HELPER_ENV: &str = "DOT_FETCH_STAGING_FAILURE_TARGET";
+        const HELPER_SENTINEL_ENV: &str = "DOT_FETCH_STAGING_FAILURE_HELPER";
+        const HELPER_SENTINEL: &str = "fetch-content-private-staging-helper-v1";
+        const HELPER_TEST: &str = "fetch_content::tests::staging_file_creation_failure_preserves_existing_target_before_transport";
+
+        if std::env::var_os(HELPER_SENTINEL_ENV).as_deref()
+            == Some(std::ffi::OsStr::new(HELPER_SENTINEL))
+        {
+            let target = std::env::var_os(HELPER_ENV)
+                .map(PathBuf::from)
+                .expect("staging failure helper target should be provided");
+            drop_staging_helper_privileges();
+            assert_staging_creation_failure(&target);
+            return;
+        }
+
+        let directory = tempfile::tempdir_in("/tmp")
+            .expect("world-traversable temporary root should be created");
+        let parent = directory.path().join("target-parent");
+        let target = parent.join("content");
+        fs::create_dir(&parent).expect("target parent should be created");
+        fs::write(&target, b"old").expect("existing target should be written");
+        let _outer_permissions = PermissionGuard::set(directory.path(), 0o755);
+        let _target_permissions = PermissionGuard::set(&target, 0o644);
+        let _parent_permissions = PermissionGuard::set(&parent, 0o555);
+
+        match NamedTempFile::new_in(&parent) {
+            Err(_) => assert_staging_creation_failure(&target),
+            Ok(probe) => {
+                drop(probe);
+                assert_eq!(
+                    effective_uid(),
+                    0,
+                    "only root may bypass read/execute-only directory permissions"
+                );
+                let status = Command::new(
+                    std::env::current_exe().expect("current test executable should be available"),
+                )
+                .arg("--exact")
+                .arg(HELPER_TEST)
+                .arg("--nocapture")
+                .env(HELPER_ENV, &target)
+                .env(HELPER_SENTINEL_ENV, HELPER_SENTINEL)
+                .current_dir("/")
+                .status()
+                .expect("unprivileged staging failure helper should start");
+                assert!(
+                    status.success(),
+                    "unprivileged staging failure helper failed"
+                );
+            }
+        }
+
+        assert_eq!(directory_entries(&parent), vec![target]);
+    }
+
+    #[cfg(unix)]
+    fn assert_staging_creation_failure(target: &Path) {
+        let transport = FakeTransport::bytes(b"new".to_vec());
+
+        let error = run(target, FetchContentConflict::Replace, &transport)
+            .expect_err("staging file creation should fail");
+
+        assert_eq!(error.stage(), FetchContentStage::Prepare);
+        assert!(matches!(
+            error.details.kind,
+            FetchContentErrorKind::Io {
+                operation: "create staging file",
+                ..
+            }
+        ));
+        assert_eq!(transport.calls.get(), 0);
+        assert_eq!(
+            fs::read(target).expect("existing target should remain readable"),
+            b"old"
+        );
+        assert_eq!(
+            directory_entries(target.parent().expect("target should have a parent")),
+            vec![target.to_owned()]
+        );
     }
 
     #[test]
