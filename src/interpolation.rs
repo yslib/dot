@@ -479,7 +479,6 @@ pub(crate) fn resolve_exec_action_with_fields(
     context: &ResolveContext<'_>,
 ) -> Result<ResolvedExecAction, ExecActionResolutionError> {
     Ok(ResolvedExecAction {
-        kind: action.kind,
         program: resolve_string_expression(&action.program, context)
             .map_err(ExecActionResolutionError::Program)?,
         args: action
@@ -523,7 +522,6 @@ pub(crate) fn resolve_provider_install_action_with_args(
     let args = evaluate_provider_install_args(args, context)?;
 
     Ok(ResolvedExecAction {
-        kind: action.kind,
         program: resolve_string_expression(&action.program, context)
             .map_err(ExecActionResolutionError::Program)?,
         args,
@@ -1025,7 +1023,6 @@ mod tests {
         let xdg = xdg_paths(&[(XdgPath::Documents, "/home/tester/Documents")]);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
         let action = ExecAction {
-            kind: None,
             program: "${env:PROBE}".into(),
             args: vec!["--config=${dot:config}".into(), "${xdg:documents}".into()],
             cwd: Some("${dot:cwd}".into()),
@@ -1201,7 +1198,6 @@ mod tests {
         let context = ResolveContext::new(&environment, dot_paths(), &xdg)
             .with_package(PackageContext::new(&names, &provider_args));
         let action = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
-            kind: None,
             program: "${env:PROVIDER}".into(),
             args: vec![
                 "install".into(),
@@ -1244,7 +1240,6 @@ mod tests {
         let context = ResolveContext::new(&environment, dot_paths(), &xdg)
             .with_package(PackageContext::new(&names, &provider_args));
         let action = ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
-            kind: None,
             program: "install".into(),
             args: vec!["prefix-${package:names}".into()],
             cwd: None,

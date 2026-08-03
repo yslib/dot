@@ -1,0 +1,6 @@
+[targets.test.platform]
+os = "linux"
+
+[targets.test.providers.tool]
+probe = { type = "exec", program = "tool", args = ["--version"] }
+install = { program = "tool", args = ["install", "${package:names}"] }

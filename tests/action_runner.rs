@@ -72,7 +72,6 @@ fn helper_action(mode: &str, state: &TempState) -> ResolvedExecAction {
     .collect::<BTreeMap<_, _>>();
 
     ResolvedExecAction {
-        kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
             .to_string_lossy()

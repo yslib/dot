@@ -123,7 +123,6 @@ impl PreparedCommand {
     ///
     /// let source_action =
     ///     ExecAction::<StringExpressionSource, StringExpressionSource> {
-    ///         kind: None,
     ///         program: "echo".into(),
     ///         args: vec!["${env:HOME}".into()],
     ///         cwd: None,

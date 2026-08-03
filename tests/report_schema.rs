@@ -21,14 +21,12 @@ fn command(program: &str, args: &[&str]) -> CommandInfo {
 #[test]
 fn command_info_distinguishes_source_spelling_from_resolved_values() {
     let source = SourceExecAction {
-        kind: None,
         program: "${env:PROGRAM}".into(),
         args: vec!["--root=${env:HOME}".into()],
         cwd: Some("${dot:cwd}".into()),
         env: None,
     };
     let resolved = ResolvedExecAction {
-        kind: None,
         program: "tool".into(),
         args: vec!["--root=/home/tester".into()],
         cwd: Some("/work".into()),

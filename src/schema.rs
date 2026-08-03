@@ -748,8 +748,6 @@ impl<S> Default for EnvironmentPatch<S> {
     bound(deserialize = "S: Deserialize<'de>, A: Deserialize<'de>")
 )]
 pub struct ExecAction<S = StringExpressionSource, A = S> {
-    #[serde(rename = "type")]
-    pub kind: Option<ExecActionType>,
     pub program: S,
     #[serde(default)]
     pub args: Vec<A>,
@@ -760,12 +758,6 @@ pub struct ExecAction<S = StringExpressionSource, A = S> {
 pub type SourceExecAction = ExecAction<StringExpressionSource, StringExpressionSource>;
 pub type ResolvedEnvironmentPatch = EnvironmentPatch<ResolvedString>;
 pub type ResolvedExecAction = ExecAction<ResolvedString, ResolvedString>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ExecActionType {
-    Exec,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]

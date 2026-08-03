@@ -82,7 +82,6 @@ fn variables(values: &[(&str, String)]) -> BTreeMap<EnvironmentName, StringExpre
 
 fn helper_action(mode: &str, state: &TempState) -> ExecAction {
     ExecAction {
-        kind: None,
         program: env::current_exe()
             .expect("test executable should have a path")
             .to_string_lossy()
@@ -126,7 +125,6 @@ fn provider(probe: ExecAction, ensure: Vec<ExecAction>) -> Provider {
         }),
         ensure: (!ensure.is_empty()).then_some(OneOrMany::Many(ensure)),
         install: ExecAction::<StringExpressionSource, ProviderInstallArgSource> {
-            kind: None,
             program: "unused-install".into(),
             args: Vec::new(),
             cwd: None,
