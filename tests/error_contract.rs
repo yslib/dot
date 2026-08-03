@@ -238,9 +238,15 @@ fn planning_errors_expose_their_wrapper_errors() {
         provider: "provider".to_owned(),
         source: preparation_error(),
     };
+    let invalid_fetch_content_source = PlanningError::InvalidFetchContentSourceUrl {
+        action: "fetch".to_owned(),
+        value: "https://[::1".to_owned(),
+        source: url::Url::parse("https://[::1").expect_err("test URL should be invalid"),
+    };
 
     assert_source_is::<InterpolationError>(&interpolation);
     assert_source_is::<CommandPreparationError>(&environment_patch);
+    assert_source_is::<url::ParseError>(&invalid_fetch_content_source);
 }
 
 #[test]
@@ -460,6 +466,20 @@ fn source_less_planning_errors_have_no_source() {
         },
         PlanningError::FetchContentNotYetWired {
             action: "remote-config".to_owned(),
+        },
+        PlanningError::UnsupportedFetchContentSource {
+            action: "remote-config".to_owned(),
+            source_url: url::Url::parse("http://example.test/config.toml")
+                .expect("test URL should parse"),
+        },
+        PlanningError::AuthenticatedFetchContentSource {
+            action: "remote-config".to_owned(),
+            source_url: url::Url::parse("https://user@example.test/config.toml")
+                .expect("test URL should parse"),
+        },
+        PlanningError::UnsupportedFetchContentTarget {
+            action: "remote-config".to_owned(),
+            target: "https://example.test/config.toml".to_owned(),
         },
         PlanningError::RelativeLinkTarget {
             link: "link".to_owned(),

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use url::Url;
+
 use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
     DotPaths, ExecActionResolutionError, InterpolationError, PackageContext, ResolveContext,
@@ -12,9 +14,9 @@ use crate::job::{JobId, JobSelection, JobSelector};
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    Action, Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider,
-    ProviderPackage, ResolvedCommandAction, ResolvedEnvironmentPatch, ResolvedExecAction,
-    SelectorIdentifier, SourceCommandAction, SourceExecAction,
+    Action, FetchContentAction, FetchContentConflict, Identifier, LinkConflict, LinkMissingParent,
+    OneOrMany, Package, Provider, ProviderPackage, ResolvedCommandAction, ResolvedEnvironmentPatch,
+    ResolvedExecAction, SelectorIdentifier, SourceCommandAction, SourceExecAction,
 };
 
 #[derive(Debug)]
@@ -254,6 +256,35 @@ impl PlannedAction {
 
     pub fn action(&self) -> &ResolvedCommandAction {
         &self.action
+    }
+}
+
+#[derive(Debug)]
+pub struct PlannedFetchContentAction {
+    source: Url,
+    target: PathBuf,
+    on_conflict: FetchContentConflict,
+}
+
+impl PlannedFetchContentAction {
+    pub(crate) fn new(source: Url, target: PathBuf, on_conflict: FetchContentConflict) -> Self {
+        Self {
+            source,
+            target,
+            on_conflict,
+        }
+    }
+
+    pub fn source(&self) -> &Url {
+        &self.source
+    }
+
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    pub fn on_conflict(&self) -> FetchContentConflict {
+        self.on_conflict
     }
 }
 
@@ -785,6 +816,79 @@ fn resolve_exec_action_fields(
         .map_err(|error| exec_action_field_error(error, prefix))
 }
 
+pub fn resolve_fetch_content_fields(
+    action_id: &SelectorIdentifier,
+    action: &FetchContentAction,
+    context: &ResolveContext<'_>,
+    config_dir: &Path,
+) -> Result<PlannedFetchContentAction, PlanningError> {
+    let action_name = action_id.to_string();
+    let job = JobId::Action(action_id.clone());
+    let source = resolve_string_expression(&action.source, context).map_err(|source| {
+        PlanningError::Interpolation {
+            context: selected_field_context(&job, "source"),
+            source,
+        }
+    })?;
+    let target = resolve_string_expression(&action.target, context).map_err(|source| {
+        PlanningError::Interpolation {
+            context: selected_field_context(&job, "target"),
+            source,
+        }
+    })?;
+
+    Ok(PlannedFetchContentAction::new(
+        resolve_fetch_source(&action_name, source.value())?,
+        resolve_fetch_target(&action_name, target.value(), config_dir)?,
+        action.on_conflict.unwrap_or_default(),
+    ))
+}
+
+fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError> {
+    let source =
+        Url::parse(value).map_err(|source| PlanningError::InvalidFetchContentSourceUrl {
+            action: action.to_owned(),
+            value: value.to_owned(),
+            source,
+        })?;
+    let missing_https_host = source.scheme() == "https"
+        && value.split_once(':').is_some_and(|(scheme, remainder)| {
+            scheme.eq_ignore_ascii_case("https")
+                && (remainder.starts_with("///") || remainder == "//")
+        });
+    if source.scheme() != "https" || source.host_str().is_none() || missing_https_host {
+        return Err(PlanningError::UnsupportedFetchContentSource {
+            action: action.to_owned(),
+            source_url: source,
+        });
+    }
+    if !source.username().is_empty() || source.password().is_some() {
+        return Err(PlanningError::AuthenticatedFetchContentSource {
+            action: action.to_owned(),
+            source_url: source,
+        });
+    }
+    Ok(source)
+}
+
+fn resolve_fetch_target(
+    action: &str,
+    value: &str,
+    config_dir: &Path,
+) -> Result<PathBuf, PlanningError> {
+    let target = PathBuf::from(value);
+    if target.is_absolute() {
+        return Ok(target);
+    }
+    if Url::parse(value).is_ok() {
+        return Err(PlanningError::UnsupportedFetchContentTarget {
+            action: action.to_owned(),
+            target: value.to_owned(),
+        });
+    }
+    Ok(config_dir.join(target))
+}
+
 fn nested_field(prefix: &str, field: &str) -> String {
     if prefix.is_empty() {
         field.to_owned()
@@ -847,6 +951,27 @@ pub enum PlanningError {
     )]
     FetchContentNotYetWired { action: String },
     #[error(
+        "selected job `action:{action}` field `source` contains an invalid URL `{value}`: {source}"
+    )]
+    InvalidFetchContentSourceUrl {
+        action: String,
+        value: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error(
+        "selected job `action:{action}` field `source` must be a public HTTPS URL with a host: `{source_url}`"
+    )]
+    UnsupportedFetchContentSource { action: String, source_url: Url },
+    #[error(
+        "selected job `action:{action}` field `source` must not include URL userinfo: `{source_url}`"
+    )]
+    AuthenticatedFetchContentSource { action: String, source_url: Url },
+    #[error(
+        "selected job `action:{action}` field `target` must be a native local path, not URL `{target}`"
+    )]
+    UnsupportedFetchContentTarget { action: String, target: String },
+    #[error(
         "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
         .target.display()
     )]
@@ -872,4 +997,359 @@ pub enum ExecutionPlanError {
 
     #[error("{0}")]
     Planning(#[from] PlanningError),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use crate::action::ExecutionEnvironment;
+    use crate::interpolation::{DotPaths, ResolveContext, XdgPaths};
+    use crate::schema::{
+        EnvironmentName, FetchContentAction, FetchContentConflict, ResolvedEnvironmentPatch,
+        ResolvedString, SelectorIdentifier, StringExpressionSource,
+    };
+
+    use super::{PlanningError, resolve_fetch_content_fields};
+
+    fn environment(variables: &[(&str, &str)]) -> ExecutionEnvironment {
+        let patch = ResolvedEnvironmentPatch {
+            path_prepend: None,
+            path_append: None,
+            variables: variables
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        EnvironmentName::new(*name).expect("test variable name should be valid"),
+                        ResolvedString::from(*value),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+        };
+        let mut environment = ExecutionEnvironment::empty();
+        environment
+            .apply_patch(&patch)
+            .expect("test environment patch should apply");
+        environment
+    }
+
+    fn dot_paths<'a>(entry_dir: &'a Path, entity_dir: &'a Path) -> DotPaths<'a> {
+        DotPaths::new(entry_dir, entry_dir, entity_dir, entity_dir, entry_dir)
+    }
+
+    fn fetch_action(
+        source: &str,
+        target: &str,
+        on_conflict: Option<FetchContentConflict>,
+    ) -> FetchContentAction {
+        FetchContentAction {
+            source: StringExpressionSource::from(source),
+            target: StringExpressionSource::from(target),
+            on_conflict,
+        }
+    }
+
+    fn resolve_fetch(
+        action: &FetchContentAction,
+        environment: &ExecutionEnvironment,
+        xdg: &XdgPaths,
+        entry_dir: &Path,
+        entity_dir: &Path,
+    ) -> Result<super::PlannedFetchContentAction, PlanningError> {
+        let context = ResolveContext::new(environment, dot_paths(entry_dir, entity_dir), xdg);
+        resolve_fetch_content_fields(
+            &SelectorIdentifier::new("download").expect("test action id should be valid"),
+            action,
+            &context,
+            entry_dir,
+        )
+    }
+
+    mod fetch_content {
+        use super::*;
+
+        #[test]
+        fn accepts_a_public_absolute_https_source() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action("https://example.test/config.toml", "configs/app.toml", None);
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("public HTTPS source should resolve");
+
+            assert_eq!(
+                planned.source().as_str(),
+                "https://example.test/config.toml"
+            );
+        }
+
+        #[test]
+        fn defaults_conflict_policy_to_error() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action("https://example.test/config.toml", "config.toml", None);
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("fetch action should resolve");
+
+            assert_eq!(planned.on_conflict(), FetchContentConflict::Error);
+        }
+
+        #[test]
+        fn preserves_explicit_conflict_policy() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+
+            for conflict in [FetchContentConflict::Error, FetchContentConflict::Replace] {
+                let action = fetch_action(
+                    "https://example.test/config.toml",
+                    "config.toml",
+                    Some(conflict),
+                );
+                let planned = resolve_fetch(
+                    &action,
+                    &environment(&[]),
+                    &XdgPaths::default(),
+                    &entry_dir,
+                    &entity_dir,
+                )
+                .expect("fetch action should resolve");
+
+                assert_eq!(planned.on_conflict(), conflict);
+            }
+        }
+
+        #[test]
+        fn retains_an_absolute_native_target() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let target = std::env::temp_dir().join("dot-fetch-absolute-target.toml");
+            let action = fetch_action(
+                "https://example.test/config.toml",
+                &target.to_string_lossy(),
+                None,
+            );
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("absolute native target should resolve");
+
+            assert_eq!(planned.target(), target);
+        }
+
+        #[test]
+        fn joins_a_relative_target_to_the_config_entry_directory() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action("https://example.test/config.toml", "configs/app.toml", None);
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("relative target should resolve");
+
+            assert_eq!(planned.target(), entry_dir.join("configs/app.toml"));
+        }
+
+        #[test]
+        fn resolves_real_config_directory_targets_from_the_entity_directory() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action(
+                "https://example.test/config.toml",
+                "${dot:real_config_dir}/configs/app.toml",
+                None,
+            );
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("dot real config directory target should resolve");
+
+            assert_eq!(planned.target(), entity_dir.join("configs/app.toml"));
+            assert_ne!(planned.target(), entry_dir.join("configs/app.toml"));
+        }
+
+        #[test]
+        fn resolves_environment_and_xdg_expressions() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let action = fetch_action("${env:FETCH_SOURCE}", "${xdg:home}/dot-fetch.toml", None);
+
+            let planned = resolve_fetch(
+                &action,
+                &environment(&[("FETCH_SOURCE", "https://example.test/config.toml")]),
+                &XdgPaths::detect(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect("environment and XDG expressions should resolve");
+
+            assert_eq!(
+                planned.source().as_str(),
+                "https://example.test/config.toml"
+            );
+            assert!(planned.target().is_absolute());
+            assert!(planned.target().ends_with("dot-fetch.toml"));
+        }
+
+        #[test]
+        fn reports_source_environment_interpolation_with_canonical_action_context() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let error = resolve_fetch(
+                &fetch_action("${env:MISSING_SOURCE}", "config.toml", None),
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect_err("missing source environment variable should fail");
+
+            assert_eq!(
+                error.to_string(),
+                "failed to resolve selected job `action:download` field `source`: environment variable `MISSING_SOURCE` is not defined"
+            );
+        }
+
+        #[test]
+        fn reports_target_dot_interpolation_with_canonical_action_context() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let error = resolve_fetch(
+                &fetch_action(
+                    "https://example.test/config.toml",
+                    "${dot:not_a_path}",
+                    None,
+                ),
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect_err("invalid dot resolver payload should fail");
+
+            assert_eq!(
+                error.to_string(),
+                "failed to resolve selected job `action:download` field `target`: invalid payload `not_a_path` for resolver `dot`"
+            );
+        }
+
+        #[test]
+        fn reports_target_xdg_interpolation_with_canonical_action_context() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let error = resolve_fetch(
+                &fetch_action(
+                    "https://example.test/config.toml",
+                    "${xdg:home}/dot-fetch.toml",
+                    None,
+                ),
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect_err("unavailable XDG path should fail");
+
+            assert_eq!(
+                error.to_string(),
+                "failed to resolve selected job `action:download` field `target`: path value `home` is unavailable"
+            );
+        }
+
+        #[test]
+        fn rejects_disallowed_source_locators() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+
+            for (source, expected) in [
+                (
+                    "http://example.test/config.toml",
+                    "unsupported non-HTTPS source",
+                ),
+                ("configs/app.toml", "invalid relative source"),
+                ("https://[::1", "malformed source"),
+                ("https:///config.toml", "missing-host source"),
+                (
+                    "https://user:password@example.test/config.toml",
+                    "authenticated source",
+                ),
+            ] {
+                let error = resolve_fetch(
+                    &fetch_action(source, "config.toml", None),
+                    &environment(&[]),
+                    &XdgPaths::default(),
+                    &entry_dir,
+                    &entity_dir,
+                )
+                .expect_err("disallowed source locator should fail");
+
+                match expected {
+                    "unsupported non-HTTPS source" | "missing-host source" => assert!(matches!(
+                        error,
+                        PlanningError::UnsupportedFetchContentSource { .. }
+                    )),
+                    "invalid relative source" | "malformed source" => assert!(matches!(
+                        error,
+                        PlanningError::InvalidFetchContentSourceUrl { .. }
+                    )),
+                    "authenticated source" => assert!(matches!(
+                        error,
+                        PlanningError::AuthenticatedFetchContentSource { .. }
+                    )),
+                    _ => unreachable!("test source has an expected error variant"),
+                }
+            }
+        }
+
+        #[test]
+        fn rejects_url_targets() {
+            let entry_dir = std::env::temp_dir().join("dot-fetch-entry");
+            let entity_dir = std::env::temp_dir().join("dot-fetch-entity");
+            let error = resolve_fetch(
+                &fetch_action(
+                    "https://example.test/config.toml",
+                    "https://example.test/config.toml",
+                    None,
+                ),
+                &environment(&[]),
+                &XdgPaths::default(),
+                &entry_dir,
+                &entity_dir,
+            )
+            .expect_err("URL target should fail");
+
+            assert!(matches!(
+                error,
+                PlanningError::UnsupportedFetchContentTarget { .. }
+            ));
+        }
+    }
 }
