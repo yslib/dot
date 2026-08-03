@@ -6,7 +6,7 @@ use dot::manifest::{
     EffectiveManifest, ManifestError, ManifestJobRef, profile_entries, target_entries,
 };
 use dot::platform::PlatformInfo;
-use dot::schema::{Config, Package, ProviderPackage, SelectorIdentifier};
+use dot::schema::{Action, Config, Package, ProviderPackage, SelectorIdentifier};
 use support::fixture;
 
 fn parse_fixture(name: &str) -> Config {
@@ -376,15 +376,12 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
         manifest.links()["shared"].source.source_spelling(),
         "desktop-source"
     );
-    assert_eq!(
-        manifest.actions()["configure"]
-            .exec
-            .program
-            .source_spelling(),
-        "desktop-exec"
-    );
+    let Action::Command(configure) = &manifest.actions()["configure"] else {
+        panic!("configure should remain a command action");
+    };
+    assert_eq!(configure.exec.program.source_spelling(), "desktop-exec");
     assert!(
-        manifest.actions()["configure"].check.is_none(),
+        configure.check.is_none(),
         "a child action replaces the complete root action"
     );
 }
@@ -406,7 +403,10 @@ fn selecting_no_profile_uses_only_the_target_root() {
         manifest.links()["shared"].source.source_spelling(),
         "root-source"
     );
-    assert!(manifest.actions()["configure"].check.is_some());
+    let Action::Command(configure) = &manifest.actions()["configure"] else {
+        panic!("configure should remain a command action");
+    };
+    assert!(configure.check.is_some());
 }
 
 #[test]

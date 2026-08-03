@@ -1,11 +1,12 @@
 mod support;
 
 use dot::schema::{
-    Config, EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError, Identifier,
-    LinkConflict, LinkMissingParent, ListType, LiteralStringSource, OneOrMany, Package,
-    ParsedStringForm, ParsedTemplatePart, ProviderInstallArgSource, ProviderPackage, RecordTypeId,
-    ResolvedEnvironmentPatch, ResolvedString, SchemaType, SchemaTypeMarker, SelectorIdentifier,
-    StringExpressionSource, StringKeyType, StringRefinementTypeId, StringType,
+    Action, Config, EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError,
+    FetchContentConflict, Identifier, LinkConflict, LinkMissingParent, ListType,
+    LiteralStringSource, OneOrMany, Package, ParsedStringForm, ParsedTemplatePart,
+    ProviderInstallArgSource, ProviderPackage, RecordTypeId, ResolvedEnvironmentPatch,
+    ResolvedString, SchemaType, SchemaTypeMarker, SelectorIdentifier, StringExpressionSource,
+    StringKeyType, StringRefinementTypeId, StringType,
 };
 
 use support::fixture;
@@ -280,6 +281,23 @@ fn deserializes_the_complete_schema() {
     assert_eq!(link.on_conflict, Some(LinkConflict::ReplaceLink));
     assert_eq!(link.on_missing_parent, Some(LinkMissingParent::Create));
 
+    let Action::Command(setup) = &target.actions["setup"] else {
+        panic!("setup should be a command action");
+    };
+    assert_eq!(setup.exec.program.source_spelling(), "touch");
+    let Action::FetchContent(remote_config) = &target.actions["remote-config"] else {
+        panic!("remote-config should be a fetch content action");
+    };
+    assert_eq!(
+        remote_config.source.source_spelling(),
+        "https://example.com/config.toml"
+    );
+    assert_eq!(remote_config.target.source_spelling(), "configs/app.toml");
+    assert_eq!(
+        remote_config.on_conflict,
+        Some(FetchContentConflict::Replace)
+    );
+
     let laptop = &target.profiles["desktop"].profiles["laptop"];
     let power = &laptop.links["power"];
     assert_eq!(power.on_conflict, Some(LinkConflict::Error));
@@ -379,6 +397,29 @@ fn rejects_invalid_fixed_literals() {
 #[test]
 fn rejects_a_package_with_both_provider_and_manual_install() {
     let input = fixture::read("schema/invalid-mixed-package-install.toml");
+
+    assert!(toml::from_str::<Config>(&input).is_err());
+}
+
+#[test]
+fn rejects_invalid_fetch_content_action_shapes() {
+    for fixture_name in [
+        "schema/invalid-mixed-action.toml",
+        "schema/invalid-incomplete-fetch-action.toml",
+        "schema/invalid-fetch-action-unknown-field.toml",
+        "schema/invalid-fetch-conflict.toml",
+    ] {
+        let input = fixture::read(fixture_name);
+        assert!(
+            toml::from_str::<Config>(&input).is_err(),
+            "{fixture_name} must fail"
+        );
+    }
+}
+
+#[test]
+fn rejects_a_fetch_content_shape_as_a_manual_package_install() {
+    let input = fixture::read("schema/invalid-manual-fetch-install.toml");
 
     assert!(toml::from_str::<Config>(&input).is_err());
 }

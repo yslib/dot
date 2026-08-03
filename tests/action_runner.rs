@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dot::action::ExecutionEnvironment;
 use dot::action_runner::{ActionOutcome, ActionRunner, ActionStage};
 use dot::schema::{
-    EnvironmentName, ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString,
+    EnvironmentName, ResolvedCommandAction, ResolvedEnvironmentPatch, ResolvedExecAction,
+    ResolvedString,
 };
 
 static NEXT_STATE: AtomicU64 = AtomicU64::new(0);
@@ -91,8 +92,8 @@ fn helper_action(mode: &str, state: &TempState) -> ResolvedExecAction {
     }
 }
 
-fn action(check: Option<ResolvedExecAction>, exec: ResolvedExecAction) -> ResolvedAction {
-    ResolvedAction { check, exec }
+fn action(check: Option<ResolvedExecAction>, exec: ResolvedExecAction) -> ResolvedCommandAction {
+    ResolvedCommandAction { check, exec }
 }
 
 #[test]

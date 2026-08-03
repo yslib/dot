@@ -237,6 +237,8 @@ fn list_jobs_inspects_unresolved_effective_jobs_without_provider_rows() {
             "package:bundle\tpackage\tbundle\tsystem\tbat,fd,fzf\n",
             "package:manual\tpackage\tmanual\tmanual\tmanual\\\\runner\\tphase\n",
             "action:configure\taction\tconfigure\texec\tconfigure\\nrunner\n",
+            "action:remote-config\taction\tremote-config\tfetch\t",
+            "https://example.com/config.toml -> configs/app.toml\n",
             "link:config\tlink\tconfig\tbuiltin\thome\\\\config -> ",
             "${env:HOME}/.config/tool\n",
         )
@@ -254,9 +256,36 @@ fn list_jobs_merges_a_nested_profile_in_canonical_job_order() {
             "package:manual\tpackage\tmanual\tmanual\tmanual\\\\runner\\tphase\n",
             "action:configure\taction\tconfigure\texec\tconfigure\\nrunner\n",
             "action:laptop\taction\tlaptop\texec\tlaptop-runner\n",
+            "action:remote-config\taction\tremote-config\tfetch\t",
+            "https://example.com/config.toml -> configs/app.toml\n",
             "link:config\tlink\tconfig\tbuiltin\thome\\\\config -> ",
             "${env:HOME}/.config/tool\n",
         )
+    );
+}
+
+#[test]
+fn list_jobs_preserves_an_unresolved_fetch_source_with_a_missing_environment_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["list", "jobs", "--target", "never", "--profile", "server"])
+        .arg("--config")
+        .arg(fixture::path("list/valid-catalog.toml"))
+        .env_remove("DOT_INTENTIONALLY_MISSING")
+        .output()
+        .expect("dot list jobs should start");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("list output should be UTF-8");
+    assert!(
+        stdout.contains(concat!(
+            "action:remote-config\taction\tremote-config\tfetch\t",
+            "${env:DOT_INTENTIONALLY_MISSING} -> configs/server.toml\n"
+        )),
+        "{stdout}"
     );
 }
 

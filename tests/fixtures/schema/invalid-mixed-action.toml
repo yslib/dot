@@ -1,0 +1,7 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.actions.broken]
+source = "https://example.com/config.toml"
+target = "configs/app.toml"
+exec = { program = "install" }

@@ -711,7 +711,7 @@ pub struct BatchProviderPackage {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManualPackage {
-    pub install: Action,
+    pub install: CommandAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -783,14 +783,38 @@ pub enum LinkMissingParent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Action<S = StringExpressionSource, A = S> {
+    Command(CommandAction<S, A>),
+    FetchContent(FetchContentAction<S>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(
     deny_unknown_fields,
     bound(deserialize = "S: Deserialize<'de>, A: Deserialize<'de>")
 )]
-pub struct Action<S = StringExpressionSource, A = S> {
+pub struct CommandAction<S = StringExpressionSource, A = S> {
     pub check: Option<ExecAction<S, A>>,
     pub exec: ExecAction<S, A>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, bound(deserialize = "S: Deserialize<'de>"))]
+pub struct FetchContentAction<S = StringExpressionSource> {
+    pub source: S,
+    pub target: S,
+    pub on_conflict: Option<FetchContentConflict>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FetchContentConflict {
+    #[default]
+    Error,
+    Replace,
+}
+
 pub type SourceAction = Action<StringExpressionSource, StringExpressionSource>;
-pub type ResolvedAction = Action<ResolvedString, ResolvedString>;
+pub type SourceCommandAction = CommandAction<StringExpressionSource, StringExpressionSource>;
+pub type ResolvedCommandAction = CommandAction<ResolvedString, ResolvedString>;

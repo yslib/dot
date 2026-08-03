@@ -4,7 +4,7 @@ use crate::action::{
     CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
     PreparedCommand, ProcessExecutor,
 };
-use crate::schema::{ResolvedAction, ResolvedExecAction};
+use crate::schema::{ResolvedCommandAction, ResolvedExecAction};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionStage {
@@ -45,7 +45,7 @@ impl<'a> ActionRunner<'a> {
         Self { environment }
     }
 
-    pub fn run(&self, action: &ResolvedAction) -> Result<ActionOutcome, ActionRunError> {
+    pub fn run(&self, action: &ResolvedCommandAction) -> Result<ActionOutcome, ActionRunError> {
         let initial_check = match &action.check {
             None => None,
             Some(check) => {

@@ -174,6 +174,39 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
 }
 
 #[test]
+fn selected_fetch_content_action_returns_the_temporary_planning_error() {
+    let input = r#"
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.actions.remote-config]
+source = "https://example.com/config.toml"
+target = "configs/app.toml"
+"#;
+    let config: Config = toml::from_str(input).expect("test config should deserialize");
+    let target = selector_id("machine");
+    let platform = platform();
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("remote-config"))),
+        )
+        .expect_err("fetch planning is deliberately not wired yet");
+
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::FetchContentNotYetWired { action })
+            if action == "remote-config"
+    ));
+}
+
+#[test]
 fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
     let manifest = select_named_fixture(
         "dry-run/valid-deferred-expression-errors.toml",

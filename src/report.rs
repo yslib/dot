@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use crate::diagnostic::ErrorHint;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    LinkConflict, LinkMissingParent, ResolvedAction, ResolvedExecAction, SourceAction,
-    SourceExecAction,
+    LinkConflict, LinkMissingParent, ResolvedCommandAction, ResolvedExecAction,
+    SourceCommandAction, SourceExecAction,
 };
 
 /// Presentation-independent output produced by one dot command.
@@ -165,14 +165,14 @@ impl CommandInfo {
 }
 
 impl ActionInfo {
-    pub fn from_source(action: &SourceAction) -> Self {
+    pub fn from_source(action: &SourceCommandAction) -> Self {
         Self {
             check: action.check.as_ref().map(CommandInfo::from_source),
             exec: CommandInfo::from_source(&action.exec),
         }
     }
 
-    pub fn from_resolved(action: &ResolvedAction) -> Self {
+    pub fn from_resolved(action: &ResolvedCommandAction) -> Self {
         Self {
             check: action.check.as_ref().map(CommandInfo::from_resolved),
             exec: CommandInfo::from_resolved(&action.exec),

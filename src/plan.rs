@@ -12,9 +12,9 @@ use crate::job::{JobId, JobSelection, JobSelector};
 use crate::manifest::EffectiveManifest;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider, ProviderPackage,
-    ResolvedAction, ResolvedEnvironmentPatch, ResolvedExecAction, SelectorIdentifier, SourceAction,
-    SourceExecAction,
+    Action, Identifier, LinkConflict, LinkMissingParent, OneOrMany, Package, Provider,
+    ProviderPackage, ResolvedCommandAction, ResolvedEnvironmentPatch, ResolvedExecAction,
+    SelectorIdentifier, SourceCommandAction, SourceExecAction,
 };
 
 #[derive(Debug)]
@@ -220,7 +220,7 @@ pub struct PlannedProviderPackageBatch {
 #[derive(Debug)]
 pub struct PlannedManualPackage {
     id: SelectorIdentifier,
-    install: ResolvedAction,
+    install: ResolvedCommandAction,
 }
 
 impl PlannedManualPackage {
@@ -232,7 +232,7 @@ impl PlannedManualPackage {
         JobId::Package(self.id.clone())
     }
 
-    pub fn install(&self) -> &ResolvedAction {
+    pub fn install(&self) -> &ResolvedCommandAction {
         &self.install
     }
 }
@@ -240,7 +240,7 @@ impl PlannedManualPackage {
 #[derive(Debug)]
 pub struct PlannedAction {
     id: SelectorIdentifier,
-    action: ResolvedAction,
+    action: ResolvedCommandAction,
 }
 
 impl PlannedAction {
@@ -252,7 +252,7 @@ impl PlannedAction {
         JobId::Action(self.id.clone())
     }
 
-    pub fn action(&self) -> &ResolvedAction {
+    pub fn action(&self) -> &ResolvedCommandAction {
         &self.action
     }
 }
@@ -636,7 +636,7 @@ impl<'a> ExecutionPlanner<'a> {
                     return None;
                 };
                 Some(
-                    resolve_action_fields(&package.install, &context, "install")
+                    resolve_command_action_fields(&package.install, &context, "install")
                         .map(|install| PlannedManualPackage {
                             id: package_id.clone(),
                             install,
@@ -660,7 +660,12 @@ impl<'a> ExecutionPlanner<'a> {
             .iter()
             .filter(|(action_id, _)| selection.includes_action(action_id))
             .map(|(action_id, action)| {
-                resolve_action_fields(action, &context, "")
+                let Action::Command(action) = action else {
+                    return Err(PlanningError::FetchContentNotYetWired {
+                        action: action_id.to_string(),
+                    });
+                };
+                resolve_command_action_fields(action, &context, "")
                     .map(|action| PlannedAction {
                         id: action_id.clone(),
                         action,
@@ -756,12 +761,12 @@ fn exec_action_field_error(
     FieldInterpolationError { field, source }
 }
 
-fn resolve_action_fields(
-    action: &SourceAction,
+fn resolve_command_action_fields(
+    action: &SourceCommandAction,
     context: &ResolveContext<'_>,
     prefix: &str,
-) -> Result<ResolvedAction, FieldInterpolationError> {
-    Ok(ResolvedAction {
+) -> Result<ResolvedCommandAction, FieldInterpolationError> {
+    Ok(ResolvedCommandAction {
         check: action
             .check
             .as_ref()
@@ -837,6 +842,8 @@ pub enum PlanningError {
     EmptyPackageBatch { package: String },
     #[error("selected job `package:{package}` field `names` contains duplicate name `{name}`")]
     DuplicatePackageBatchName { package: String, name: String },
+    #[error("selected fetch content action `{action}` is not yet wired for planning")]
+    FetchContentNotYetWired { action: String },
     #[error(
         "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
         .target.display()

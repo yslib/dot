@@ -23,6 +23,11 @@ config = { source = "home/config", target = "${env:HOME}/.config/tool", on_confl
 check = { program = "test", args = ["-e", "/tmp/ready"] }
 exec = { program = "touch", args = ["/tmp/ready"] }
 
+[targets.workstation.actions.remote-config]
+source = "https://example.com/config.toml"
+target = "configs/app.toml"
+on_conflict = "replace"
+
 [targets.workstation.profiles.desktop.packages]
 compositor = { provider = "brew" }
 
