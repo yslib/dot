@@ -458,6 +458,9 @@ fn source_less_planning_errors_have_no_source() {
             package: "package".to_owned(),
             name: "name".to_owned(),
         },
+        PlanningError::FetchContentNotYetWired {
+            action: "remote-config".to_owned(),
+        },
         PlanningError::RelativeLinkTarget {
             link: "link".to_owned(),
             target: PathBuf::from("relative"),
@@ -467,6 +470,14 @@ fn source_less_planning_errors_have_no_source() {
     for error in &errors {
         assert_no_source(error);
     }
+    let fetch_content = errors
+        .iter()
+        .find(|error| matches!(error, PlanningError::FetchContentNotYetWired { .. }))
+        .expect("fetch content planning error should be covered");
+    assert_eq!(
+        fetch_content.to_string(),
+        "selected job `action:remote-config` is a fetch content action that is not yet wired for planning"
+    );
 }
 
 #[test]
