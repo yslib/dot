@@ -123,7 +123,7 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
                 status,
                 subject: ReportSubject::Package(PackageItem {
                     source: PackageSource::Manual {
-                        install: ActionInfo::from_resolved(package.install()),
+                        install: ActionInfo::from_resolved_command(package.install()),
                     },
                 }),
                 evidence,
@@ -135,7 +135,7 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
                 id: action.id().to_owned(),
                 status,
                 subject: ReportSubject::Action(ActionItem {
-                    action: ActionInfo::from_resolved(action.action()),
+                    action: ActionInfo::from_resolved_command(action.action()),
                 }),
                 evidence,
             }

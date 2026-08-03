@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crate::diagnostic::ErrorHint;
+use crate::plan::PlannedFetchContentAction;
 use crate::platform::PlatformInfo;
 use crate::schema::{
-    LinkConflict, LinkMissingParent, ResolvedCommandAction, ResolvedExecAction,
-    SourceCommandAction, SourceExecAction,
+    FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedCommandAction,
+    ResolvedExecAction, SourceCommandAction, SourceExecAction,
 };
 
 /// Presentation-independent output produced by one dot command.
@@ -118,9 +119,16 @@ pub struct LinkItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActionInfo {
-    pub check: Option<CommandInfo>,
-    pub exec: CommandInfo,
+pub enum ActionInfo {
+    Command {
+        check: Option<CommandInfo>,
+        exec: CommandInfo,
+    },
+    FetchContent {
+        source: String,
+        target: PathBuf,
+        on_conflict: FetchContentConflict,
+    },
 }
 
 /// Presentation-safe command data that deliberately excludes the inherited
@@ -165,17 +173,25 @@ impl CommandInfo {
 }
 
 impl ActionInfo {
-    pub fn from_source(action: &SourceCommandAction) -> Self {
-        Self {
+    pub fn from_source_command(action: &SourceCommandAction) -> Self {
+        Self::Command {
             check: action.check.as_ref().map(CommandInfo::from_source),
             exec: CommandInfo::from_source(&action.exec),
         }
     }
 
-    pub fn from_resolved(action: &ResolvedCommandAction) -> Self {
-        Self {
+    pub fn from_resolved_command(action: &ResolvedCommandAction) -> Self {
+        Self::Command {
             check: action.check.as_ref().map(CommandInfo::from_resolved),
             exec: CommandInfo::from_resolved(&action.exec),
+        }
+    }
+
+    pub fn from_fetch_content(action: &PlannedFetchContentAction) -> Self {
+        Self::FetchContent {
+            source: action.source().to_string(),
+            target: action.target().to_owned(),
+            on_conflict: action.on_conflict(),
         }
     }
 }

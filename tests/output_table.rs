@@ -9,7 +9,7 @@ use dot::report::{
     LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
     ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
-use dot::schema::{LinkConflict, LinkMissingParent};
+use dot::schema::{FetchContentConflict, LinkConflict, LinkMissingParent};
 
 fn command(program: &str, args: &[&str]) -> CommandInfo {
     CommandInfo {
@@ -73,7 +73,7 @@ fn report() -> CommandReport {
                 id: "setup-shell".to_owned(),
                 status: ItemStatus::Executed,
                 subject: ReportSubject::Action(ActionItem {
-                    action: ActionInfo {
+                    action: ActionInfo::Command {
                         check: None,
                         exec: command("sh", &["setup.sh"]),
                     },
@@ -152,12 +152,47 @@ fn renders_every_subject_through_one_dense_table() {
 }
 
 #[test]
+fn renders_fetch_content_as_an_action_with_fetch_facts() {
+    let mut report = report();
+    report.items.push(ReportItem {
+        id: "fetch-config".to_owned(),
+        status: ItemStatus::Planned,
+        subject: ReportSubject::Action(ActionItem {
+            action: ActionInfo::FetchContent {
+                source: "https://example.com/config.toml".to_owned(),
+                target: PathBuf::from("/resolved/configs/app.toml"),
+                on_conflict: FetchContentConflict::Replace,
+            },
+        }),
+        evidence: Vec::new(),
+    });
+
+    let mut output = Vec::new();
+    TableRenderer::new(false)
+        .render(&report, &mut output)
+        .expect("table should render");
+    let output = String::from_utf8(output).expect("table should be UTF-8");
+
+    assert!(
+        output.contains("│ action   ┆ fetch-config ┆ fetch"),
+        "fetch action row or VIA missing:\n{output}"
+    );
+    assert!(
+        output.contains("https://example.com/config.toml → /resolved/configs/app.toml"),
+        "fetch detail missing:\n{output}"
+    );
+}
+
+#[test]
 fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     let mut report = report();
     let ReportSubject::Action(action) = &mut report.items[3].subject else {
         panic!("fourth fixture item should be an action");
     };
-    action.action.exec.args = vec!["x".repeat(240)];
+    let ActionInfo::Command { exec, .. } = &mut action.action else {
+        panic!("fourth fixture action should be a command");
+    };
+    exec.args = vec!["x".repeat(240)];
 
     let mut output = Vec::new();
     TableRenderer::new(false)

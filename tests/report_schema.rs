@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dot::diagnostic::ErrorHint;
 use dot::platform::PlatformInfo;
@@ -8,7 +8,9 @@ use dot::report::{
     LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand,
     ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
-use dot::schema::{LinkConflict, LinkMissingParent, ResolvedExecAction, SourceExecAction};
+use dot::schema::{
+    FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedExecAction, SourceExecAction,
+};
 
 fn command(program: &str, args: &[&str]) -> CommandInfo {
     CommandInfo {
@@ -99,7 +101,7 @@ fn report_represents_each_logical_item_as_one_entry() {
             id: "setup-shell".to_owned(),
             status: ItemStatus::Executed,
             subject: ReportSubject::Action(ActionItem {
-                action: ActionInfo {
+                action: ActionInfo::Command {
                     check: None,
                     exec: command("sh", &["setup.sh"]),
                 },
@@ -138,6 +140,25 @@ fn report_represents_each_logical_item_as_one_entry() {
         ReportSubject::Package(PackageItem {
             source: PackageSource::Provider(ProviderPackageSource::Batch { names, .. }),
         }) if names == &["bat", "fd", "fzf"]
+    ));
+}
+
+#[test]
+fn action_info_represents_resolved_fetch_content_facts() {
+    let action = ActionInfo::FetchContent {
+        source: "https://example.com/config.toml".to_owned(),
+        target: PathBuf::from("/resolved/configs/app.toml"),
+        on_conflict: FetchContentConflict::Replace,
+    };
+
+    assert!(matches!(
+        action,
+        ActionInfo::FetchContent {
+            source,
+            target,
+            on_conflict: FetchContentConflict::Replace,
+        } if source == "https://example.com/config.toml"
+            && target == Path::new("/resolved/configs/app.toml")
     ));
 }
 

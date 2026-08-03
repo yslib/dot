@@ -84,7 +84,7 @@ fn manual_package_item(package: &PlannedManualPackage) -> ReportItem {
         status: ItemStatus::Planned,
         subject: ReportSubject::Package(PackageItem {
             source: PackageSource::Manual {
-                install: ActionInfo::from_resolved(package.install()),
+                install: ActionInfo::from_resolved_command(package.install()),
             },
         }),
         evidence: Vec::new(),
@@ -96,7 +96,7 @@ fn action_item(action: &PlannedAction) -> ReportItem {
         id: action.id().to_owned(),
         status: ItemStatus::Planned,
         subject: ReportSubject::Action(ActionItem {
-            action: ActionInfo::from_resolved(action.action()),
+            action: ActionInfo::from_resolved_command(action.action()),
         }),
         evidence: Vec::new(),
     }
