@@ -305,6 +305,44 @@ fn deserializes_the_complete_schema() {
 }
 
 #[test]
+fn fetch_content_conflict_literals_defaults_and_omission_are_distinct() {
+    #[derive(serde::Deserialize)]
+    struct Document {
+        action: Action,
+    }
+
+    fn deserialize_conflict(value: Option<&str>) -> Option<FetchContentConflict> {
+        let conflict = value
+            .map(|value| format!("on_conflict = {value:?}"))
+            .unwrap_or_default();
+        let input = format!(
+            r#"
+[action]
+source = "https://example.com/config.toml"
+target = "configs/app.toml"
+{conflict}
+"#
+        );
+        let document: Document = toml::from_str(&input).expect("fetch action should deserialize");
+        let Action::FetchContent(action) = document.action else {
+            panic!("source and target should select the fetch content variant");
+        };
+        action.on_conflict
+    }
+
+    assert_eq!(FetchContentConflict::default(), FetchContentConflict::Error);
+    assert_eq!(
+        deserialize_conflict(Some("error")),
+        Some(FetchContentConflict::Error)
+    );
+    assert_eq!(
+        deserialize_conflict(Some("replace")),
+        Some(FetchContentConflict::Replace)
+    );
+    assert_eq!(deserialize_conflict(None), None);
+}
+
+#[test]
 fn deserializes_strings_into_their_declared_schema_roles() {
     let input = fixture::read("schema/valid-string-roles.toml");
     let config: Config = toml::from_str(&input).expect("schema roles should deserialize");

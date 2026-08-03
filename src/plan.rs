@@ -842,7 +842,9 @@ pub enum PlanningError {
     EmptyPackageBatch { package: String },
     #[error("selected job `package:{package}` field `names` contains duplicate name `{name}`")]
     DuplicatePackageBatchName { package: String, name: String },
-    #[error("selected fetch content action `{action}` is not yet wired for planning")]
+    #[error(
+        "selected job `action:{action}` is a fetch content action that is not yet wired for planning"
+    )]
     FetchContentNotYetWired { action: String },
     #[error(
         "selected job `link:{link}` field `target` must be absolute after interpolation: `{}`",
