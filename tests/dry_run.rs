@@ -240,6 +240,14 @@ platform = { os = "linux" }
 source = "http://example.com/insecure"
 target = "https://example.com/not-a-local-target"
 
+[targets.machine.actions.empty-userinfo]
+source = "https://@example.com/config.toml"
+target = "configs/empty-userinfo.toml"
+
+[targets.machine.actions.empty-password-userinfo]
+source = "https://:@example.com/config.toml"
+target = "configs/empty-password-userinfo.toml"
+
 [targets.machine.actions.invalid-url]
 source = ":not-a-url"
 target = "configs/url.toml"
@@ -287,6 +295,21 @@ target = "configs/app.toml"
         ExecutionPlanError::Planning(PlanningError::UnsupportedFetchContentSource { action })
             if action == "broken"
     ));
+
+    for action in ["empty-userinfo", "empty-password-userinfo"] {
+        let error = planner
+            .plan(
+                &manifest,
+                &JobSelection::only(JobSelector::Action(selector_id(action))),
+            )
+            .expect_err("selected empty source userinfo should fail planning");
+        assert!(matches!(
+            error,
+            ExecutionPlanError::Planning(
+                PlanningError::AuthenticatedFetchContentSource { action: actual }
+            ) if actual == action
+        ));
+    }
 
     let error = planner
         .plan(
