@@ -1,22 +1,26 @@
 use crate::action::ExecutionEnvironment;
-use crate::action_runner::{ActionOutcome, ActionRunError, ActionRunner};
+use crate::action_runner::{CommandActionOutcome, CommandActionRunError, CommandActionRunner};
+use crate::fetch_content::{FetchContentRunner, UreqHttpsTransport};
+use crate::job_runner::ActionOutcome;
 use crate::link::{self, LinkPhaseError, LinkReport};
 use crate::plan::{
-    PlannedAction, PlannedLink, PlannedManualPackage, PlannedProvider, PlannedProviderInstall,
+    PlannedAction, PlannedActionKind, PlannedLink, PlannedManualPackage, PlannedProvider,
+    PlannedProviderInstall,
 };
 use crate::provider::{ProviderInstallStatus, ProviderRunner, ProviderStatus};
 
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct JobExecutor<'a> {
     provider_runner: ProviderRunner<'a>,
-    action_runner: ActionRunner<'a>,
+    command_action_runner: CommandActionRunner<'a>,
+    fetch_transport: UreqHttpsTransport,
 }
 
 impl<'a> JobExecutor<'a> {
-    pub(crate) const fn new(environment: &'a ExecutionEnvironment) -> Self {
+    pub(crate) fn new(environment: &'a ExecutionEnvironment) -> Self {
         Self {
             provider_runner: ProviderRunner::new(environment),
-            action_runner: ActionRunner::new(environment),
+            command_action_runner: CommandActionRunner::new(environment),
+            fetch_transport: UreqHttpsTransport::new(),
         }
     }
 
@@ -35,15 +39,19 @@ impl<'a> JobExecutor<'a> {
     pub(crate) fn install_manual_package(
         &self,
         package: &PlannedManualPackage,
-    ) -> Result<ActionOutcome, ActionRunError> {
-        self.action_runner.run(package.install())
+    ) -> Result<CommandActionOutcome, CommandActionRunError> {
+        self.command_action_runner.run(package.install())
     }
 
-    pub(crate) fn run_action(
-        &self,
-        action: &PlannedAction,
-    ) -> Result<ActionOutcome, ActionRunError> {
-        self.action_runner.run(action.action())
+    pub(crate) fn run_action(&self, action: &PlannedAction) -> ActionOutcome {
+        match action.kind() {
+            PlannedActionKind::Command(action) => {
+                ActionOutcome::Command(self.command_action_runner.run(action))
+            }
+            PlannedActionKind::FetchContent(action) => ActionOutcome::FetchContent(
+                FetchContentRunner::new(&self.fetch_transport).run(action),
+            ),
+        }
     }
 
     pub(crate) fn reconcile_links<'p>(

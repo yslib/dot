@@ -7,7 +7,7 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dot::action::ExecutionEnvironment;
-use dot::action_runner::{ActionOutcome, ActionRunner, ActionStage};
+use dot::action_runner::{ActionStage, CommandActionOutcome, CommandActionRunner};
 use dot::schema::{
     EnvironmentName, ResolvedCommandAction, ResolvedEnvironmentPatch, ResolvedExecAction,
     ResolvedString,
@@ -101,11 +101,11 @@ fn executes_an_action_without_a_check() {
     let state = TempState::new();
     let action = action(None, helper_action("exec-record", &state));
 
-    let outcome = ActionRunner::new(&ExecutionEnvironment::empty())
+    let outcome = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect("the action should execute");
 
-    let ActionOutcome::Executed {
+    let CommandActionOutcome::Executed {
         initial_check,
         exec,
         post_check,
@@ -129,11 +129,11 @@ fn skips_exec_when_the_initial_check_is_satisfied() {
         helper_action("exec-record", &state),
     );
 
-    let outcome = ActionRunner::new(&ExecutionEnvironment::empty())
+    let outcome = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect("a satisfied action should succeed");
 
-    let ActionOutcome::AlreadySatisfied { check } = outcome else {
+    let CommandActionOutcome::AlreadySatisfied { check } = outcome else {
         panic!("a ready check should skip exec");
     };
     assert_eq!(check.code(), Some(0));
@@ -149,11 +149,11 @@ fn executes_and_checks_again_when_the_initial_check_returns_one() {
         helper_action("exec-satisfy", &state),
     );
 
-    let outcome = ActionRunner::new(&ExecutionEnvironment::empty())
+    let outcome = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect("exec should satisfy the action");
 
-    let ActionOutcome::Executed {
+    let CommandActionOutcome::Executed {
         initial_check,
         exec,
         post_check,
@@ -175,7 +175,7 @@ fn rejects_an_initial_check_exit_other_than_zero_or_one() {
         helper_action("exec-record", &state),
     );
 
-    let error = ActionRunner::new(&ExecutionEnvironment::empty())
+    let error = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect_err("an invalid check exit should fail");
 
@@ -196,7 +196,7 @@ fn stops_before_post_check_when_exec_fails() {
         helper_action("exec-fail", &state),
     );
 
-    let error = ActionRunner::new(&ExecutionEnvironment::empty())
+    let error = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect_err("a failed exec should fail the action");
 
@@ -217,7 +217,7 @@ fn fails_when_post_check_is_not_satisfied() {
         helper_action("exec-record", &state),
     );
 
-    let error = ActionRunner::new(&ExecutionEnvironment::empty())
+    let error = CommandActionRunner::new(&ExecutionEnvironment::empty())
         .run(&action)
         .expect_err("post-check must verify the desired state");
 

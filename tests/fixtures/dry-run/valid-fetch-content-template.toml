@@ -1,0 +1,7 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.actions.remote-config]
+source = "https://192.0.2.1/unreachable"
+target = "__TARGET__"
+on_conflict = "replace"

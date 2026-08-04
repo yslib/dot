@@ -2,15 +2,20 @@ use std::path::Path;
 
 use super::{ExecutionCommandError, ExecutionRequest};
 use crate::action::ExecutionResult;
-use crate::action_runner::{ActionOutcome, ActionRunError, ActionStage};
+use crate::action_runner::{
+    ActionStage, CommandActionOutcome, CommandActionRunError, FetchContentOutcome,
+};
 use crate::config::LoadedConfig;
 use crate::diagnostic::lookup;
 use crate::interpolation::{DotPaths, XdgPaths};
-use crate::job_runner::{BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState};
+use crate::job_runner::{
+    ActionOutcome, BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState,
+};
 use crate::link::LinkOutcome;
 use crate::manifest::EffectiveManifest;
 use crate::plan::{
-    ExecutionPlan, ExecutionPlanner, PlannedJob, PlannedPackage, PlannedProviderInstall,
+    ExecutionPlan, ExecutionPlanner, PlannedActionKind, PlannedJob, PlannedPackage,
+    PlannedProviderInstall,
 };
 use crate::platform::PlatformInfo;
 use crate::provider::{
@@ -118,7 +123,7 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
             PlannedJob::Package(PlannedPackage::Manual(package)),
             JobState::Completed(JobOutcome::ManualPackage(result)),
         ) => {
-            let (status, evidence) = action_result(result, ItemStatus::Installed);
+            let (status, evidence) = command_action_result(result, ItemStatus::Installed);
             ReportItem {
                 id: package.id().to_owned(),
                 status,
@@ -131,12 +136,16 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
             }
         }
         (PlannedJob::Action(action), JobState::Completed(JobOutcome::Action(result))) => {
-            let (status, evidence) = action_result(result, ItemStatus::Executed);
+            let (status, evidence) = selected_action_result(result);
+            let action_info = match action.kind() {
+                PlannedActionKind::Command(action) => ActionInfo::from_resolved_command(action),
+                PlannedActionKind::FetchContent(action) => ActionInfo::from_fetch_content(action),
+            };
             ReportItem {
                 id: action.id().to_owned(),
                 status,
                 subject: ReportSubject::Action(ActionItem {
-                    action: ActionInfo::from_resolved_command(action.action()),
+                    action: action_info,
                 }),
                 evidence,
             }
@@ -278,12 +287,12 @@ fn link_item(
     report_link_item(link, status, evidence)
 }
 
-fn action_result(
-    result: &Result<ActionOutcome, ActionRunError>,
+fn command_action_result(
+    result: &Result<CommandActionOutcome, CommandActionRunError>,
     executed_status: ItemStatus,
 ) -> (ItemStatus, Vec<Evidence>) {
     match result {
-        Ok(ActionOutcome::AlreadySatisfied { check }) => (
+        Ok(CommandActionOutcome::AlreadySatisfied { check }) => (
             ItemStatus::Satisfied,
             vec![execution_evidence(
                 EvidenceStage::Check,
@@ -291,7 +300,7 @@ fn action_result(
                 Some("check passed; no action needed"),
             )],
         ),
-        Ok(ActionOutcome::Executed {
+        Ok(CommandActionOutcome::Executed {
             initial_check,
             exec,
             post_check,
@@ -313,6 +322,22 @@ fn action_result(
                 error.to_string(),
                 error.exit_result(),
             )],
+        ),
+    }
+}
+
+fn selected_action_result(result: &ActionOutcome) -> (ItemStatus, Vec<Evidence>) {
+    match result {
+        ActionOutcome::Command(result) => command_action_result(result, ItemStatus::Executed),
+        ActionOutcome::FetchContent(Ok(FetchContentOutcome::Created)) => {
+            (ItemStatus::Created, Vec::new())
+        }
+        ActionOutcome::FetchContent(Ok(FetchContentOutcome::Replaced)) => {
+            (ItemStatus::Replaced, Vec::new())
+        }
+        ActionOutcome::FetchContent(Err(error)) => (
+            ItemStatus::Failed,
+            vec![message_evidence(EvidenceStage::Fetch, error.to_string())],
         ),
     }
 }
@@ -569,6 +594,64 @@ mod tests {
         );
         assert_eq!(evidence.hints.len(), 1);
         assert_eq!(evidence.hints[0].code, "windows.symlink.privilege-required");
+    }
+
+    #[test]
+    fn fetch_success_outcomes_project_to_created_and_replaced_statuses() {
+        assert_eq!(
+            selected_action_result(&ActionOutcome::FetchContent(Ok(
+                FetchContentOutcome::Created
+            ))),
+            (ItemStatus::Created, Vec::new())
+        );
+        assert_eq!(
+            selected_action_result(&ActionOutcome::FetchContent(Ok(
+                FetchContentOutcome::Replaced
+            ))),
+            (ItemStatus::Replaced, Vec::new())
+        );
+    }
+
+    #[test]
+    fn fetch_failure_projects_failed_fetch_evidence_without_an_exit_code() {
+        let workspace = TempWorkspace::new();
+        fs::create_dir(workspace.path("fetch-target"))
+            .expect("directory target should force an offline preflight failure");
+        let manifest = workspace.write_manifest(
+            r#"
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.actions.remote-config]
+source = "https://192.0.2.1/unreachable"
+target = "${dot:config_dir}/fetch-target"
+on_conflict = "replace"
+"#,
+        );
+
+        let report = run(&manifest, &request()).expect("fetch failure should produce a report");
+
+        assert_eq!(report.status, ReportStatus::Failed);
+        assert_eq!(report.items.len(), 1);
+        let item = &report.items[0];
+        assert_eq!(item.status, ItemStatus::Failed);
+        assert!(matches!(
+            &item.subject,
+            ReportSubject::Action(ActionItem {
+                action: ActionInfo::FetchContent { target, .. },
+            }) if target == &workspace.path("fetch-target")
+        ));
+        assert_eq!(item.evidence.len(), 1);
+        assert_eq!(item.evidence[0].stage, EvidenceStage::Fetch);
+        assert_eq!(item.evidence[0].exit_code, None);
+        assert!(
+            item.evidence[0]
+                .message
+                .as_deref()
+                .is_some_and(
+                    |message| message.contains("directory") && message.contains("preflight")
+                )
+        );
     }
 
     #[test]

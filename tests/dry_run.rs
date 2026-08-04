@@ -8,14 +8,17 @@ use dot::dry_run;
 use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
 use dot::job::{JobKind, JobSelection, JobSelector};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlanError, ExecutionPlanner, PlannedProviderInstall, PlanningError};
+use dot::plan::{
+    ExecutionPlanError, ExecutionPlanner, PlannedActionKind, PlannedProviderInstall, PlanningError,
+};
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus, ReportSubject,
+    ActionInfo, ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus,
+    ReportSubject,
 };
 use dot::schema::{
-    Config, EnvironmentName, LinkConflict, LinkMissingParent, ResolvedEnvironmentPatch,
-    ResolvedString, SelectorIdentifier,
+    Config, EnvironmentName, FetchContentConflict, LinkConflict, LinkMissingParent,
+    ResolvedEnvironmentPatch, ResolvedString, SelectorIdentifier,
 };
 use support::fixture;
 
@@ -174,12 +177,82 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
 }
 
 #[test]
-fn selected_fetch_content_action_returns_the_temporary_planning_error() {
+fn selected_fetch_content_action_is_planned_and_projected_without_io() {
+    let workspace = tempfile::tempdir().expect("temporary workspace should be created");
+    let fetch_target = workspace.path().join("missing-parent/config.toml");
+    let input = fixture::read("dry-run/valid-fetch-content-template.toml")
+        .replace("__TARGET__", &fetch_target.to_string_lossy());
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let target = selector_id("machine");
+    let platform = platform();
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
+
+    let plan = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("remote-config"))),
+        )
+        .expect("selected fetch action should plan");
+
+    let actions = plan.actions().collect::<Vec<_>>();
+    assert_eq!(actions.len(), 1);
+    let PlannedActionKind::FetchContent(fetch) = actions[0].kind() else {
+        panic!("selected fetch action should preserve its planned kind");
+    };
+    assert_eq!(fetch.source().as_str(), "https://192.0.2.1/unreachable");
+    assert_eq!(fetch.target(), fetch_target);
+    assert_eq!(fetch.on_conflict(), FetchContentConflict::Replace);
+
+    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+
+    assert_eq!(report.status, ReportStatus::Planned);
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].status, ItemStatus::Planned);
+    assert!(matches!(
+        &report.items[0].subject,
+        ReportSubject::Action(action)
+            if matches!(
+                &action.action,
+                ActionInfo::FetchContent { source, target: actual_target, on_conflict: FetchContentConflict::Replace }
+                    if source == "https://192.0.2.1/unreachable" && actual_target == &fetch_target
+            )
+    ));
+    assert!(
+        !fetch_target
+            .parent()
+            .expect("target should have a parent")
+            .exists(),
+        "dry-run must not inspect deeply enough to create the target parent"
+    );
+}
+
+#[test]
+fn fetch_runtime_errors_are_atomic_for_selected_actions_and_deferred_for_unselected_actions() {
     let input = r#"
 [targets.machine]
 platform = { os = "linux" }
 
-[targets.machine.actions.remote-config]
+[targets.machine.actions.broken]
+source = "http://example.com/insecure"
+target = "https://example.com/not-a-local-target"
+
+[targets.machine.actions.invalid-url]
+source = ":not-a-url"
+target = "configs/url.toml"
+
+[targets.machine.actions.invalid-target]
+source = "https://example.com/config.toml"
+target = "https://example.com/not-a-local-target"
+
+[targets.machine.actions.missing-env]
+source = "${env:DOT_MISSING_FETCH_SOURCE}"
+target = "configs/missing.toml"
+
+[targets.machine.actions.valid]
 source = "https://example.com/config.toml"
 target = "configs/app.toml"
 "#;
@@ -192,18 +265,141 @@ target = "configs/app.toml"
     let xdg = XdgPaths::detect();
     let planner = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform);
 
+    let plan = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("valid"))),
+        )
+        .expect("unselected invalid fetch fields should remain deferred");
+    assert_eq!(
+        plan.actions().map(|action| action.id()).collect::<Vec<_>>(),
+        ["valid"]
+    );
+
     let error = planner
         .plan(
             &manifest,
-            &JobSelection::only(JobSelector::Action(selector_id("remote-config"))),
+            &JobSelection::only(JobSelector::Action(selector_id("broken"))),
         )
-        .expect_err("fetch planning is deliberately not wired yet");
-
+        .expect_err("selected invalid fetch source should fail planning atomically");
     assert!(matches!(
         error,
-        ExecutionPlanError::Planning(PlanningError::FetchContentNotYetWired { action })
-            if action == "remote-config"
+        ExecutionPlanError::Planning(PlanningError::UnsupportedFetchContentSource { action })
+            if action == "broken"
     ));
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("invalid-url"))),
+        )
+        .expect_err("selected invalid fetch URL should fail planning");
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::InvalidFetchContentSourceUrl { action, .. })
+            if action == "invalid-url"
+    ));
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("invalid-target"))),
+        )
+        .expect_err("selected URL target should fail planning");
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::UnsupportedFetchContentTarget { action })
+            if action == "invalid-target"
+    ));
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("missing-env"))),
+        )
+        .expect_err("selected unresolved fetch expression should fail planning");
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::Interpolation { context, .. })
+            if context == "selected job `action:missing-env` field `source`"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_targets_keep_entry_real_and_absolute_path_semantics_through_execution_planning() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().expect("temporary workspace should be created");
+    let entry_dir = workspace.path().join("entry");
+    let real_dir = workspace.path().join("real");
+    std::fs::create_dir_all(&entry_dir).expect("entry directory should be created");
+    std::fs::create_dir_all(&real_dir).expect("real directory should be created");
+    let real_config = real_dir.join("dot.toml");
+    std::fs::write(&real_config, "").expect("real config should be written");
+    let entry_config = entry_dir.join("dot.toml");
+    symlink(&real_config, &entry_config).expect("config entry symlink should be created");
+    let absolute = workspace.path().join("absolute/config.toml");
+    let input = format!(
+        r#"
+[targets.machine]
+platform = {{ os = "linux" }}
+
+[targets.machine.actions.absolute]
+source = "https://example.com/absolute"
+target = {:?}
+
+[targets.machine.actions.entry-relative]
+source = "https://example.com/entry"
+target = "configs/entry.toml"
+
+[targets.machine.actions.real-explicit]
+source = "https://example.com/real"
+target = "${{dot:real_config_dir}}/configs/real.toml"
+"#,
+        absolute.to_string_lossy()
+    );
+    let config: Config = toml::from_str(&input).expect("test config should deserialize");
+    let target = selector_id("machine");
+    let platform = platform();
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+    let dot_paths = DotPaths::new(
+        &entry_config,
+        &entry_dir,
+        &real_config,
+        &real_dir,
+        workspace.path(),
+    );
+
+    let plan = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
+        .plan(&manifest, &JobSelection::All)
+        .expect("all fetch target forms should plan");
+    assert!(plan.actions().all(|action| {
+        matches!(
+            action.kind(),
+            PlannedActionKind::FetchContent(fetch)
+                if fetch.on_conflict() == FetchContentConflict::Error
+        )
+    }));
+    let targets = plan
+        .actions()
+        .map(|action| {
+            let PlannedActionKind::FetchContent(fetch) = action.kind() else {
+                panic!("fixture actions should all be fetch actions");
+            };
+            (action.id(), fetch.target().to_owned())
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(targets["absolute"], absolute);
+    assert_eq!(
+        targets["entry-relative"],
+        entry_dir.join("configs/entry.toml")
+    );
+    assert_eq!(targets["real-explicit"], real_dir.join("configs/real.toml"));
 }
 
 #[test]
@@ -254,8 +450,11 @@ fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
         actions.iter().map(|action| action.id()).collect::<Vec<_>>(),
         ["shared-action"]
     );
-    assert_eq!(actions[0].action().exec.program.value(), "selected-action");
-    assert!(actions[0].action().check.is_none());
+    let PlannedActionKind::Command(action) = actions[0].kind() else {
+        panic!("shared-action should be a command action");
+    };
+    assert_eq!(action.exec.program.value(), "selected-action");
+    assert!(action.check.is_none());
     let links = plan.links().collect::<Vec<_>>();
     assert_eq!(
         links.iter().map(|link| link.id()).collect::<Vec<_>>(),
@@ -643,8 +842,11 @@ fn resolves_manual_packages_actions_and_links_without_inspection() {
     let actions = plan.actions().collect::<Vec<_>>();
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].id(), "configure");
+    let PlannedActionKind::Command(action) = actions[0].kind() else {
+        panic!("configure should be a command action");
+    };
     assert_eq!(
-        actions[0].action().exec.args[0].value(),
+        action.exec.args[0].value(),
         config_template_path("scripts/configure.sh")
     );
 

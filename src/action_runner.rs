@@ -26,7 +26,7 @@ impl fmt::Display for ActionStage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ActionOutcome {
+pub enum CommandActionOutcome {
     AlreadySatisfied {
         check: ExecutionResult,
     },
@@ -38,26 +38,29 @@ pub enum ActionOutcome {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ActionRunner<'a> {
+pub struct CommandActionRunner<'a> {
     environment: &'a ExecutionEnvironment,
 }
 
-impl<'a> ActionRunner<'a> {
+impl<'a> CommandActionRunner<'a> {
     pub const fn new(environment: &'a ExecutionEnvironment) -> Self {
         Self { environment }
     }
 
-    pub fn run(&self, action: &ResolvedCommandAction) -> Result<ActionOutcome, ActionRunError> {
+    pub fn run(
+        &self,
+        action: &ResolvedCommandAction,
+    ) -> Result<CommandActionOutcome, CommandActionRunError> {
         let initial_check = match &action.check {
             None => None,
             Some(check) => {
                 let command = self.prepare(check, ActionStage::InitialCheck)?;
                 let result = self.execute(&command, ActionStage::InitialCheck, IoMode::Capture)?;
                 match result.code() {
-                    Some(0) => return Ok(ActionOutcome::AlreadySatisfied { check: result }),
+                    Some(0) => return Ok(CommandActionOutcome::AlreadySatisfied { check: result }),
                     Some(1) => Some((command, result)),
                     _ => {
-                        return Err(ActionRunError::UnsuccessfulExit {
+                        return Err(CommandActionRunError::UnsuccessfulExit {
                             stage: ActionStage::InitialCheck,
                             result,
                         });
@@ -69,7 +72,7 @@ impl<'a> ActionRunner<'a> {
         let exec = self.prepare(&action.exec, ActionStage::Exec)?;
         let exec = self.execute(&exec, ActionStage::Exec, IoMode::Inherit)?;
         if !exec.success() {
-            return Err(ActionRunError::UnsuccessfulExit {
+            return Err(CommandActionRunError::UnsuccessfulExit {
                 stage: ActionStage::Exec,
                 result: exec,
             });
@@ -80,7 +83,7 @@ impl<'a> ActionRunner<'a> {
             Some((check, initial_result)) => {
                 let result = self.execute(&check, ActionStage::PostCheck, IoMode::Capture)?;
                 if result.code() != Some(0) {
-                    return Err(ActionRunError::UnsuccessfulExit {
+                    return Err(CommandActionRunError::UnsuccessfulExit {
                         stage: ActionStage::PostCheck,
                         result,
                     });
@@ -89,7 +92,7 @@ impl<'a> ActionRunner<'a> {
             }
         };
 
-        Ok(ActionOutcome::Executed {
+        Ok(CommandActionOutcome::Executed {
             initial_check,
             exec,
             post_check,
@@ -100,9 +103,9 @@ impl<'a> ActionRunner<'a> {
         &self,
         action: &ResolvedExecAction,
         stage: ActionStage,
-    ) -> Result<PreparedCommand, ActionRunError> {
+    ) -> Result<PreparedCommand, CommandActionRunError> {
         PreparedCommand::from_exec_action(action, self.environment)
-            .map_err(|source| ActionRunError::Preparation { stage, source })
+            .map_err(|source| CommandActionRunError::Preparation { stage, source })
     }
 
     fn execute(
@@ -110,15 +113,15 @@ impl<'a> ActionRunner<'a> {
         command: &PreparedCommand,
         stage: ActionStage,
         io_mode: IoMode,
-    ) -> Result<ExecutionResult, ActionRunError> {
+    ) -> Result<ExecutionResult, CommandActionRunError> {
         ProcessExecutor::new()
             .execute(command, io_mode)
-            .map_err(|source| ActionRunError::Execution { stage, source })
+            .map_err(|source| CommandActionRunError::Execution { stage, source })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ActionRunError {
+pub enum CommandActionRunError {
     #[error("failed to prepare action {stage}: {source}")]
     Preparation {
         stage: ActionStage,
@@ -138,7 +141,7 @@ pub enum ActionRunError {
     },
 }
 
-impl ActionRunError {
+impl CommandActionRunError {
     pub const fn stage(&self) -> ActionStage {
         match self {
             Self::Preparation { stage, .. }

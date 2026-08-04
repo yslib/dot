@@ -1,0 +1,17 @@
+[targets.current]
+platform = { os = "__OS__" }
+
+[targets.current.actions.a-before]
+exec = __BEFORE__
+
+[targets.current.actions.b-fetch]
+source = "https://192.0.2.1/unreachable"
+target = "${dot:config_dir}/fetch-target"
+on_conflict = "replace"
+
+[targets.current.actions.c-after]
+exec = __AFTER__
+
+[targets.current.links.config]
+source = "source.txt"
+target = "${dot:config_dir}/linked.txt"

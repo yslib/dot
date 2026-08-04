@@ -5,7 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use dot::action::{CommandPreparationError, ExecutionError};
-use dot::action_runner::{ActionRunError, ActionStage};
+use dot::action_runner::{ActionStage, CommandActionRunError};
 use dot::check::ProviderCheckError;
 use dot::config::{ConfigDiscoveryError, ConfigLoadError};
 use dot::diagnostic::Operation;
@@ -123,11 +123,11 @@ fn execution_errors_expose_io_errors() {
 
 #[test]
 fn action_run_errors_expose_their_wrapper_errors() {
-    let preparation = ActionRunError::Preparation {
+    let preparation = CommandActionRunError::Preparation {
         stage: ActionStage::Exec,
         source: preparation_error(),
     };
-    let execution = ActionRunError::Execution {
+    let execution = CommandActionRunError::Execution {
         stage: ActionStage::Exec,
         source: execution_error(),
     };
@@ -463,9 +463,6 @@ fn source_less_planning_errors_have_no_source() {
             package: "package".to_owned(),
             name: "name".to_owned(),
         },
-        PlanningError::FetchContentNotYetWired {
-            action: "remote-config".to_owned(),
-        },
         PlanningError::UnsupportedFetchContentSource {
             action: "remote-config".to_owned(),
         },
@@ -484,14 +481,6 @@ fn source_less_planning_errors_have_no_source() {
     for error in &errors {
         assert_no_source(error);
     }
-    let fetch_content = errors
-        .iter()
-        .find(|error| matches!(error, PlanningError::FetchContentNotYetWired { .. }))
-        .expect("fetch content planning error should be covered");
-    assert_eq!(
-        fetch_content.to_string(),
-        "selected job `action:remote-config` is a fetch content action that is not yet wired for planning"
-    );
 }
 
 #[test]
