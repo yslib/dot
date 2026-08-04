@@ -856,6 +856,12 @@ pub(crate) fn resolve_fetch_content_fields(
 }
 
 fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError> {
+    let explicit_authority = explicit_https_authority(value);
+    if explicit_authority.is_some_and(|authority| authority.contains('@')) {
+        return Err(PlanningError::AuthenticatedFetchContentSource {
+            action: action.to_owned(),
+        });
+    }
     let source =
         Url::parse(value).map_err(|source| PlanningError::InvalidFetchContentSourceUrl {
             action: action.to_owned(),
@@ -866,10 +872,7 @@ fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError>
             action: action.to_owned(),
         });
     }
-    if !has_explicit_https_authority(value)
-        || source.scheme() != "https"
-        || source.host_str().is_none()
-    {
+    if explicit_authority.is_none() || source.scheme() != "https" || source.host_str().is_none() {
         return Err(PlanningError::UnsupportedFetchContentSource {
             action: action.to_owned(),
         });
@@ -877,13 +880,17 @@ fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError>
     Ok(source)
 }
 
-fn has_explicit_https_authority(value: &str) -> bool {
-    value.split_once(':').is_some_and(|(scheme, remainder)| {
-        scheme.eq_ignore_ascii_case("https")
-            && remainder.strip_prefix("//").is_some_and(|authority| {
-                !authority.is_empty() && !authority.starts_with(['/', '\\'])
-            })
-    })
+fn explicit_https_authority(value: &str) -> Option<&str> {
+    let (scheme, remainder) = value.split_once(':')?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    let remainder = remainder.strip_prefix("//")?;
+    let authority_end = remainder
+        .find(['/', '\\', '?', '#'])
+        .unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    (!authority.is_empty() && !authority.starts_with('\\')).then_some(authority)
 }
 
 fn resolve_fetch_target(
@@ -1016,7 +1023,7 @@ mod tests {
         ResolvedString, SelectorIdentifier, StringExpressionSource,
     };
 
-    use super::{PlanningError, resolve_fetch_content_fields};
+    use super::{PlanningError, resolve_fetch_content_fields, resolve_fetch_source};
 
     fn environment(variables: &[(&str, &str)]) -> ExecutionEnvironment {
         let patch = ResolvedEnvironmentPatch {
@@ -1093,6 +1100,21 @@ mod tests {
                 planned.source().as_str(),
                 "https://example.test/config.toml"
             );
+        }
+
+        #[test]
+        fn accepts_https_sources_without_userinfo() {
+            for source in [
+                "https://example.test/config.toml",
+                "https://[2001:db8::1]/config.toml",
+                "https://example.test/@scope/config.toml",
+                r"https://example.test\@scope/config.toml",
+                "https://example.test/config.toml?contact=user@example.test",
+                "https://example.test/config.toml#user@example.test",
+            ] {
+                resolve_fetch_source("download", source)
+                    .unwrap_or_else(|error| panic!("source `{source}` should resolve: {error}"));
+            }
         }
 
         #[test]
@@ -1369,6 +1391,35 @@ mod tests {
                     _ => unreachable!("test source has an expected error variant"),
                 }
             }
+        }
+
+        #[test]
+        fn rejects_empty_source_userinfo_syntax_without_disclosure() {
+            let mut accepted = Vec::new();
+            for source in [
+                "https://@example.test/config.toml",
+                "https://:@example.test/config.toml",
+            ] {
+                let Err(error) = resolve_fetch_source("download", source) else {
+                    accepted.push(source);
+                    continue;
+                };
+
+                assert!(matches!(
+                    &error,
+                    PlanningError::AuthenticatedFetchContentSource { action }
+                        if action == "download"
+                ));
+                assert_eq!(
+                    error.to_string(),
+                    "selected job `action:download` field `source` must not include URL userinfo"
+                );
+                assert!(std::error::Error::source(&error).is_none());
+            }
+            assert!(
+                accepted.is_empty(),
+                "sources with empty userinfo unexpectedly resolved: {accepted:?}"
+            );
         }
 
         #[test]
