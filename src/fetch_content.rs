@@ -124,6 +124,72 @@ impl FetchContentError {
             FetchContentErrorKind::Io { operation, source },
         )
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        action: &PlannedFetchContentAction,
+        failure: TestFetchContentFailure,
+    ) -> Self {
+        let (stage, kind) = match failure {
+            TestFetchContentFailure::Conflict => (
+                FetchContentStage::Preflight,
+                FetchContentErrorKind::Conflict(EntryKind::RegularFile),
+            ),
+            TestFetchContentFailure::Directory => (
+                FetchContentStage::Preflight,
+                FetchContentErrorKind::Unsupported(EntryKind::Directory),
+            ),
+            TestFetchContentFailure::Special => (
+                FetchContentStage::Preflight,
+                FetchContentErrorKind::Unsupported(EntryKind::Special),
+            ),
+            TestFetchContentFailure::Prepare(source) => (
+                FetchContentStage::Prepare,
+                FetchContentErrorKind::Io {
+                    operation: "prepare test target",
+                    source,
+                },
+            ),
+            TestFetchContentFailure::Transport(source) => (
+                FetchContentStage::Transfer,
+                FetchContentErrorKind::Transfer(FetchTransportError {
+                    kind: FetchTransportErrorKind::Transport,
+                    source: Some(FetchTransportErrorSource::Io(source)),
+                }),
+            ),
+            TestFetchContentFailure::HttpStatus(status) => (
+                FetchContentStage::Transfer,
+                FetchContentErrorKind::Transfer(FetchTransportError::http_status(status)),
+            ),
+            TestFetchContentFailure::RedirectLimit => (
+                FetchContentStage::Transfer,
+                FetchContentErrorKind::Transfer(FetchTransportError {
+                    kind: FetchTransportErrorKind::TooManyRedirects,
+                    source: None,
+                }),
+            ),
+            TestFetchContentFailure::Commit(source) => (
+                FetchContentStage::Commit,
+                FetchContentErrorKind::Io {
+                    operation: "commit test target",
+                    source,
+                },
+            ),
+        };
+        Self::new(action, stage, kind)
+    }
+}
+
+#[cfg(test)]
+pub(crate) enum TestFetchContentFailure {
+    Conflict,
+    Directory,
+    Special,
+    Prepare(io::Error),
+    Transport(io::Error),
+    HttpStatus(u16),
+    RedirectLimit,
+    Commit(io::Error),
 }
 
 impl fmt::Display for FetchContentError {

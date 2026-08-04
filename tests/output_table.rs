@@ -254,6 +254,10 @@ fn renders_fetch_failure_evidence_without_fabricating_process_output() {
         "{output}"
     );
     assert!(output.contains("FAILED"), "{output}");
+    assert!(
+        output.contains("https://example.com/config.toml → /resolved/configs/app.toml"),
+        "fetch action detail missing:\n{output}"
+    );
     assert!(output.contains("directory during preflight"), "{output}");
     assert!(!output.contains("exit 0"), "{output}");
 }

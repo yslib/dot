@@ -333,6 +333,52 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
 }
 
 #[test]
+fn fetch_preflight_failure_is_reported_while_later_actions_and_links_continue() {
+    let workspace = TempWorkspace::new();
+    let source = workspace.write_source("source.txt");
+    fs::create_dir(workspace.path("fetch-target"))
+        .expect("directory target should force an offline preflight failure");
+    let contents = fixture::read("jobs/valid-fetch-failure-continuation-template.toml")
+        .replace("__BEFORE__", &helper_exec("action-ok"))
+        .replace("__AFTER__", &helper_exec("action-ok"));
+    let manifest = workspace.write_manifest(&contents);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["apply", "--config"])
+        .arg(&manifest)
+        .output()
+        .expect("dot apply should start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(1), "stdout:\n{stdout}");
+    assert_eq!(workspace.recorded_events(), ["action-ok", "action-ok"]);
+    assert_eq!(
+        report_job_rows(&stdout),
+        [
+            "action:a-before",
+            "action:b-fetch",
+            "action:c-after",
+            "link:config",
+        ],
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("EXECUTED").count(), 2, "{stdout}");
+    assert!(stdout.contains("FAILED"), "{stdout}");
+    assert!(stdout.contains("directory"), "{stdout}");
+    assert!(stdout.contains("preflight"), "{stdout}");
+    assert!(
+        stdout.contains("https://192.0.2.1/unreachable →"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("exit 0"), "{stdout}");
+    assert_eq!(
+        fs::canonicalize(workspace.path("linked.txt")).expect("link should resolve"),
+        fs::canonicalize(source).expect("source should resolve")
+    );
+    assert!(stdout.contains("FAILED · 4 items"), "{stdout}");
+}
+
+#[test]
 fn apply_projects_a_link_phase_error_as_blocked_items_and_one_diagnostic() {
     let workspace = TempWorkspace::new();
     workspace.write_source("first.txt");

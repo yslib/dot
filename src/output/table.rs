@@ -58,7 +58,19 @@ impl TableRenderer {
 
     fn row(&self, item: &ReportItem) -> Vec<Cell> {
         let (kind, via, subject_detail) = subject_columns(item);
-        let detail = evidence_detail(item).unwrap_or(subject_detail);
+        let detail = match evidence_detail(item) {
+            Some(evidence)
+                if matches!(
+                    &item.subject,
+                    ReportSubject::Action(action)
+                        if matches!(&action.action, ActionInfo::FetchContent { .. })
+                ) =>
+            {
+                format!("{subject_detail}\n{evidence}")
+            }
+            Some(evidence) => evidence,
+            None => subject_detail,
+        };
         vec![
             Cell::new(kind),
             Cell::new(&item.id),
