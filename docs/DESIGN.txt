@@ -26,14 +26,17 @@ dot understands only a small set of domain concepts:
 - provider-backed and manually installed packages;
 - provider lifecycle and explicit package install units;
 - symbolic-link reconciliation;
-- generic idempotent actions;
+- generic command actions and small built-in HTTPS-to-local-path content
+  materialization;
 - side-effect-free dry-run rendering;
 - explicit provider-readiness diagnostics.
 
 dot coordinates external providers and user actions, but it is not a package
 manager. It does not access package repositories, resolve dependencies,
-compare versions, select downloads, or implement package installation. Its
-finite TOML schema is not a general-purpose configuration or execution DSL.
+compare versions, select release artifacts, or implement package installation.
+Fetch Content is a deliberately small one-shot materialization capability, not
+a download, artifact, or cache manager. Its finite TOML schema is not a
+general-purpose configuration or execution DSL.
 
 
 ### configuration entry and entity
@@ -220,11 +223,12 @@ names shown as detail.
 
 manual package:
 
-- Declares one install action and no provider.
+- Declares one Command Action install and no provider. Fetch Content is not a
+  manual-package install form.
 - The package table key is a diagnostic id for the desired tool.
 - check can make the install idempotent; without check, exec runs on every
   apply.
-- Complex download, architecture selection, checksum, extraction, and layout
+- Rich transfer, architecture selection, verification, extraction, and layout
   logic should normally live in an external shell or PowerShell script invoked
   by the install action.
 
@@ -345,9 +349,25 @@ specific knowledge remains in TOML or external scripts rather than Rust code.
   not dump it verbatim and it is not a v0.1.0 output contract.
 
 
-### action lifecycle
+### actions
 
-The same action structure is used by global actions and manual-package install.
+A global Action is one strict structural variant with no discriminator:
+Command Action or Fetch Content Action. Each variant rejects unknown fields,
+and objects that mix the two field sets are rejected. Manual-package install
+accepts Command Action only.
+
+Both global variants occupy the same stable action phase and are ordered by
+action id. A failure is isolated to that action: later actions still run, and
+the deferred link phase still runs after the complete action phase. Every
+failure or blocked result contributes to the aggregate non-zero apply status.
+Actions have no dependency graph or semantic ordering beyond this stable
+serial order and must not rely on another action running first.
+
+
+### command action lifecycle
+
+The same Command Action structure is used by global command actions and
+manual-package install.
 
 - check is optional. Without check, exec runs on every apply.
 - A check exit code of 0 means the desired state is already satisfied, so exec
@@ -361,12 +381,73 @@ The same action structure is used by global actions and manual-package install.
   action idempotency.
 - No action state is persisted.
 
-Global actions run after package installation. They have no dependency graph
-or semantic execution order and must not rely on another global action running
-first. A global-action failure does not stop unrelated actions.
+Global command actions run after package installation. A manual-package
+Command Action follows the same lifecycle but its result is reported as that
+package's result.
 
-A manual-package action follows the same lifecycle but its result is reported
-as that package's result.
+
+### fetch content action
+
+Fetch Content materializes one resolved resource at one resolved destination.
+The fields are semantic resource locators so later versions can add explicit
+locator pairs without changing the Action model. The currently supported pair
+is deliberately narrow:
+
+- source must be an explicit HTTPS URL with an authority and host;
+- URL userinfo is rejected;
+- target must be a native local-disk path. A target URL is not supported.
+
+Source and target string expressions are evaluated only when their action is
+in the selected execution closure. Resolution is pure planning: it performs no
+network request and does not inspect the target. An absolute target remains
+absolute. A relative target is joined to the directory containing the selected
+configuration entry, which is the same path context represented by
+`${dot:config_dir}`. It is not implicitly rebased to the canonical
+configuration entity directory; `${dot:real_config_dir}` explicitly selects
+that real directory.
+
+Dry-run resolves and displays the HTTPS source, local target, and conflict
+policy, but performs no network request and no target inspection. On apply, an
+action eligible to transfer always fetches its source fresh. There is no
+checksum or cache state, conditional request, retry, resume, decompression, or
+archive extraction. Richer transfer behavior belongs in a Command Action or an
+external script.
+
+Apply classifies the final target component without following a symbolic link:
+
+```
+target state   on_conflict=error   on_conflict=replace
+missing        create              create
+regular file   reject              replace
+symbolic link  reject              replace
+directory      reject              reject
+special entry  reject              reject
+```
+
+Thus `replace` permits only an existing regular file or symbolic link. A
+directory or other special filesystem entry is always rejected. Missing parent
+directories are created when the transfer proceeds.
+
+Content is transferred into a staging file in the target's directory, flushed,
+and then committed to the target. Before commit, dot reinspects the final entry
+without following a symbolic link. HTTPS-only policy also applies through
+redirects, so an insecure downgrade is rejected; at most five redirects are
+followed, and only a final 2xx HTTP status is successful.
+
+These target-kind guarantees assume cooperative concurrency: no other writer
+mutates the target concurrently. Commit-time reinspection is best effort and
+narrows accidental races, but it is not an atomic compare-and-swap with the
+following removal or persistence. Concurrent mutation can make the action fail
+or can cause it to affect a competing directory entry. dot provides no
+cross-platform filesystem-object-identity or rollback guarantee, so the
+same-directory staging design must not be described as universally atomic or
+race-safe.
+
+Reports retain the resolved source URL, target path, and conflict policy. A
+successful Fetch Content Action is CREATED or REPLACED. A failure records
+Fetch-stage evidence; the action detail and evidence together preserve the
+source, target, and materialization-stage failure detail. Because no child
+process supplied it, dot does not invent an exit code.
 
 
 ### links
@@ -485,8 +566,8 @@ is an error when resolved; dot does not invent a fallback path.
 
 Resolver availability is contextual:
 
-- links, global actions, manual-package actions, provider activate, probe, and
-  ensure can use env, dot, and xdg;
+- links, both global Action variants, manual-package Command Actions, provider
+  activate, probe, and ensure can use env, dot, and xdg;
 - provider install can use env, dot, xdg, package:names, and
   package:provider_args.
 
@@ -591,11 +672,17 @@ environment and do not inherit an implicit provider environment.
 Provider install commands are fully resolved once per selected Single or Batch
 install unit, including list-valued package interpolation. A Single uses the
 package key as its item name; a Batch uses its stable logical key and retains
-its complete names list. Relative link sources are joined to the configuration
-entry directory, not the canonical entity directory, and link targets must
-resolve to absolute paths. A repository-relative source behind a symlinked
-configuration must explicitly use `${dot:real_config_dir}`. On Unix and macOS,
-for example:
+its complete names list. A selected Fetch Content Action resolves its semantic
+source and target locators during this same pure planning stage. Its currently
+supported HTTPS source is validated without making a request, and its local
+target is made absolute by retaining an absolute path or joining a relative
+path to the configuration entry directory.
+
+Relative link sources are likewise joined to the configuration entry
+directory, not the canonical entity directory, and link targets must resolve
+to absolute paths. A repository-relative source or Fetch Content target behind
+a symlinked configuration must explicitly use `${dot:real_config_dir}`. On Unix
+and macOS, for example:
 
 ```
 source = "${dot:real_config_dir}/home/.config/nvim"
@@ -610,13 +697,15 @@ source = '${dot:real_config_dir}\home\.config\nvim'
 ```
 
 Dry-run does not probe, ensure, or install providers; run manual-package or
-global-action checks and execs; inspect link state; or reconcile links. It does
-not test link-source existence, canonicalize link paths, inspect conflicts, or
-modify the filesystem. Configuration loading has nevertheless already
-canonicalized the selected configuration entry before dry-run planning begins.
-Its output describes selected intent, not runtime outcome: a provider may be
-missing, a package may already be installed, an action check may skip exec,
-and a link may already be satisfied or may fail during apply.
+global Command Action checks and execs; transfer Fetch Content; inspect Fetch
+Content or link target state; or reconcile links. It does not test link-source
+existence, canonicalize link paths, inspect conflicts, or modify the
+filesystem. Configuration loading has nevertheless already canonicalized the
+selected configuration entry before dry-run planning begins. Its output
+describes selected intent, not runtime outcome: a provider may be missing, a
+package may already be installed, a command check may skip exec, a Fetch
+Content target may conflict, and a link may already be satisfied or may fail
+during apply.
 
 Selected planning is atomic. Every selector is valid and every selected
 provider and job is resolved before an ExecutionPlan exists, so apply executes
@@ -672,8 +761,9 @@ diagnostics even though they map to NOT_READY.
 
 Provider check does not run provider ensure or install, refresh environment
 state after an ensure, resolve or inspect package install units, run
-manual-package or global action check/exec, or inspect/reconcile links. v0.1.0
-defines no link, action, package, or aggregate check command.
+manual-package or global Command Action check/exec, transfer Fetch Content, or
+inspect/reconcile links. v0.1.0 defines no link, action, package, or aggregate
+check command.
 
 Provider check remains an independent probe-only path. It does not construct a
 complete ExecutionPlan or invoke JobRunner. All declarations have already
@@ -798,12 +888,13 @@ The job columns have these stable meanings:
 - KIND is `package`, `action`, or `link`, matching SELECTOR.
 - ID is the typed package, action, or link ID.
 - VIA is the provider ID for a provider-backed package, `manual` for a manual
-  package, `exec` for an action, or `builtin` for a link.
+  package, `exec` for a Command Action, `fetch` for a Fetch Content Action, or
+  `builtin` for a link.
 - DETAIL is the effective package name (the job ID) for a provider-backed
   Single, the effective provider-backed Batch names comma-joined in configured
   order, the deserialized unresolved install or exec program source for a
-  manual package or action, or the unresolved `source -> target` pair for a
-  link.
+  manual package or Command Action, or the unresolved `source -> target` pair
+  for a Fetch Content Action or link.
 
 The canonical reusable selector is the first field and is emitted verbatim.
 Backslash, tab, carriage return, and newline in later display fields are
@@ -894,12 +985,13 @@ separate list-command TSV format is the stable machine-facing catalog contract.
    state.
 
 An individual runtime failure does not stop unrelated work. A provider failure
-blocks only its dependent packages. Before any link mutation, JobRunner
-preflights the complete selected link set for duplicate targets; this
-duplicate-target phase error blocks every selected link, while normalization,
-source preparation, and reconciliation failures remain per-link and do not
-stop later nonblocked links. The final process exits non-zero when any selected
-job fails or is blocked.
+blocks only its dependent packages. A Command or Fetch Content Action failure
+does not stop later actions or the deferred link phase. Before any link
+mutation, JobRunner preflights the complete selected link set for duplicate
+targets; this duplicate-target phase error blocks every selected link, while
+normalization, source preparation, and reconciliation failures remain per-link
+and do not stop later nonblocked links. The final process exits non-zero when
+any selected job fails or is blocked.
 
 Execution uses the existing blocking ProcessExecutor. Child commands retain
 their current inherited or captured standard-I/O behavior. Ctrl-C and process
@@ -925,8 +1017,9 @@ no signal handling, process supervision, or platform-specific kill mechanism.
   provider-specific package-name maps.
 - Package dependency resolution, repository access, search, versions, updates,
   uninstall, installed-state detection, or other package-manager semantics.
-- Download, GitHub-release selection, checksum, archive, extraction, or build
-  logic implemented by dot.
+- Download or artifact management beyond one-shot Fetch Content, including
+  GitHub-release selection, checksum policy, caching, conditional requests,
+  retry, resume, archive extraction, or build logic implemented by dot.
 - Persistent receipts or other managed-state databases.
 - Persisted job state, retry, resume, or rollback.
 - Provider dependency resolution.

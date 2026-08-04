@@ -419,6 +419,9 @@ id for the batch form.
 install: #source_command_action,
 }
 
+Manual-package installation accepts only #source_command_action. A
+#fetch_content_action shape is not a manual-package install alternative.
+
 
 ### provider
 
@@ -489,6 +492,14 @@ When omitted, `on_conflict` defaults at runtime to `"replace-link"` and
 
 #command_action<S, A> | #fetch_content_action<S>
 
+Action is a strict, structural (untagged) sum. It has no discriminator: the
+declared fields must match exactly one of the two records below, and every
+record rejects unknown fields. An incomplete object, an object mixing command
+and Fetch Content fields, or an otherwise ambiguous object is rejected.
+
+The legacy `type` field, including its former `exec` value, is removed and
+rejected. There is no compatibility behavior for it.
+
 
 ### command_action<S, A>
 
@@ -505,6 +516,13 @@ source: S,
 target: S,
 on_conflict?: #fetch_content_conflict,
 }
+
+`source` and `target` are string expressions whose values are interpreted as
+semantic resource locators. They do not add a discriminator to Action. These
+three fields are the complete Fetch Content record; there are no additional
+digest, cache, conditional-request, retry, resume, decompression, or extraction
+fields. The currently supported source and target locator kinds and all
+materialization behavior are runtime constraints defined in DESIGN.txt.
 
 
 ### fetch_content_conflict
