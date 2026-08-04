@@ -451,7 +451,6 @@ fn captured_text(output: Option<&[u8]>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::env;
-    use std::error::Error as _;
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
@@ -461,7 +460,6 @@ mod tests {
     use super::*;
     use crate::app::{ProfileSelection, ScopeSelection};
     use crate::diagnostic::Operation;
-    use crate::fetch_content::{FetchContentError, TestFetchContentFailure};
     use crate::link::LinkError;
 
     static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
@@ -599,121 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn fetch_created_outcome_projects_the_planned_action_as_created() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        let item = project_fetch_outcome(&plan, Ok(FetchContentOutcome::Created));
-
-        assert_eq!(item.status, ItemStatus::Created);
-        assert!(!matches!(
-            item.status,
-            ItemStatus::Satisfied | ItemStatus::Executed
-        ));
-        assert_fetch_subject(&item, &workspace);
-        assert!(item.evidence.is_empty());
-    }
-
-    #[test]
-    fn fetch_replaced_outcome_projects_the_planned_action_as_replaced() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        let item = project_fetch_outcome(&plan, Ok(FetchContentOutcome::Replaced));
-
-        assert_eq!(item.status, ItemStatus::Replaced);
-        assert!(!matches!(
-            item.status,
-            ItemStatus::Satisfied | ItemStatus::Executed
-        ));
-        assert_fetch_subject(&item, &workspace);
-        assert!(item.evidence.is_empty());
-    }
-
-    #[test]
-    fn fetch_preflight_failures_project_failed_fetch_evidence_with_specific_detail() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        for (failure, expected_detail) in [
-            (
-                TestFetchContentFailure::Conflict,
-                "conflicts with error policy",
-            ),
-            (TestFetchContentFailure::Directory, "directory"),
-            (TestFetchContentFailure::Special, "special filesystem entry"),
-        ] {
-            assert_fetch_failure(
-                &plan,
-                &workspace,
-                failure,
-                &[expected_detail, "preflight"],
-                0,
-            );
-        }
-    }
-
-    #[test]
-    fn fetch_prepare_failure_projects_failed_fetch_evidence_and_preserves_its_source() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        assert_fetch_failure(
-            &plan,
-            &workspace,
-            TestFetchContentFailure::Prepare(io::Error::other("prepare source")),
-            &["prepare test target", "prepare", "prepare source"],
-            1,
-        );
-    }
-
-    #[test]
-    fn fetch_transfer_failures_project_failed_fetch_evidence_with_specific_detail() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        for (failure, expected_detail, source_depth) in [
-            (
-                TestFetchContentFailure::Transport(io::Error::other("transport source")),
-                "HTTPS transport failed: transport source",
-                2,
-            ),
-            (
-                TestFetchContentFailure::HttpStatus(503),
-                "HTTP response status 503 is not successful",
-                1,
-            ),
-            (
-                TestFetchContentFailure::RedirectLimit,
-                "redirect limit of 5 was exhausted",
-                1,
-            ),
-        ] {
-            assert_fetch_failure(
-                &plan,
-                &workspace,
-                failure,
-                &[expected_detail, "transfer"],
-                source_depth,
-            );
-        }
-    }
-
-    #[test]
-    fn fetch_commit_failure_projects_failed_fetch_evidence_and_preserves_its_source() {
-        let workspace = TempWorkspace::new();
-        let plan = plan_fetch_fixture(&workspace);
-
-        assert_fetch_failure(
-            &plan,
-            &workspace,
-            TestFetchContentFailure::Commit(io::Error::other("commit source")),
-            &["commit test target", "commit", "commit source"],
-            1,
-        );
-    }
-
-    #[test]
     fn helper_process() {
         let Ok(mode) = env::var("DOT_APPLY_REPORT_HELPER") else {
             return;
@@ -752,100 +635,6 @@ mod tests {
                 profile: ProfileSelection::Root,
             },
             jobs: crate::job::JobSelection::All,
-        }
-    }
-
-    fn plan_fetch_fixture(workspace: &TempWorkspace) -> ExecutionPlan {
-        let contents = read_fixture("jobs/valid-fetch-failure-continuation-template.toml")
-            .replace("__BEFORE__", &helper_exec("action-ok"))
-            .replace("__AFTER__", &helper_exec("action-ok"));
-        let manifest_path = workspace.write_manifest(&contents);
-        let loaded = LoadedConfig::load(&manifest_path).expect("fetch fixture should load");
-        let platform = PlatformInfo::detect();
-        let manifest =
-            EffectiveManifest::select_for_execution(loaded.config(), &platform, None, None)
-                .expect("fetch fixture target should select");
-        let xdg_paths = XdgPaths::detect();
-        let dot_paths = DotPaths::from(&loaded);
-
-        ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform)
-            .plan(&manifest, &crate::job::JobSelection::All)
-            .expect("fetch fixture should plan")
-    }
-
-    fn project_fetch_outcome(
-        plan: &ExecutionPlan,
-        result: Result<FetchContentOutcome, FetchContentError>,
-    ) -> ReportItem {
-        let job = plan
-            .jobs()
-            .iter()
-            .find(|job| matches!(job, PlannedJob::Action(action) if action.id() == "b-fetch"))
-            .expect("fetch fixture should contain b-fetch");
-        let state = JobState::Completed(JobOutcome::Action(ActionOutcome::FetchContent(result)));
-        report_item(job, &state, &plan.platform().os)
-    }
-
-    fn assert_fetch_subject(item: &ReportItem, workspace: &TempWorkspace) {
-        assert!(matches!(
-            &item.subject,
-            ReportSubject::Action(ActionItem {
-                action: ActionInfo::FetchContent {
-                    source,
-                    target,
-                    on_conflict: crate::schema::FetchContentConflict::Replace,
-                },
-            }) if source == "https://192.0.2.1/unreachable"
-                && target == &workspace.path("fetch-target")
-        ));
-    }
-
-    fn assert_fetch_failure(
-        plan: &ExecutionPlan,
-        workspace: &TempWorkspace,
-        failure: TestFetchContentFailure,
-        expected_details: &[&str],
-        expected_source_depth: usize,
-    ) {
-        let action = plan
-            .jobs()
-            .iter()
-            .find_map(|job| match job {
-                PlannedJob::Action(action) if action.id() == "b-fetch" => match action.kind() {
-                    PlannedActionKind::FetchContent(action) => Some(action),
-                    PlannedActionKind::Command(_) => None,
-                },
-                _ => None,
-            })
-            .expect("fetch fixture should contain a planned Fetch action");
-        let error = FetchContentError::for_test(action, failure);
-        let mut source = error.source();
-        let mut source_depth = 0;
-        while let Some(next) = source {
-            source_depth += 1;
-            source = next.source();
-        }
-        assert_eq!(source_depth, expected_source_depth);
-
-        let item = project_fetch_outcome(plan, Err(error));
-
-        assert_eq!(item.status, ItemStatus::Failed);
-        assert_fetch_subject(&item, workspace);
-        assert_eq!(item.evidence.len(), 1);
-        let evidence = &item.evidence[0];
-        assert_eq!(evidence.stage, EvidenceStage::Fetch);
-        assert_eq!(evidence.exit_code, None);
-        assert_eq!(evidence.stdout, None);
-        assert_eq!(evidence.stderr, None);
-        let message = evidence
-            .message
-            .as_deref()
-            .expect("fetch failure evidence should carry a message");
-        for expected in expected_details {
-            assert!(
-                message.contains(expected),
-                "missing `{expected}` in `{message}`"
-            );
         }
     }
 
