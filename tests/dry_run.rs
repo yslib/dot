@@ -113,6 +113,11 @@ fn select_named_fixture(name: &str, target: &str, profile: Option<&str>) -> Effe
         .expect("test manifest should select")
 }
 
+fn fetch_content_fixture(target: &Path) -> String {
+    let target = format!("{:?}", target.to_string_lossy());
+    fixture::read("dry-run/valid-fetch-content-template.toml").replace("__TARGET__", &target)
+}
+
 #[test]
 fn execution_plan_exposes_one_ordered_typed_job_sequence() {
     let manifest = select_fixture("dry-run/valid-human-readable-plan.toml");
@@ -180,8 +185,7 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
 fn selected_fetch_content_action_is_planned_and_projected_without_io() {
     let workspace = tempfile::tempdir().expect("temporary workspace should be created");
     let fetch_target = workspace.path().join("missing-parent/config.toml");
-    let input = fixture::read("dry-run/valid-fetch-content-template.toml")
-        .replace("__TARGET__", &fetch_target.to_string_lossy());
+    let input = fetch_content_fixture(&fetch_target);
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let target = selector_id("machine");
     let platform = platform();
@@ -228,6 +232,15 @@ fn selected_fetch_content_action_is_planned_and_projected_without_io() {
             .exists(),
         "dry-run must not inspect deeply enough to create the target parent"
     );
+}
+
+#[test]
+fn fetch_content_fixture_escapes_a_windows_target_path() {
+    let input = fetch_content_fixture(Path::new(
+        r"C:\Users\runneradmin\AppData\Local\Temp\config.toml",
+    ));
+
+    toml::from_str::<Config>(&input).expect("escaped Windows target should deserialize");
 }
 
 #[test]
