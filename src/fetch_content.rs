@@ -71,6 +71,13 @@ enum FetchContentErrorKind {
     Transfer(FetchTransportError),
 }
 
+/// An error produced while materializing fetched content at a local target.
+///
+/// Target-kind safety assumes the target path is not concurrently mutated by another writer.
+/// The commit-time inspection narrows accidental races, but it does not atomically bind a later
+/// deletion to the inspected filesystem object. With concurrent mutation, an action may fail or
+/// affect the competing directory entry; no cross-platform identity or rollback guarantee is
+/// provided.
 #[derive(Debug)]
 pub struct FetchContentError {
     details: Box<FetchContentErrorDetails>,
@@ -134,7 +141,7 @@ impl fmt::Display for FetchContentError {
             ),
             FetchContentErrorKind::Concurrent(kind) => write!(
                 formatter,
-                "fetch target `{target}` became a {kind} before commit and was not removed"
+                "fetch target `{target}` was observed as a {kind} at the commit check; refusing that commit path"
             ),
             FetchContentErrorKind::InvalidTarget => write!(
                 formatter,
@@ -280,6 +287,12 @@ impl Error for FetchTransportError {
     }
 }
 
+/// Materializes fetched content through one injected transport dispatch.
+///
+/// Callers must cooperatively exclude concurrent writers to the target path. The final target-kind
+/// inspection narrows accidental races but is not an atomic compare-and-swap with removal or
+/// persistence. Concurrent mutation may make the action fail or affect the competing directory
+/// entry, and there is no cross-platform rollback or filesystem-object identity guarantee.
 pub(crate) struct FetchContentRunner<'a> {
     transport: &'a dyn FetchTransport,
 }
@@ -289,6 +302,7 @@ impl<'a> FetchContentRunner<'a> {
         Self { transport }
     }
 
+    /// Executes one staged materialization under the runner's cooperative-concurrency contract.
     pub(crate) fn run(
         &self,
         action: &PlannedFetchContentAction,
@@ -358,6 +372,9 @@ impl<'a> FetchContentRunner<'a> {
         })?;
 
         let current = classify(action, FetchContentStage::Commit)?;
+        // This path-based inspection and the following removal are not atomic. Another writer can
+        // replace the entry between them; this guard narrows accidental races but is not a CAS.
+        // Correct target-kind behavior therefore assumes cooperative exclusion of other writers.
         match initial {
             EntryKind::Missing if current != EntryKind::Missing => {
                 return Err(FetchContentError::new(
@@ -1050,6 +1067,13 @@ mod tests {
             error.details.kind,
             FetchContentErrorKind::Concurrent(EntryKind::Directory)
         ));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "fetch target `{}` was observed as a directory at the commit check; refusing that commit path",
+                target.display()
+            )
+        );
         assert_eq!(
             fs::read(target.join("sentinel")).expect("sentinel should be readable"),
             b"safe"
