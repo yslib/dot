@@ -259,14 +259,27 @@ names = ["bat", "fd"]
 
 <!-- readme-configuration-example:end -->
 
-A manual package contains its own install action. Generic actions describe
-other idempotent work, and links map existing sources to native symlink
-targets. The complete configuration is statically validated at load, while
-environment and path values are resolved only for the selected execution
-closure.
+A manual package contains its own command install action. Generic actions can
+run idempotent commands or use Fetch Content, a deliberately small built-in
+capability for materializing one HTTPS resource at one local path:
+
+```toml
+[targets.workstation.actions.remote-config]
+source = "https://example.com/tool/config.toml"
+target = "config/tool/config.toml"
+on_conflict = "replace"
+```
+
+An eligible apply always fetches the source fresh. The only conflict policies
+are `error` (the default) and `replace`; Fetch Content is not a download,
+artifact, or cache manager. Richer transfers belong in command actions or
+scripts. Links map existing sources to native symlink targets. The complete
+configuration is statically validated at load, while environment and path
+values are resolved only for the selected execution closure.
 
 See the [Configuration Reference](docs/CONFIGURATION.md) for the complete
-types, fields, examples, and interpolation rules.
+types, fields, examples, and interpolation rules, including the
+[Fetch Content Action](docs/CONFIGURATION.md#fetch-content-action).
 
 ## Execution and diagnostics
 
@@ -313,7 +326,9 @@ interface. Version 0.1.0 does not provide `--json`.
 - per-item condition expressions and arbitrary evaluation;
 - cross-target inheritance, profile references, and multiple inheritance;
 - action dependency graphs and provider dependency resolution;
-- built-in download, archive, checksum, build, or service-management logic;
+- download or artifact management beyond one-shot Fetch Content, including
+  release selection, caching, archive extraction, build, or service-management
+  logic;
 - implicit shell execution;
 - link removal, garbage collection, copies, and fallback link strategies.
 

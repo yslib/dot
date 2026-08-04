@@ -51,7 +51,8 @@ validation diagnostics continue to identify the entry path.
   [`ManualPackage`](#manualpackage).
 - [Execution types](#execution-types): [`Provider`](#provider),
   [`EnvironmentPatch`](#environmentpatch), [`ExecAction`](#execaction),
-  [`ExecActionType`](#execactiontype), and [`Action`](#action).
+  [`Action`](#action), [Command Action](#command-action), and
+  [Fetch Content Action](#fetch-content-action).
 - [Link types](#link-types): [`Link`](#link),
   [`LinkConflict`](#linkconflict), and
   [`LinkMissingParent`](#linkmissingparent).
@@ -418,10 +419,10 @@ exec = { program = "./install-tool" }
 ```
 
 Each package key is its stable declaration and report id. Provider packages
-reference an effective provider; manual packages carry an `Action`. Package
-keys are selector identifiers; provider references are broad identifiers.
-Neither interpolates. Unknown fields and shapes that match neither variant are
-rejected.
+reference an effective provider; manual packages carry a Command Action.
+Package keys are selector identifiers; provider references are broad
+identifiers. Neither interpolates. Unknown fields and shapes that match neither
+variant are rejected.
 
 ### ProviderPackage
 
@@ -521,12 +522,12 @@ complete `${package:provider_args}` element in the provider's `install.args`.
 Shape:
 
 ```text
-{ install: Action }
+{ install: Command Action }
 ```
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `install` | `Action` | yes | its string expressions accept string-valued resolvers |
+| `install` | Command Action | yes | its string expressions accept string-valued resolvers |
 
 Contextual fragment:
 
@@ -537,9 +538,10 @@ exec = { program = "bash", args = ["${dot:config_dir}/scripts/install-starship"]
 ```
 
 The package key is a diagnostic/report id. The install action uses the normal
-Action lifecycle: without `check`, `exec` runs on every apply. A manual package
-has no provider and no access to package list variables or an implicit provider
-environment. Unknown fields are rejected.
+Command Action lifecycle: without `check`, `exec` runs on every apply. Fetch
+Content is not a manual-package install form. A manual package has no provider
+and no access to package list variables or an implicit provider environment.
+Unknown fields are rejected.
 
 ## Execution types
 
@@ -626,7 +628,6 @@ Shape:
 
 ```text
 {
-  type?: "exec",
   program: string-expression source,
   args?: [string-expression source],
   cwd?: string-expression source,
@@ -636,7 +637,6 @@ Shape:
 
 | Field | Type | Required | Interpolation |
 | --- | --- | --- | --- |
-| `type` | `ExecActionType` | no | no |
 | `program` | string-expression source | yes | string-valued resolvers |
 | `args` | list of string-expression sources; provider install uses provider-install argument sources | no, defaults empty | string-valued resolvers; provider install also accepts complete package list variables |
 | `cwd` | string-expression source | no; inherits the dot process cwd | string-valued resolvers |
@@ -645,8 +645,12 @@ Shape:
 Contextual fragment:
 
 ```toml
-exec = { type = "exec", program = "git", args = ["-C", "${dot:config_dir}", "status"], cwd = "${dot:cwd}" }
+exec = { program = "git", args = ["-C", "${dot:config_dir}", "status"], cwd = "${dot:cwd}" }
 ```
+
+The legacy `type` field, including its former `exec` value, has been removed
+and is rejected as an unknown field. There is no compatibility behavior for
+it. Process execution is identified by the surrounding structural record.
 
 Provider `install` has the same writable fields, except each `args` element is
 a provider-install argument source. Its complete `args` array becomes the
@@ -681,22 +685,36 @@ expansion, quoting, and globbing are not interpreted. Invoke `bash`, `pwsh`, or
 another interpreter explicitly when shell behavior is intended. Resolved
 values remain typed process data and are never reinterpreted as shell syntax.
 
-### ExecActionType
+### Action
 
-Accepted literal: `"exec"`. The field is optional; omission selects the same
-direct-process execution behavior. No other literal is accepted and the value
-does not interpolate.
+Shape: the strict, structural (untagged) union `Command Action | Fetch Content
+Action`.
 
-Contextual fragment showing the only enum value:
+No discriminator selects the variant. Every object must match exactly one of
+the two complete field sets below; unknown fields, incomplete objects, and
+ambiguous mixed objects containing both command and Fetch Content fields are
+rejected. The legacy `type` field is not accepted. Manual-package `install`
+accepts only Command Action, while entries in an `actions` keyed table accept
+either variant.
+
+Contextual fragments:
 
 ```toml
-type = "exec"
+[targets.workstation.actions.prepare-cache]
+exec = { program = "mkdir", args = ["-p", "${xdg:cache}/dot"] }
+
+[targets.workstation.actions.remote-config]
+source = "https://example.com/tool/config.toml"
+target = "config/tool/config.toml"
+on_conflict = "replace"
 ```
 
-The discriminator is reserved for the execution kind. It does not request a
-shell and does not change interpolation rules.
+Both forms use the surrounding action key as the `action:ID` selector and
+report identity. They run in the same action phase in stable id order. One
+action failure does not stop later actions or the deferred link phase, but it
+does contribute to the final failed apply status.
 
-### Action
+### Command Action
 
 Shape:
 
@@ -722,21 +740,83 @@ exec = { program = "mkdir", args = ["-p", "${xdg:cache}/dot"] }
 
 #### Phase model
 
-The implementation models this record as `Action<S, A>`, containing optional
-and required `ExecAction<S, A>` records. Every TOML action uses
-`Action<string-expression source, string-expression source>`. Every source
-field is promoted to a typed string expression during complete configuration
-validation. A selected action is later resolved into
-`Action<resolved string, resolved string>`. These generic parameters
-distinguish source and planned phases; users write only the concrete `check`
-and `exec` shape above.
+The implementation models this record as `CommandAction<S, A>`, containing
+optional and required `ExecAction<S, A>` records. Source fields are promoted to
+typed string expressions during complete configuration validation. A selected
+Command Action is later resolved to strings during planning. These generic
+parameters distinguish source and planned phases; users write only the
+concrete `check` and `exec` shape above.
 
 Without `check`, `exec` runs on every apply. Check exit code 0 means satisfied
 and skips exec; 1 means unsatisfied, so dot runs exec and checks exactly once
 more; any other code means check failed. The action fails if the post-exec
-check is not 0 even when exec succeeded. Manual-package and global actions use
-this same lifecycle, direct-process rules, and string expressions. They do not
-accept package list variables.
+check is not 0 even when exec succeeded. Manual-package and global Command
+Actions use this same lifecycle, direct-process rules, and string expressions.
+They do not accept package list variables.
+
+### Fetch Content Action
+
+Shape:
+
+```text
+{
+  source: string-expression source,
+  target: string-expression source,
+  on_conflict?: "error" | "replace",
+}
+```
+
+| Field | Type | Required | Interpolation |
+| --- | --- | --- | --- |
+| `source` | semantic resource locator as a string-expression source | yes | string-valued resolvers |
+| `target` | semantic resource locator as a string-expression source | yes | string-valued resolvers |
+| `on_conflict` | `"error"` or `"replace"` | no, defaults to `"error"` | no |
+
+Contextual fragment:
+
+```toml
+[targets.workstation.actions.remote-config]
+source = "https://example.com/tool/config.toml"
+target = "config/tool/config.toml"
+on_conflict = "replace"
+```
+
+The locator roles leave room for future explicitly supported pairs, but the
+current pair is exactly an explicit HTTPS source with an authority and host to
+a native local-disk target. Source URL userinfo is rejected, and a target URL
+is not supported.
+
+Runtime resolution is selected-only and occurs during pure planning. An
+absolute target stays absolute. A relative target is relative to the directory
+containing the selected configuration entry, equivalent to the path context
+represented by `${dot:config_dir}`. It is not relative to the canonical entity
+directory unless the value explicitly uses `${dot:real_config_dir}`.
+
+Dry-run resolves and displays the source, target, and policy without network
+access or target inspection. On apply, every action eligible to transfer
+fetches the source fresh. Target handling is:
+
+| Existing final target entry | `error` | `replace` |
+| --- | --- | --- |
+| missing | create | create |
+| regular file | reject | replace |
+| symbolic link | reject without following it | replace without following it |
+| directory | reject | reject |
+| other special entry | reject | reject |
+
+`replace` therefore permits only a regular file or symbolic link. The transfer
+uses same-directory staging and a commit-time target reinspection, but these
+are best effort under a cooperative-concurrency assumption: another writer
+must not mutate the target concurrently. A concurrent mutation can cause
+failure or affect a competing entry; there is no cross-platform object-identity
+or rollback guarantee.
+
+Fetch Content is a one-shot materialization capability, not a download,
+artifact, or cache manager. It has no built-in integrity verification,
+conditional-request, retry, resume, decompression, or extraction behavior. Use
+a Command Action or an external script for richer transfer cases. See
+[DESIGN.txt](DESIGN.txt) for the detailed transport, staging, reporting, and
+concurrency contract.
 
 ## Link types
 
@@ -853,12 +933,13 @@ requires a resolvable selected configuration entry.
    effective providers and jobs; exact selection resolves only selected
    package/action/link jobs and providers required by selected
    provider-backed packages.
-4. **Execution** probes providers, runs processes, and reconciles links only
-   after planning succeeds. Dry-run stops before this boundary: it does not
-   inspect or canonicalize link sources, although loading has already
-   canonicalized the selected configuration entry. Structural list commands
-   stop after complete validation and unresolved target/profile selection;
-   they do not evaluate runtime resolver values.
+4. **Execution** probes providers, runs processes, transfers Fetch Content, and
+   reconciles links only after planning succeeds. Dry-run stops before this
+   boundary: it performs no Fetch Content network request or target inspection
+   and does not inspect or canonicalize link sources, although loading has
+   already canonicalized the selected configuration entry. Structural list
+   commands stop after complete validation and unresolved target/profile
+   selection; they do not evaluate runtime resolver values.
 
 Omitted provider, package, link, action, and profile maps deserialize as empty
 maps. Omitted ExecAction `args` and EnvironmentPatch `variables` deserialize as
@@ -950,6 +1031,7 @@ non-empty `provider_args`, the provider install args must contain exactly one
 | ordinary ExecAction `program`, `args`, `cwd`, `env` values | string-expression source | yes | no |
 | provider `install` `program`, `cwd`, `env` values | string-expression source | yes | no |
 | provider `install.args` | provider install flat-list expression | yes | exact package lists as a complete element only |
+| Fetch Content Action `source`, `target` | string-expression source | yes | no |
 | Link `source`, `target` | string-expression source | yes | no |
 | fixed enum literals | fixed literal | no | no |
 
@@ -974,7 +1056,8 @@ reinterpreted by a shell.
 Unlike the preceding contextual fragments, the following is one self-contained
 configuration. It includes a target and platform, a full provider lifecycle,
 Single and Batch install units with provider arguments, a manual package, an
-Action with check and exec, a Link with both policies, and a nested Profile.
+Command Action with check and exec, a Fetch Content Action, a Link with both
+policies, and a nested Profile.
 
 <!-- complete-example:start -->
 ```toml
@@ -984,7 +1067,7 @@ platform = { os = "linux", arch = ["x86_64", "aarch64"], environment = "native" 
 [targets.workstation.providers.brew]
 ensure = [
   { program = "bash", args = ["${dot:config_dir}/scripts/install-brew"] },
-  { type = "exec", program = "brew", args = ["tap", "example/tools"] },
+  { program = "brew", args = ["tap", "example/tools"] },
 ]
 
 [targets.workstation.providers.brew.activate]
@@ -1021,9 +1104,13 @@ program = "test"
 args = ["-d", "${xdg:cache}/dot"]
 
 [targets.workstation.actions.prepare-cache.exec]
-type = "exec"
 program = "mkdir"
 args = ["-p", "${xdg:cache}/dot"]
+
+[targets.workstation.actions.remote-config]
+source = "https://example.com/tool/config.toml"
+target = "config/tool/config.toml"
+on_conflict = "replace"
 
 [targets.workstation.links.shell]
 source = "${dot:config_dir}/home/.zshrc"
