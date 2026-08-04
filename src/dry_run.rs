@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::plan::{
-    ExecutionPlan, PlannedAction, PlannedJob, PlannedLink, PlannedManualPackage, PlannedPackage,
-    PlannedProvider, PlannedProviderInstall,
+    ExecutionPlan, PlannedAction, PlannedActionKind, PlannedJob, PlannedLink, PlannedManualPackage,
+    PlannedPackage, PlannedProvider, PlannedProviderInstall,
 };
 use crate::report::{
     ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ItemStatus, LinkItem,
@@ -92,11 +92,15 @@ fn manual_package_item(package: &PlannedManualPackage) -> ReportItem {
 }
 
 fn action_item(action: &PlannedAction) -> ReportItem {
+    let action_info = match action.kind() {
+        PlannedActionKind::Command(action) => ActionInfo::from_resolved_command(action),
+        PlannedActionKind::FetchContent(action) => ActionInfo::from_fetch_content(action),
+    };
     ReportItem {
         id: action.id().to_owned(),
         status: ItemStatus::Planned,
         subject: ReportSubject::Action(ActionItem {
-            action: ActionInfo::from_resolved_command(action.action()),
+            action: action_info,
         }),
         evidence: Vec::new(),
     }

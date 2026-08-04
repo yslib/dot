@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use std::fmt::Debug;
 
 use crate::action::ExecutionEnvironment;
-use crate::action_runner::{ActionOutcome, ActionRunError};
+use crate::action_runner::{
+    CommandActionOutcome, CommandActionRunError, FetchContentError, FetchContentOutcome,
+};
 use crate::job::JobId;
 use crate::job_executor::JobExecutor;
 use crate::link::{LinkError, LinkOutcome, LinkPhaseError};
@@ -22,9 +24,24 @@ pub enum BlockReason {
 pub enum JobOutcome {
     Provider(Result<ProviderOutcome, ProviderError>),
     ProviderPackage(Result<ProviderInstallOutcome, ProviderInstallError>),
-    ManualPackage(Result<ActionOutcome, ActionRunError>),
-    Action(Result<ActionOutcome, ActionRunError>),
+    ManualPackage(Result<CommandActionOutcome, CommandActionRunError>),
+    Action(ActionOutcome),
     Link(Result<LinkOutcome, LinkError>),
+}
+
+#[derive(Debug)]
+pub enum ActionOutcome {
+    Command(Result<CommandActionOutcome, CommandActionRunError>),
+    FetchContent(Result<FetchContentOutcome, FetchContentError>),
+}
+
+impl ActionOutcome {
+    pub const fn is_succeeded(&self) -> bool {
+        match self {
+            Self::Command(result) => result.is_ok(),
+            Self::FetchContent(result) => result.is_ok(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -41,7 +58,8 @@ impl JobState {
                 JobOutcome::ProviderPackage(outcome) => {
                     matches!(outcome, Ok(ProviderInstallOutcome::Executed { .. }))
                 }
-                JobOutcome::ManualPackage(outcome) | JobOutcome::Action(outcome) => outcome.is_ok(),
+                JobOutcome::ManualPackage(outcome) => outcome.is_ok(),
+                JobOutcome::Action(outcome) => outcome.is_succeeded(),
                 JobOutcome::Link(outcome) => outcome.is_ok(),
             },
             Self::Blocked(_) => false,
@@ -114,13 +132,12 @@ impl JobExecutionReport {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
 pub struct JobRunner<'a> {
     executor: JobExecutor<'a>,
 }
 
 impl<'a> JobRunner<'a> {
-    pub const fn new(environment: &'a ExecutionEnvironment) -> Self {
+    pub fn new(environment: &'a ExecutionEnvironment) -> Self {
         Self {
             executor: JobExecutor::new(environment),
         }

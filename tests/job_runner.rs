@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dot::action::ExecutionEnvironment;
 use dot::interpolation::{DotPaths, XdgPaths};
 use dot::job::{JobId, JobSelection, JobSelector};
-use dot::job_runner::{BlockReason, JobOutcome, JobRunner, JobState};
+use dot::job_runner::{ActionOutcome, BlockReason, JobOutcome, JobRunner, JobState};
 use dot::link::{LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
 use dot::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
@@ -180,7 +180,9 @@ fn runs_all_selected_jobs_in_stable_serial_order() {
     ));
     assert!(matches!(
         report.get(&JobId::Action(selector_id("configure"))),
-        Some(JobState::Completed(JobOutcome::Action(Ok(_))))
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::Command(Ok(_))
+        )))
     ));
     assert!(matches!(
         report.get(&JobId::Link(selector_id("config"))),
@@ -244,7 +246,9 @@ fn provider_failure_blocks_its_package_but_continues_unrelated_work() {
     ));
     assert!(matches!(
         report.get(&JobId::Action(selector_id("configure"))),
-        Some(JobState::Completed(JobOutcome::Action(Ok(_))))
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::Command(Ok(_))
+        )))
     ));
     assert!(matches!(
         report.get(&JobId::Link(selector_id("config"))),
@@ -317,7 +321,9 @@ fn duplicate_link_targets_block_the_complete_link_phase_before_mutation() {
     ));
     assert!(matches!(
         report.get(&JobId::Action(selector_id("configure"))),
-        Some(JobState::Completed(JobOutcome::Action(Ok(_))))
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::Command(Ok(_))
+        )))
     ));
     for link in ["first", "second"] {
         assert!(matches!(
@@ -327,6 +333,88 @@ fn duplicate_link_targets_block_the_complete_link_phase_before_mutation() {
         ));
     }
     assert!(!workspace.path("linked.txt").exists());
+}
+
+#[test]
+fn fetch_failure_does_not_stop_later_commands_or_the_link_phase() {
+    let workspace = TempWorkspace::new();
+    let source = workspace.write_source("source.txt");
+    fs::create_dir(workspace.path("fetch-target"))
+        .expect("directory target should force an offline preflight failure");
+    let plan = plan_fixture(
+        &workspace,
+        "jobs/valid-fetch-failure-continuation-template.toml",
+        &[
+            ("__BEFORE__", helper_exec("before")),
+            ("__AFTER__", helper_exec("after")),
+        ],
+        &JobSelection::All,
+    );
+    let environment = ExecutionEnvironment::empty();
+
+    let report = JobRunner::new(&environment).run(&plan);
+
+    assert!(!report.all_succeeded());
+    assert_eq!(workspace.recorded_events(), ["before", "after"]);
+    assert!(matches!(
+        report.get(&JobId::Action(selector_id("a-before"))),
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::Command(Ok(_))
+        )))
+    ));
+    assert!(matches!(
+        report.get(&JobId::Action(selector_id("b-fetch"))),
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::FetchContent(Err(_))
+        )))
+    ));
+    assert!(matches!(
+        report.get(&JobId::Action(selector_id("c-after"))),
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::Command(Ok(_))
+        )))
+    ));
+    assert!(matches!(
+        report.get(&JobId::Link(selector_id("config"))),
+        Some(JobState::Completed(JobOutcome::Link(Ok(
+            LinkOutcome::Created
+        ))))
+    ));
+    assert_eq!(
+        fs::canonicalize(workspace.path("linked.txt")).expect("link should resolve"),
+        fs::canonicalize(source).expect("source should resolve")
+    );
+}
+
+#[test]
+fn exact_fetch_selection_runs_only_the_selected_fetch_action() {
+    let workspace = TempWorkspace::new();
+    workspace.write_source("source.txt");
+    fs::create_dir(workspace.path("fetch-target"))
+        .expect("directory target should force an offline preflight failure");
+    let plan = plan_fixture(
+        &workspace,
+        "jobs/valid-fetch-failure-continuation-template.toml",
+        &[
+            ("__BEFORE__", helper_exec("before")),
+            ("__AFTER__", helper_exec("after")),
+        ],
+        &JobSelection::only(JobSelector::Action(selector_id("b-fetch"))),
+    );
+    let environment = ExecutionEnvironment::empty();
+
+    let report = JobRunner::new(&environment).run(&plan);
+
+    assert_eq!(report.len(), 1);
+    assert!(!report.all_succeeded());
+    assert!(workspace.recorded_events().is_empty());
+    assert!(!workspace.path("linked.txt").exists());
+    assert!(matches!(
+        report.get(&JobId::Action(selector_id("b-fetch"))),
+        Some(JobState::Completed(JobOutcome::Action(
+            ActionOutcome::FetchContent(Err(_))
+        )))
+    ));
 }
 
 #[test]
@@ -351,7 +439,9 @@ fn helper_process() {
     }
 
     match mode.as_str() {
-        "probe" | "provider-install" | "manual-install" => record(&events, &mode),
+        "probe" | "provider-install" | "manual-install" | "before" | "after" => {
+            record(&events, &mode)
+        }
         "probe-fail" => {
             record(&events, "probe");
             process::exit(1);

@@ -92,7 +92,8 @@ struct FetchContentErrorDetails {
 }
 
 impl FetchContentError {
-    pub(crate) const fn stage(&self) -> FetchContentStage {
+    #[cfg(test)]
+    const fn stage(&self) -> FetchContentStage {
         self.details.stage
     }
 
@@ -519,14 +520,6 @@ fn validate_final_status(status: u16) -> Result<(), FetchTransportError> {
         Err(FetchTransportError::http_status(status))
     }
 }
-
-const _: () = {
-    // Keeps the private engine lint-reachable until Task 6 wires it into execution.
-    let _ = FetchContentRunner::new;
-    let _ = FetchContentRunner::run;
-    let _ = UreqHttpsTransport::new;
-    let _ = FetchContentError::stage;
-};
 
 #[cfg(test)]
 mod tests {

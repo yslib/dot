@@ -228,6 +228,7 @@ pub enum EvidenceStage {
     Check,
     Execute,
     PostCheck,
+    Fetch,
     Link,
 }
 

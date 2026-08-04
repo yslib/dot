@@ -221,6 +221,44 @@ fn renders_fetch_content_as_an_action_with_fetch_facts() {
 }
 
 #[test]
+fn renders_fetch_failure_evidence_without_fabricating_process_output() {
+    let mut report = report();
+    report.items.push(ReportItem {
+        id: "fetch-config".to_owned(),
+        status: ItemStatus::Failed,
+        subject: ReportSubject::Action(ActionItem {
+            action: ActionInfo::FetchContent {
+                source: "https://example.com/config.toml".to_owned(),
+                target: PathBuf::from("/resolved/configs/app.toml"),
+                on_conflict: FetchContentConflict::Replace,
+            },
+        }),
+        evidence: vec![Evidence {
+            stage: EvidenceStage::Fetch,
+            exit_code: None,
+            message: Some("fetch target is a directory during preflight".to_owned()),
+            stdout: None,
+            stderr: None,
+            hints: Vec::new(),
+        }],
+    });
+
+    let mut output = Vec::new();
+    TableRenderer::new(false)
+        .render(&report, &mut output)
+        .expect("table should render");
+    let output = String::from_utf8(output).expect("table should be UTF-8");
+
+    assert!(
+        output.contains("│ action   ┆ fetch-config ┆ fetch"),
+        "{output}"
+    );
+    assert!(output.contains("FAILED"), "{output}");
+    assert!(output.contains("directory during preflight"), "{output}");
+    assert!(!output.contains("exit 0"), "{output}");
+}
+
+#[test]
 fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     let mut report = report();
     let ReportSubject::Action(action) = &mut report.items[3].subject else {

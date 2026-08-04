@@ -115,6 +115,48 @@ fn check_providers_ignores_expression_errors_outside_activate_and_probe() {
 }
 
 #[test]
+fn check_providers_does_not_resolve_fetch_content_runtime_fields() {
+    let contents = format!(
+        r#"
+[targets.current]
+platform = {{ os = {:?} }}
+
+[targets.current.providers.ready]
+activate = {{ variables = {{ PROVIDER_VALUE = "ready" }} }}
+probe = {{ program = {}, args = ["--exact", "helper_process", "--nocapture"], env = {{ variables = {{ DOT_CHECK_COMMAND_HELPER = "ready" }} }} }}
+install = {{ program = "unused-install" }}
+
+[targets.current.actions.unresolved-fetch]
+source = "${{env:DOT_INTENTIONALLY_MISSING_FETCH_SOURCE}}"
+target = "${{env:DOT_INTENTIONALLY_MISSING_FETCH_TARGET}}"
+"#,
+        env::consts::OS,
+        helper_program_toml()
+    );
+    let manifest = TempManifest::write(&contents);
+    let marker = TempMarker::new();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .args(["check", "providers", "--config"])
+        .arg(manifest.path())
+        .env_remove("DOT_INTENTIONALLY_MISSING_FETCH_SOURCE")
+        .env_remove("DOT_INTENTIONALLY_MISSING_FETCH_TARGET")
+        .env("DOT_CHECK_COMMAND_MARKER", marker.path())
+        .output()
+        .expect("dot should start");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("│ provider ┆ ready"), "{stdout}");
+    assert!(stdout.contains("READY"), "{stdout}");
+    assert!(marker.path().exists(), "provider probe should still run");
+}
+
+#[test]
 fn check_providers_runs_no_probe_when_complete_static_validation_fails() {
     let contents = format!(
         r#"

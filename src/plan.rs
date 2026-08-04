@@ -242,7 +242,13 @@ impl PlannedManualPackage {
 #[derive(Debug)]
 pub struct PlannedAction {
     id: SelectorIdentifier,
-    action: ResolvedCommandAction,
+    kind: PlannedActionKind,
+}
+
+#[derive(Debug)]
+pub enum PlannedActionKind {
+    Command(ResolvedCommandAction),
+    FetchContent(PlannedFetchContentAction),
 }
 
 impl PlannedAction {
@@ -254,8 +260,8 @@ impl PlannedAction {
         JobId::Action(self.id.clone())
     }
 
-    pub fn action(&self) -> &ResolvedCommandAction {
-        &self.action
+    pub fn kind(&self) -> &PlannedActionKind {
+        &self.kind
     }
 }
 
@@ -691,19 +697,24 @@ impl<'a> ExecutionPlanner<'a> {
             .iter()
             .filter(|(action_id, _)| selection.includes_action(action_id))
             .map(|(action_id, action)| {
-                let Action::Command(action) = action else {
-                    return Err(PlanningError::FetchContentNotYetWired {
-                        action: action_id.to_string(),
-                    });
-                };
-                resolve_command_action_fields(action, &context, "")
-                    .map(|action| PlannedAction {
-                        id: action_id.clone(),
+                let kind = match action {
+                    Action::Command(action) => resolve_command_action_fields(action, &context, "")
+                        .map(PlannedActionKind::Command)
+                        .map_err(|error| {
+                            selected_interpolation_error(&JobId::Action(action_id.clone()), error)
+                        })?,
+                    Action::FetchContent(action) => resolve_fetch_content_fields(
+                        action_id,
                         action,
-                    })
-                    .map_err(|error| {
-                        selected_interpolation_error(&JobId::Action(action_id.clone()), error)
-                    })
+                        &context,
+                        self.dot_paths.config_dir(),
+                    )
+                    .map(PlannedActionKind::FetchContent)?,
+                };
+                Ok(PlannedAction {
+                    id: action_id.clone(),
+                    kind,
+                })
             })
             .collect()
     }
@@ -844,11 +855,6 @@ pub(crate) fn resolve_fetch_content_fields(
     ))
 }
 
-const _: () = {
-    // Keeps the pure resolver lint-reachable until Task 6 wires it into planning.
-    let _ = resolve_fetch_content_fields;
-};
-
 fn resolve_fetch_source(action: &str, value: &str) -> Result<Url, PlanningError> {
     let source =
         Url::parse(value).map_err(|source| PlanningError::InvalidFetchContentSourceUrl {
@@ -954,10 +960,6 @@ pub enum PlanningError {
     EmptyPackageBatch { package: String },
     #[error("selected job `package:{package}` field `names` contains duplicate name `{name}`")]
     DuplicatePackageBatchName { package: String, name: String },
-    #[error(
-        "selected job `action:{action}` is a fetch content action that is not yet wired for planning"
-    )]
-    FetchContentNotYetWired { action: String },
     #[error("selected job `action:{action}` field `source` contains an invalid URL: {source}")]
     InvalidFetchContentSourceUrl {
         action: String,
