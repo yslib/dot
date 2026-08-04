@@ -638,7 +638,7 @@ mod tests {
         for (failure, expected_detail) in [
             (
                 TestFetchContentFailure::Conflict,
-                "conflict policy is error",
+                "conflicts with error policy",
             ),
             (TestFetchContentFailure::Directory, "directory"),
             (TestFetchContentFailure::Special, "special filesystem entry"),

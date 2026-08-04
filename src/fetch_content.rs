@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
@@ -58,19 +57,6 @@ impl fmt::Display for EntryKind {
     }
 }
 
-#[derive(Debug)]
-enum FetchContentErrorKind {
-    Conflict(EntryKind),
-    Unsupported(EntryKind),
-    Concurrent(EntryKind),
-    InvalidTarget,
-    Io {
-        operation: &'static str,
-        source: io::Error,
-    },
-    Transfer(FetchTransportError),
-}
-
 /// An error produced while materializing fetched content at a local target.
 ///
 /// Target-kind safety assumes the target path is not concurrently mutated by another writer.
@@ -78,38 +64,109 @@ enum FetchContentErrorKind {
 /// deletion to the inspected filesystem object. With concurrent mutation, an action may fail or
 /// affect the competing directory entry; no cross-platform identity or rollback guarantee is
 /// provided.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
 pub struct FetchContentError {
     details: Box<FetchContentErrorDetails>,
 }
 
-#[derive(Debug)]
-struct FetchContentErrorDetails {
-    stage: FetchContentStage,
-    source_url: Url,
-    target: PathBuf,
-    kind: FetchContentErrorKind,
+#[derive(Debug, thiserror::Error)]
+enum FetchContentErrorDetails {
+    #[error(
+        "fetch preflight failed for target `{}`: existing {entry} conflicts with error policy",
+        target.display()
+    )]
+    Conflict { target: PathBuf, entry: EntryKind },
+    #[error(
+        "fetch preflight failed for target `{}`: {entry} cannot be materialized",
+        target.display()
+    )]
+    Unsupported { target: PathBuf, entry: EntryKind },
+    #[error(
+        "fetch commit failed for target `{}`: observed {entry} at commit check; refusing that commit path",
+        target.display()
+    )]
+    Concurrent { target: PathBuf, entry: EntryKind },
+    #[error(
+        "fetch prepare failed for target `{}`: target has no parent directory",
+        target.display()
+    )]
+    InvalidTarget { target: PathBuf },
+    #[error(
+        "fetch {stage} failed for target `{}`: failed to {operation}: {source}",
+        target.display()
+    )]
+    Io {
+        stage: FetchContentStage,
+        target: PathBuf,
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "fetch transfer failed for target `{}`: failed to fetch `{source_url}`: {source}",
+        target.display()
+    )]
+    Transfer {
+        source_url: Url,
+        target: PathBuf,
+        #[source]
+        source: FetchTransportError,
+    },
 }
 
 impl FetchContentError {
     #[cfg(test)]
-    const fn stage(&self) -> FetchContentStage {
-        self.details.stage
+    fn stage(&self) -> FetchContentStage {
+        match &*self.details {
+            FetchContentErrorDetails::Conflict { .. }
+            | FetchContentErrorDetails::Unsupported { .. } => FetchContentStage::Preflight,
+            FetchContentErrorDetails::Concurrent { .. } => FetchContentStage::Commit,
+            FetchContentErrorDetails::InvalidTarget { .. } => FetchContentStage::Prepare,
+            FetchContentErrorDetails::Io { stage, .. } => *stage,
+            FetchContentErrorDetails::Transfer { .. } => FetchContentStage::Transfer,
+        }
     }
 
-    fn new(
-        action: &PlannedFetchContentAction,
-        stage: FetchContentStage,
-        kind: FetchContentErrorKind,
-    ) -> Self {
+    fn from_details(details: FetchContentErrorDetails) -> Self {
         Self {
-            details: Box::new(FetchContentErrorDetails {
-                stage,
-                source_url: action.source().clone(),
-                target: action.target().to_owned(),
-                kind,
-            }),
+            details: Box::new(details),
         }
+    }
+
+    fn conflict(action: &PlannedFetchContentAction, entry: EntryKind) -> Self {
+        Self::from_details(FetchContentErrorDetails::Conflict {
+            target: action.target().to_owned(),
+            entry,
+        })
+    }
+
+    fn unsupported(action: &PlannedFetchContentAction, entry: EntryKind) -> Self {
+        Self::from_details(FetchContentErrorDetails::Unsupported {
+            target: action.target().to_owned(),
+            entry,
+        })
+    }
+
+    fn concurrent(action: &PlannedFetchContentAction, entry: EntryKind) -> Self {
+        Self::from_details(FetchContentErrorDetails::Concurrent {
+            target: action.target().to_owned(),
+            entry,
+        })
+    }
+
+    fn invalid_target(action: &PlannedFetchContentAction) -> Self {
+        Self::from_details(FetchContentErrorDetails::InvalidTarget {
+            target: action.target().to_owned(),
+        })
+    }
+
+    fn transfer(action: &PlannedFetchContentAction, source: FetchTransportError) -> Self {
+        Self::from_details(FetchContentErrorDetails::Transfer {
+            source_url: action.source().clone(),
+            target: action.target().to_owned(),
+            source,
+        })
     }
 
     fn io(
@@ -118,11 +175,12 @@ impl FetchContentError {
         operation: &'static str,
         source: io::Error,
     ) -> Self {
-        Self::new(
-            action,
+        Self::from_details(FetchContentErrorDetails::Io {
             stage,
-            FetchContentErrorKind::Io { operation, source },
-        )
+            target: action.target().to_owned(),
+            operation,
+            source,
+        })
     }
 
     #[cfg(test)]
@@ -130,53 +188,32 @@ impl FetchContentError {
         action: &PlannedFetchContentAction,
         failure: TestFetchContentFailure,
     ) -> Self {
-        let (stage, kind) = match failure {
-            TestFetchContentFailure::Conflict => (
-                FetchContentStage::Preflight,
-                FetchContentErrorKind::Conflict(EntryKind::RegularFile),
-            ),
-            TestFetchContentFailure::Directory => (
-                FetchContentStage::Preflight,
-                FetchContentErrorKind::Unsupported(EntryKind::Directory),
-            ),
-            TestFetchContentFailure::Special => (
-                FetchContentStage::Preflight,
-                FetchContentErrorKind::Unsupported(EntryKind::Special),
-            ),
-            TestFetchContentFailure::Prepare(source) => (
+        match failure {
+            TestFetchContentFailure::Conflict => Self::conflict(action, EntryKind::RegularFile),
+            TestFetchContentFailure::Directory => Self::unsupported(action, EntryKind::Directory),
+            TestFetchContentFailure::Special => Self::unsupported(action, EntryKind::Special),
+            TestFetchContentFailure::Prepare(source) => Self::io(
+                action,
                 FetchContentStage::Prepare,
-                FetchContentErrorKind::Io {
-                    operation: "prepare test target",
-                    source,
-                },
+                "prepare test target",
+                source,
             ),
-            TestFetchContentFailure::Transport(source) => (
-                FetchContentStage::Transfer,
-                FetchContentErrorKind::Transfer(FetchTransportError {
-                    kind: FetchTransportErrorKind::Transport,
-                    source: Some(FetchTransportErrorSource::Io(source)),
-                }),
-            ),
-            TestFetchContentFailure::HttpStatus(status) => (
-                FetchContentStage::Transfer,
-                FetchContentErrorKind::Transfer(FetchTransportError::http_status(status)),
-            ),
-            TestFetchContentFailure::RedirectLimit => (
-                FetchContentStage::Transfer,
-                FetchContentErrorKind::Transfer(FetchTransportError {
-                    kind: FetchTransportErrorKind::TooManyRedirects,
-                    source: None,
-                }),
-            ),
-            TestFetchContentFailure::Commit(source) => (
+            TestFetchContentFailure::Transport(source) => {
+                Self::transfer(action, FetchTransportError::TransportIo(source))
+            }
+            TestFetchContentFailure::HttpStatus(status) => {
+                Self::transfer(action, FetchTransportError::http_status(status))
+            }
+            TestFetchContentFailure::RedirectLimit => {
+                Self::transfer(action, FetchTransportError::TooManyRedirects)
+            }
+            TestFetchContentFailure::Commit(source) => Self::io(
+                action,
                 FetchContentStage::Commit,
-                FetchContentErrorKind::Io {
-                    operation: "commit test target",
-                    source,
-                },
+                "commit test target",
+                source,
             ),
-        };
-        Self::new(action, stage, kind)
+        }
     }
 }
 
@@ -192,165 +229,43 @@ pub(crate) enum TestFetchContentFailure {
     Commit(io::Error),
 }
 
-impl fmt::Display for FetchContentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let target = self.details.target.display();
-        match &self.details.kind {
-            FetchContentErrorKind::Conflict(kind) => write!(
-                formatter,
-                "fetch target `{target}` is an existing {kind} and conflict policy is error during {}",
-                self.details.stage
-            ),
-            FetchContentErrorKind::Unsupported(kind) => write!(
-                formatter,
-                "fetch target `{target}` is a {kind}, which cannot be materialized during {}",
-                self.details.stage
-            ),
-            FetchContentErrorKind::Concurrent(kind) => write!(
-                formatter,
-                "fetch target `{target}` was observed as a {kind} at the commit check; refusing that commit path"
-            ),
-            FetchContentErrorKind::InvalidTarget => write!(
-                formatter,
-                "fetch target `{target}` has no parent directory during {}",
-                self.details.stage
-            ),
-            FetchContentErrorKind::Io { operation, source } => write!(
-                formatter,
-                "failed to {operation} for fetch target `{target}` during {}: {source}",
-                self.details.stage
-            ),
-            FetchContentErrorKind::Transfer(source) => write!(
-                formatter,
-                "failed to fetch `{}` into target `{target}` during transfer: {source}",
-                self.details.source_url
-            ),
-        }
-    }
-}
-
-impl Error for FetchContentError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.details.kind {
-            FetchContentErrorKind::Io { source, .. } => Some(source),
-            FetchContentErrorKind::Transfer(source) => Some(source),
-            FetchContentErrorKind::Conflict(_)
-            | FetchContentErrorKind::Unsupported(_)
-            | FetchContentErrorKind::Concurrent(_)
-            | FetchContentErrorKind::InvalidTarget => None,
-        }
-    }
-}
-
 pub(crate) trait FetchTransport {
     fn fetch(&self, source: &Url, output: &mut dyn Write) -> Result<(), FetchTransportError>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FetchTransportErrorKind {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FetchTransportError {
+    #[error("HTTPS-only policy rejected the request or an insecure redirect downgrade")]
     RequireHttpsOnly,
+    #[error("redirect limit of {} was exhausted", MAX_REDIRECTS)]
     TooManyRedirects,
+    #[error("HTTP response status {0} is not successful")]
     HttpStatus(u16),
-    Transport,
-    BodyCopy,
-}
-
-#[derive(Debug)]
-enum FetchTransportErrorSource {
-    Io(io::Error),
-    Ureq(ureq::Error),
-}
-
-impl fmt::Display for FetchTransportErrorSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(source) => source.fmt(formatter),
-            Self::Ureq(source) => source.fmt(formatter),
-        }
-    }
-}
-
-impl FetchTransportErrorSource {
-    fn as_error(&self) -> &(dyn Error + 'static) {
-        match self {
-            Self::Io(source) => source,
-            Self::Ureq(source) => source,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct FetchTransportError {
-    kind: FetchTransportErrorKind,
-    source: Option<FetchTransportErrorSource>,
+    #[error("HTTPS transport failed: {0}")]
+    TransportIo(#[source] io::Error),
+    #[error("HTTPS transport failed: {0}")]
+    TransportUreq(#[source] ureq::Error),
+    #[error("failed to copy the HTTPS response body: {0}")]
+    BodyCopy(#[source] io::Error),
 }
 
 impl FetchTransportError {
     fn io(source: io::Error) -> Self {
-        Self {
-            kind: FetchTransportErrorKind::BodyCopy,
-            source: Some(FetchTransportErrorSource::Io(source)),
-        }
+        Self::BodyCopy(source)
     }
 
     fn from_ureq(source: ureq::Error) -> Self {
-        let (kind, source) = match source {
-            ureq::Error::RequireHttpsOnly(_) => (FetchTransportErrorKind::RequireHttpsOnly, None),
-            ureq::Error::TooManyRedirects => (FetchTransportErrorKind::TooManyRedirects, None),
-            ureq::Error::StatusCode(status) => (FetchTransportErrorKind::HttpStatus(status), None),
-            ureq::Error::Io(source) => (
-                FetchTransportErrorKind::Transport,
-                Some(FetchTransportErrorSource::Io(source)),
-            ),
-            source => (
-                FetchTransportErrorKind::Transport,
-                Some(FetchTransportErrorSource::Ureq(source)),
-            ),
-        };
-        Self { kind, source }
-    }
-
-    fn http_status(status: u16) -> Self {
-        Self {
-            kind: FetchTransportErrorKind::HttpStatus(status),
-            source: None,
+        match source {
+            ureq::Error::RequireHttpsOnly(_) => Self::RequireHttpsOnly,
+            ureq::Error::TooManyRedirects => Self::TooManyRedirects,
+            ureq::Error::StatusCode(status) => Self::HttpStatus(status),
+            ureq::Error::Io(source) => Self::TransportIo(source),
+            source => Self::TransportUreq(source),
         }
     }
-}
 
-impl fmt::Display for FetchTransportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (&self.kind, &self.source) {
-            (FetchTransportErrorKind::RequireHttpsOnly, _) => formatter.write_str(
-                "HTTPS-only policy rejected the request or an insecure redirect downgrade",
-            ),
-            (FetchTransportErrorKind::TooManyRedirects, _) => {
-                write!(formatter, "redirect limit of {MAX_REDIRECTS} was exhausted")
-            }
-            (FetchTransportErrorKind::HttpStatus(status), _) => {
-                write!(formatter, "HTTP response status {status} is not successful")
-            }
-            (FetchTransportErrorKind::Transport, Some(source)) => {
-                write!(formatter, "HTTPS transport failed: {source}")
-            }
-            (FetchTransportErrorKind::BodyCopy, Some(source)) => {
-                write!(
-                    formatter,
-                    "failed to copy the HTTPS response body: {source}"
-                )
-            }
-            (FetchTransportErrorKind::Transport | FetchTransportErrorKind::BodyCopy, None) => {
-                formatter.write_str("HTTPS transfer failed")
-            }
-        }
-    }
-}
-
-impl Error for FetchTransportError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(FetchTransportErrorSource::as_error)
+    const fn http_status(status: u16) -> Self {
+        Self::HttpStatus(status)
     }
 }
 
@@ -379,30 +294,19 @@ impl<'a> FetchContentRunner<'a> {
             EntryKind::Missing => FetchContentOutcome::Created,
             EntryKind::RegularFile | EntryKind::Symlink => {
                 if action.on_conflict() == FetchContentConflict::Error {
-                    return Err(FetchContentError::new(
-                        action,
-                        FetchContentStage::Preflight,
-                        FetchContentErrorKind::Conflict(initial),
-                    ));
+                    return Err(FetchContentError::conflict(action, initial));
                 }
                 FetchContentOutcome::Replaced
             }
             EntryKind::Directory | EntryKind::Special => {
-                return Err(FetchContentError::new(
-                    action,
-                    FetchContentStage::Preflight,
-                    FetchContentErrorKind::Unsupported(initial),
-                ));
+                return Err(FetchContentError::unsupported(action, initial));
             }
         };
 
-        let parent = action.target().parent().ok_or_else(|| {
-            FetchContentError::new(
-                action,
-                FetchContentStage::Prepare,
-                FetchContentErrorKind::InvalidTarget,
-            )
-        })?;
+        let parent = action
+            .target()
+            .parent()
+            .ok_or_else(|| FetchContentError::invalid_target(action))?;
         fs::create_dir_all(parent).map_err(|source| {
             FetchContentError::io(
                 action,
@@ -422,13 +326,7 @@ impl<'a> FetchContentRunner<'a> {
 
         self.transport
             .fetch(action.source(), staged.as_file_mut())
-            .map_err(|source| {
-                FetchContentError::new(
-                    action,
-                    FetchContentStage::Transfer,
-                    FetchContentErrorKind::Transfer(source),
-                )
-            })?;
+            .map_err(|source| FetchContentError::transfer(action, source))?;
         staged.as_file_mut().flush().map_err(|source| {
             FetchContentError::io(
                 action,
@@ -444,11 +342,7 @@ impl<'a> FetchContentRunner<'a> {
         // Correct target-kind behavior therefore assumes cooperative exclusion of other writers.
         match initial {
             EntryKind::Missing if current != EntryKind::Missing => {
-                return Err(FetchContentError::new(
-                    action,
-                    FetchContentStage::Commit,
-                    FetchContentErrorKind::Concurrent(current),
-                ));
+                return Err(FetchContentError::concurrent(action, current));
             }
             EntryKind::Missing => {}
             EntryKind::RegularFile | EntryKind::Symlink => match current {
@@ -470,11 +364,7 @@ impl<'a> FetchContentRunner<'a> {
                     )
                 })?,
                 EntryKind::Directory | EntryKind::Special => {
-                    return Err(FetchContentError::new(
-                        action,
-                        FetchContentStage::Commit,
-                        FetchContentErrorKind::Concurrent(current),
-                    ));
+                    return Err(FetchContentError::concurrent(action, current));
                 }
             },
             EntryKind::Directory | EntryKind::Special => unreachable!("preflight rejects these"),
@@ -673,6 +563,26 @@ mod tests {
         FetchContentRunner::new(transport).run(&action(target, on_conflict))
     }
 
+    fn assert_error_shape(
+        error: &FetchContentError,
+        stage: FetchContentStage,
+        target: &Path,
+        reason: &str,
+    ) {
+        let message = error.to_string();
+        assert!(
+            message.starts_with(&format!(
+                "fetch {stage} failed for target `{}`:",
+                target.display()
+            )),
+            "unexpected error shape: {message}"
+        );
+        assert!(
+            message.contains(reason),
+            "error `{message}` did not contain reason `{reason}`"
+        );
+    }
+
     fn directory_entries(path: &Path) -> Vec<PathBuf> {
         let mut entries = fs::read_dir(path)
             .expect("directory should be readable")
@@ -803,9 +713,19 @@ mod tests {
 
         assert_eq!(error.stage(), FetchContentStage::Preflight);
         assert!(matches!(
-            error.details.kind,
-            FetchContentErrorKind::Conflict(EntryKind::RegularFile)
+            &*error.details,
+            FetchContentErrorDetails::Conflict {
+                entry: EntryKind::RegularFile,
+                ..
+            }
         ));
+        assert_error_shape(
+            &error,
+            FetchContentStage::Preflight,
+            &target,
+            "existing regular file conflicts with error policy",
+        );
+        assert!(error.source().is_none());
         assert_eq!(transport.calls.get(), 0);
         assert_eq!(fs::read(target).expect("target should be readable"), b"old");
     }
@@ -824,8 +744,11 @@ mod tests {
 
         assert_eq!(error.stage(), FetchContentStage::Preflight);
         assert!(matches!(
-            error.details.kind,
-            FetchContentErrorKind::Conflict(EntryKind::Symlink)
+            &*error.details,
+            FetchContentErrorDetails::Conflict {
+                entry: EntryKind::Symlink,
+                ..
+            }
         ));
         assert_eq!(transport.calls.get(), 0);
         assert!(
@@ -928,9 +851,19 @@ mod tests {
 
             assert_eq!(error.stage(), FetchContentStage::Preflight);
             assert!(matches!(
-                error.details.kind,
-                FetchContentErrorKind::Unsupported(EntryKind::Directory)
+                &*error.details,
+                FetchContentErrorDetails::Unsupported {
+                    entry: EntryKind::Directory,
+                    ..
+                }
             ));
+            assert_error_shape(
+                &error,
+                FetchContentStage::Preflight,
+                &target,
+                "directory cannot be materialized",
+            );
+            assert!(error.source().is_none());
             assert_eq!(transport.calls.get(), 0);
             assert!(target.is_dir());
         }
@@ -952,9 +885,19 @@ mod tests {
 
             assert_eq!(error.stage(), FetchContentStage::Preflight);
             assert!(matches!(
-                error.details.kind,
-                FetchContentErrorKind::Unsupported(EntryKind::Special)
+                &*error.details,
+                FetchContentErrorDetails::Unsupported {
+                    entry: EntryKind::Special,
+                    ..
+                }
             ));
+            assert_error_shape(
+                &error,
+                FetchContentStage::Preflight,
+                &target,
+                "special filesystem entry cannot be materialized",
+            );
+            assert!(error.source().is_none());
             assert_eq!(transport.calls.get(), 0);
             assert!(fs::symlink_metadata(&target).is_ok());
             drop(listener);
@@ -973,6 +916,17 @@ mod tests {
             .expect_err("transport failure should be returned");
 
         assert_eq!(error.stage(), FetchContentStage::Transfer);
+        assert_error_shape(
+            &error,
+            FetchContentStage::Transfer,
+            &target,
+            "failed to copy the HTTPS response body: configured fake transport failure",
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("failed to fetch `https://example.com/content`")
+        );
         assert_eq!(transport.calls.get(), 1);
         assert_eq!(fs::read(target).expect("target should be readable"), b"old");
         assert_eq!(directory_entries(directory.path()), before);
@@ -991,8 +945,33 @@ mod tests {
             .expect_err("unusable parent should fail");
 
         assert_eq!(error.stage(), FetchContentStage::Prepare);
+        assert_error_shape(
+            &error,
+            FetchContentStage::Prepare,
+            &target,
+            "failed to create target parent directories",
+        );
         assert_eq!(transport.calls.get(), 0);
-        assert!(error.source().is_some());
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.is::<io::Error>())
+        );
+    }
+
+    #[test]
+    fn invalid_target_error_has_prepare_shape_and_no_source() {
+        let target = PathBuf::from("invalid-target");
+        let action = action(&target, FetchContentConflict::Error);
+        let error = FetchContentError::invalid_target(&action);
+
+        assert_error_shape(
+            &error,
+            FetchContentStage::Prepare,
+            &target,
+            "target has no parent directory",
+        );
+        assert!(error.source().is_none());
     }
 
     #[cfg(unix)]
@@ -1065,8 +1044,8 @@ mod tests {
 
         assert_eq!(error.stage(), FetchContentStage::Prepare);
         assert!(matches!(
-            error.details.kind,
-            FetchContentErrorKind::Io {
+            &*error.details,
+            FetchContentErrorDetails::Io {
                 operation: "create staging file",
                 ..
             }
@@ -1123,16 +1102,20 @@ mod tests {
 
         assert_eq!(error.stage(), FetchContentStage::Commit);
         assert!(matches!(
-            error.details.kind,
-            FetchContentErrorKind::Concurrent(EntryKind::Directory)
+            &*error.details,
+            FetchContentErrorDetails::Concurrent {
+                entry: EntryKind::Directory,
+                ..
+            }
         ));
         assert_eq!(
             error.to_string(),
             format!(
-                "fetch target `{}` was observed as a directory at the commit check; refusing that commit path",
+                "fetch commit failed for target `{}`: observed directory at commit check; refusing that commit path",
                 target.display()
             )
         );
+        assert!(error.source().is_none());
         assert_eq!(
             fs::read(target.join("sentinel")).expect("sentinel should be readable"),
             b"safe"
@@ -1179,10 +1162,25 @@ mod tests {
         let transport_source = transfer
             .source()
             .expect("transfer should retain its source");
+        assert!(transport_source.is::<FetchTransportError>());
         assert!(
             transport_source
                 .source()
                 .is_some_and(|source| source.is::<io::Error>())
+        );
+
+        let ureq_transfer = FetchContentError::transfer(
+            &action(&target, FetchContentConflict::Error),
+            FetchTransportError::from_ureq(ureq::Error::ConnectionFailed),
+        );
+        let transport_source = ureq_transfer
+            .source()
+            .expect("transfer should retain its transport source");
+        assert!(transport_source.is::<FetchTransportError>());
+        assert!(
+            transport_source
+                .source()
+                .is_some_and(|source| source.is::<ureq::Error>())
         );
     }
 
@@ -1199,28 +1197,25 @@ mod tests {
 
     #[test]
     fn maps_https_redirect_status_and_generic_transport_errors() {
-        let cases = [
-            (
-                ureq::Error::RequireHttpsOnly("http://example.com".to_owned()),
-                FetchTransportErrorKind::RequireHttpsOnly,
-            ),
-            (
-                ureq::Error::TooManyRedirects,
-                FetchTransportErrorKind::TooManyRedirects,
-            ),
-            (
-                ureq::Error::StatusCode(400),
-                FetchTransportErrorKind::HttpStatus(400),
-            ),
-            (
-                ureq::Error::StatusCode(500),
-                FetchTransportErrorKind::HttpStatus(500),
-            ),
-        ];
+        let require_https = FetchTransportError::from_ureq(ureq::Error::RequireHttpsOnly(
+            "http://example.com".to_owned(),
+        ));
+        assert!(matches!(
+            &require_https,
+            FetchTransportError::RequireHttpsOnly
+        ));
+        assert!(require_https.source().is_none());
 
-        for (source, expected) in cases {
-            let error = FetchTransportError::from_ureq(source);
-            assert_eq!(error.kind, expected);
+        let redirects = FetchTransportError::from_ureq(ureq::Error::TooManyRedirects);
+        assert!(matches!(&redirects, FetchTransportError::TooManyRedirects));
+        assert!(redirects.source().is_none());
+
+        for status in [400, 500] {
+            let error = FetchTransportError::from_ureq(ureq::Error::StatusCode(status));
+            assert!(matches!(
+                &error,
+                FetchTransportError::HttpStatus(actual) if *actual == status
+            ));
             assert!(error.source().is_none());
         }
 
@@ -1228,7 +1223,7 @@ mod tests {
             io::ErrorKind::ConnectionAborted,
             "network stopped",
         )));
-        assert_eq!(error.kind, FetchTransportErrorKind::Transport);
+        assert!(matches!(&error, FetchTransportError::TransportIo(_)));
         assert!(
             error
                 .source()
@@ -1236,7 +1231,7 @@ mod tests {
         );
 
         let error = FetchTransportError::from_ureq(ureq::Error::ConnectionFailed);
-        assert_eq!(error.kind, FetchTransportErrorKind::Transport);
+        assert!(matches!(&error, FetchTransportError::TransportUreq(_)));
         assert!(
             error
                 .source()
@@ -1248,7 +1243,10 @@ mod tests {
     fn validates_representative_final_http_statuses() {
         for status in [100, 199, 300, 302, 399, 400, 404, 500, 599] {
             let error = validate_final_status(status).expect_err("non-2xx should fail");
-            assert_eq!(error.kind, FetchTransportErrorKind::HttpStatus(status));
+            assert!(matches!(
+                error,
+                FetchTransportError::HttpStatus(actual) if actual == status
+            ));
         }
         for status in [200, 201, 204, 299] {
             validate_final_status(status).expect("2xx should succeed");
@@ -1262,7 +1260,8 @@ mod tests {
         ));
         let redirects = FetchTransportError::from_ureq(ureq::Error::TooManyRedirects);
 
-        assert_ne!(downgrade.kind, redirects.kind);
+        assert!(matches!(&downgrade, FetchTransportError::RequireHttpsOnly));
+        assert!(matches!(&redirects, FetchTransportError::TooManyRedirects));
         assert!(downgrade.to_string().contains("HTTPS"));
         assert!(redirects.to_string().contains("redirect"));
     }
