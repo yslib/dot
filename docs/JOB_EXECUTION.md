@@ -231,8 +231,9 @@ subphases rather than one mixed package-ID order.
 2. Every selected provider-backed package runs after the provider phase. It
    receives the successful in-memory `ProviderStatus` for its declared
    provider.
-3. Selected manual-package actions run.
-4. Selected global actions run.
+3. Selected manual-package Command Actions run.
+4. Selected global Actions run by action ID, dispatching each structural
+   variant to its Command or Fetch Content runner.
 5. Selected link targets are normalized first so duplicate resolved targets
    can be detected. Without a duplicate, target-normalization and source
    preparation errors remain attached to their individual links, and later
@@ -257,7 +258,8 @@ Runtime failures remain local where execution can continue safely:
 - an unrelated provider and its selected packages still run;
 - failure of one provider install unit does not block later install units,
   including another unit using the same provider;
-- manual-package and action failures do not stop unrelated later jobs;
+- manual-package Command Action failures and global Command or Fetch Content
+  Action failures do not stop unrelated later jobs;
 - only duplicate resolved targets block the complete selected link phase before
   link mutation;
 - target-normalization, source-preparation, and reconciliation failures fail
@@ -267,8 +269,9 @@ Every planned job receives exactly one completed or blocked result. Apply
 returns a failed report when any selected job fails or is blocked.
 
 Provider commands retain their existing stream behavior: probes and checks use
-captured output, while ensure, install, and action exec processes inherit the
-terminal streams. Execution remains blocking, foreground, and serial.
+captured output, while ensure, install, and Command Action exec processes
+inherit the terminal streams. Execution remains blocking, foreground, and
+serial.
 
 ## Apply, dry-run, and provider check
 
@@ -285,7 +288,10 @@ load and statically validate the complete configuration
 Apply passes `&ExecutionPlan` directly to `JobRunner`, then combines plan facts
 with typed execution outcomes. Dry-run projects the same plan directly into
 `PLANNED` report items and performs no execution. It does not probe providers,
-run checks or exec actions, inspect link state, or mutate the filesystem.
+run Command Action checks or execs, transfer Fetch Content, inspect Fetch
+Content targets or link state, or mutate the filesystem. Planning still
+resolves each selected Fetch Content source and target, and the human table
+displays that resolved pair.
 
 `dot check providers` is a separate diagnostic path. It does not accept job
 selectors, construct an `ExecutionPlan`, or invoke `JobRunner`. After complete
@@ -313,7 +319,8 @@ The presentation-independent report vocabulary remains:
 - provider results: `READY` or `NOT_READY`;
 - provider-package results: `INSTALLED`, `FAILED`, or `BLOCKED`;
 - manual-package results: `SATISFIED`, `INSTALLED`, or `FAILED`;
-- global-action results: `SATISFIED`, `EXECUTED`, or `FAILED`;
+- global Command Action results: `SATISFIED`, `EXECUTED`, or `FAILED`;
+- global Fetch Content Action results: `CREATED`, `REPLACED`, or `FAILED`;
 - link results: `SATISFIED`, `CREATED`, `REPLACED`, `SKIPPED`, `FAILED`, or
   `BLOCKED`.
 
@@ -331,6 +338,7 @@ job.rs           JobId, JobSelector, and JobSelection
 plan.rs          selection, provider closure, runtime resolution, ExecutionPlan
 job_runner.rs    serial phase orchestration over &ExecutionPlan
 job_executor.rs  typed provider/action/link execution adapter
+fetch_content.rs HTTPS transfer, same-directory staging, and local target commit
 dry_run.rs       deterministic ExecutionPlan report projection
 check.rs         independent provider-only diagnostic path
 ```
