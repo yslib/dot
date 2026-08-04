@@ -36,7 +36,7 @@ pub enum ActionOutcome {
 }
 
 impl ActionOutcome {
-    pub const fn is_succeeded(&self) -> bool {
+    const fn is_succeeded(&self) -> bool {
         match self {
             Self::Command(result) => result.is_ok(),
             Self::FetchContent(result) => result.is_ok(),
