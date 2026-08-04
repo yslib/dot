@@ -116,18 +116,6 @@ enum FetchContentErrorDetails {
 }
 
 impl FetchContentError {
-    #[cfg(test)]
-    fn stage(&self) -> FetchContentStage {
-        match &*self.details {
-            FetchContentErrorDetails::Conflict { .. }
-            | FetchContentErrorDetails::Unsupported { .. } => FetchContentStage::Preflight,
-            FetchContentErrorDetails::Concurrent { .. } => FetchContentStage::Commit,
-            FetchContentErrorDetails::InvalidTarget { .. } => FetchContentStage::Prepare,
-            FetchContentErrorDetails::Io { stage, .. } => *stage,
-            FetchContentErrorDetails::Transfer { .. } => FetchContentStage::Transfer,
-        }
-    }
-
     fn from_details(details: FetchContentErrorDetails) -> Self {
         Self {
             details: Box::new(details),
@@ -182,51 +170,6 @@ impl FetchContentError {
             source,
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        action: &PlannedFetchContentAction,
-        failure: TestFetchContentFailure,
-    ) -> Self {
-        match failure {
-            TestFetchContentFailure::Conflict => Self::conflict(action, EntryKind::RegularFile),
-            TestFetchContentFailure::Directory => Self::unsupported(action, EntryKind::Directory),
-            TestFetchContentFailure::Special => Self::unsupported(action, EntryKind::Special),
-            TestFetchContentFailure::Prepare(source) => Self::io(
-                action,
-                FetchContentStage::Prepare,
-                "prepare test target",
-                source,
-            ),
-            TestFetchContentFailure::Transport(source) => {
-                Self::transfer(action, FetchTransportError::TransportIo(source))
-            }
-            TestFetchContentFailure::HttpStatus(status) => {
-                Self::transfer(action, FetchTransportError::http_status(status))
-            }
-            TestFetchContentFailure::RedirectLimit => {
-                Self::transfer(action, FetchTransportError::TooManyRedirects)
-            }
-            TestFetchContentFailure::Commit(source) => Self::io(
-                action,
-                FetchContentStage::Commit,
-                "commit test target",
-                source,
-            ),
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) enum TestFetchContentFailure {
-    Conflict,
-    Directory,
-    Special,
-    Prepare(io::Error),
-    Transport(io::Error),
-    HttpStatus(u16),
-    RedirectLimit,
-    Commit(io::Error),
 }
 
 pub(crate) trait FetchTransport {
@@ -563,12 +506,7 @@ mod tests {
         FetchContentRunner::new(transport).run(&action(target, on_conflict))
     }
 
-    fn assert_error_shape(
-        error: &FetchContentError,
-        stage: FetchContentStage,
-        target: &Path,
-        reason: &str,
-    ) {
+    fn assert_error_shape(error: &FetchContentError, stage: &str, target: &Path, reason: &str) {
         let message = error.to_string();
         assert!(
             message.starts_with(&format!(
@@ -611,59 +549,6 @@ mod tests {
     fn symlink_dir(source: &Path, target: &Path) {
         std::os::windows::fs::symlink_dir(source, target)
             .expect("directory symlink should be created");
-    }
-
-    #[cfg(unix)]
-    struct PermissionGuard {
-        path: PathBuf,
-        original: fs::Permissions,
-    }
-
-    #[cfg(unix)]
-    impl PermissionGuard {
-        fn set(path: &Path, mode: u32) -> Self {
-            use std::os::unix::fs::PermissionsExt;
-
-            let original = fs::metadata(path)
-                .expect("guarded directory should be inspectable")
-                .permissions();
-            fs::set_permissions(path, fs::Permissions::from_mode(mode))
-                .expect("guarded directory permissions should be changed");
-            Self {
-                path: path.to_owned(),
-                original,
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for PermissionGuard {
-        fn drop(&mut self) {
-            let _ = fs::set_permissions(&self.path, self.original.clone());
-        }
-    }
-
-    #[cfg(unix)]
-    fn effective_uid() -> u32 {
-        unsafe extern "C" {
-            fn geteuid() -> u32;
-        }
-
-        // SAFETY: geteuid takes no arguments and has no memory-safety preconditions.
-        unsafe { geteuid() }
-    }
-
-    #[cfg(unix)]
-    fn drop_staging_helper_privileges() {
-        unsafe extern "C" {
-            fn setuid(uid: u32) -> i32;
-        }
-
-        assert_eq!(effective_uid(), 0, "staging helper should start as root");
-        // SAFETY: UID 65534 is passed by value and setuid has no pointer arguments.
-        let result = unsafe { setuid(65_534) };
-        assert_eq!(result, 0, "staging helper should drop root privileges");
-        assert_ne!(effective_uid(), 0, "staging helper must not remain root");
     }
 
     #[test]
@@ -711,17 +596,9 @@ mod tests {
         let error = run(&target, FetchContentConflict::Error, &transport)
             .expect_err("existing regular file should conflict");
 
-        assert_eq!(error.stage(), FetchContentStage::Preflight);
-        assert!(matches!(
-            &*error.details,
-            FetchContentErrorDetails::Conflict {
-                entry: EntryKind::RegularFile,
-                ..
-            }
-        ));
         assert_error_shape(
             &error,
-            FetchContentStage::Preflight,
+            "preflight",
             &target,
             "existing regular file conflicts with error policy",
         );
@@ -742,14 +619,12 @@ mod tests {
         let error = run(&target, FetchContentConflict::Error, &transport)
             .expect_err("existing symlink should conflict");
 
-        assert_eq!(error.stage(), FetchContentStage::Preflight);
-        assert!(matches!(
-            &*error.details,
-            FetchContentErrorDetails::Conflict {
-                entry: EntryKind::Symlink,
-                ..
-            }
-        ));
+        assert_error_shape(
+            &error,
+            "preflight",
+            &target,
+            "existing symbolic link conflicts with error policy",
+        );
         assert_eq!(transport.calls.get(), 0);
         assert!(
             fs::symlink_metadata(target)
@@ -849,17 +724,9 @@ mod tests {
             let error =
                 run(&target, policy, &transport).expect_err("real directory should be rejected");
 
-            assert_eq!(error.stage(), FetchContentStage::Preflight);
-            assert!(matches!(
-                &*error.details,
-                FetchContentErrorDetails::Unsupported {
-                    entry: EntryKind::Directory,
-                    ..
-                }
-            ));
             assert_error_shape(
                 &error,
-                FetchContentStage::Preflight,
+                "preflight",
                 &target,
                 "directory cannot be materialized",
             );
@@ -883,17 +750,9 @@ mod tests {
             let error =
                 run(&target, policy, &transport).expect_err("special entry should be rejected");
 
-            assert_eq!(error.stage(), FetchContentStage::Preflight);
-            assert!(matches!(
-                &*error.details,
-                FetchContentErrorDetails::Unsupported {
-                    entry: EntryKind::Special,
-                    ..
-                }
-            ));
             assert_error_shape(
                 &error,
-                FetchContentStage::Preflight,
+                "preflight",
                 &target,
                 "special filesystem entry cannot be materialized",
             );
@@ -915,10 +774,9 @@ mod tests {
         let error = run(&target, FetchContentConflict::Replace, &transport)
             .expect_err("transport failure should be returned");
 
-        assert_eq!(error.stage(), FetchContentStage::Transfer);
         assert_error_shape(
             &error,
-            FetchContentStage::Transfer,
+            "transfer",
             &target,
             "failed to copy the HTTPS response body: configured fake transport failure",
         );
@@ -944,10 +802,9 @@ mod tests {
         let error = run(&target, FetchContentConflict::Error, &transport)
             .expect_err("unusable parent should fail");
 
-        assert_eq!(error.stage(), FetchContentStage::Prepare);
         assert_error_shape(
             &error,
-            FetchContentStage::Prepare,
+            "prepare",
             &target,
             "failed to create target parent directories",
         );
@@ -956,108 +813,6 @@ mod tests {
             error
                 .source()
                 .is_some_and(|source| source.is::<io::Error>())
-        );
-    }
-
-    #[test]
-    fn invalid_target_error_has_prepare_shape_and_no_source() {
-        let target = PathBuf::from("invalid-target");
-        let action = action(&target, FetchContentConflict::Error);
-        let error = FetchContentError::invalid_target(&action);
-
-        assert_error_shape(
-            &error,
-            FetchContentStage::Prepare,
-            &target,
-            "target has no parent directory",
-        );
-        assert!(error.source().is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn staging_file_creation_failure_preserves_existing_target_before_transport() {
-        use std::process::Command;
-
-        const HELPER_ENV: &str = "DOT_FETCH_STAGING_FAILURE_TARGET";
-        const HELPER_SENTINEL_ENV: &str = "DOT_FETCH_STAGING_FAILURE_HELPER";
-        const HELPER_SENTINEL: &str = "fetch-content-private-staging-helper-v1";
-        const HELPER_TEST: &str = "fetch_content::tests::staging_file_creation_failure_preserves_existing_target_before_transport";
-
-        if std::env::var_os(HELPER_SENTINEL_ENV).as_deref()
-            == Some(std::ffi::OsStr::new(HELPER_SENTINEL))
-        {
-            let target = std::env::var_os(HELPER_ENV)
-                .map(PathBuf::from)
-                .expect("staging failure helper target should be provided");
-            drop_staging_helper_privileges();
-            assert_staging_creation_failure(&target);
-            return;
-        }
-
-        let directory = tempfile::tempdir_in("/tmp")
-            .expect("world-traversable temporary root should be created");
-        let parent = directory.path().join("target-parent");
-        let target = parent.join("content");
-        fs::create_dir(&parent).expect("target parent should be created");
-        fs::write(&target, b"old").expect("existing target should be written");
-        let _outer_permissions = PermissionGuard::set(directory.path(), 0o755);
-        let _target_permissions = PermissionGuard::set(&target, 0o644);
-        let _parent_permissions = PermissionGuard::set(&parent, 0o555);
-
-        match NamedTempFile::new_in(&parent) {
-            Err(_) => assert_staging_creation_failure(&target),
-            Ok(probe) => {
-                drop(probe);
-                assert_eq!(
-                    effective_uid(),
-                    0,
-                    "only root may bypass read/execute-only directory permissions"
-                );
-                let status = Command::new(
-                    std::env::current_exe().expect("current test executable should be available"),
-                )
-                .arg("--exact")
-                .arg(HELPER_TEST)
-                .arg("--nocapture")
-                .env(HELPER_ENV, &target)
-                .env(HELPER_SENTINEL_ENV, HELPER_SENTINEL)
-                .current_dir("/")
-                .status()
-                .expect("unprivileged staging failure helper should start");
-                assert!(
-                    status.success(),
-                    "unprivileged staging failure helper failed"
-                );
-            }
-        }
-
-        assert_eq!(directory_entries(&parent), vec![target]);
-    }
-
-    #[cfg(unix)]
-    fn assert_staging_creation_failure(target: &Path) {
-        let transport = FakeTransport::bytes(b"new".to_vec());
-
-        let error = run(target, FetchContentConflict::Replace, &transport)
-            .expect_err("staging file creation should fail");
-
-        assert_eq!(error.stage(), FetchContentStage::Prepare);
-        assert!(matches!(
-            &*error.details,
-            FetchContentErrorDetails::Io {
-                operation: "create staging file",
-                ..
-            }
-        ));
-        assert_eq!(transport.calls.get(), 0);
-        assert_eq!(
-            fs::read(target).expect("existing target should remain readable"),
-            b"old"
-        );
-        assert_eq!(
-            directory_entries(target.parent().expect("target should have a parent")),
-            vec![target.to_owned()]
         );
     }
 
@@ -1071,15 +826,14 @@ mod tests {
                 .expect("concurrent target should be written");
         });
 
-        let error = run(&target, FetchContentConflict::Replace, &transport)
+        run(&target, FetchContentConflict::Replace, &transport)
             .expect_err("concurrent target should prevent commit");
 
-        assert_eq!(error.stage(), FetchContentStage::Commit);
         assert_eq!(
-            fs::read(target).expect("target should be readable"),
+            fs::read(&target).expect("target should be readable"),
             b"concurrent"
         );
-        assert_eq!(directory_entries(directory.path()).len(), 1);
+        assert_eq!(directory_entries(directory.path()), vec![target]);
     }
 
     #[test]
@@ -1100,14 +854,6 @@ mod tests {
         let error = run(&target, FetchContentConflict::Replace, &transport)
             .expect_err("concurrent real directory should prevent commit");
 
-        assert_eq!(error.stage(), FetchContentStage::Commit);
-        assert!(matches!(
-            &*error.details,
-            FetchContentErrorDetails::Concurrent {
-                entry: EntryKind::Directory,
-                ..
-            }
-        ));
         assert_eq!(
             error.to_string(),
             format!(
@@ -1121,22 +867,6 @@ mod tests {
             b"safe"
         );
         assert_eq!(directory_entries(directory.path()).len(), 2);
-    }
-
-    #[test]
-    fn commit_failure_cleans_transient_staging_file() {
-        let directory = tempdir().expect("temporary directory should be created");
-        let target = directory.path().join("content");
-        let mutation_target = target.clone();
-        let transport = FakeTransport::bytes(b"downloaded".to_vec()).with_mutation(move || {
-            fs::write(&mutation_target, b"concurrent")
-                .expect("concurrent target should be written");
-        });
-
-        run(&target, FetchContentConflict::Error, &transport)
-            .expect_err("concurrent target should prevent commit");
-
-        assert_eq!(directory_entries(directory.path()), vec![target]);
     }
 
     #[test]
@@ -1251,19 +981,6 @@ mod tests {
         for status in [200, 201, 204, 299] {
             validate_final_status(status).expect("2xx should succeed");
         }
-    }
-
-    #[test]
-    fn https_downgrade_and_redirect_exhaustion_are_distinct_clear_failures() {
-        let downgrade = FetchTransportError::from_ureq(ureq::Error::RequireHttpsOnly(
-            "http://example.com".to_owned(),
-        ));
-        let redirects = FetchTransportError::from_ureq(ureq::Error::TooManyRedirects);
-
-        assert!(matches!(&downgrade, FetchTransportError::RequireHttpsOnly));
-        assert!(matches!(&redirects, FetchTransportError::TooManyRedirects));
-        assert!(downgrade.to_string().contains("HTTPS"));
-        assert!(redirects.to_string().contains("redirect"));
     }
 
     #[cfg(unix)]

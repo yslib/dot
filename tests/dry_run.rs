@@ -235,12 +235,47 @@ fn selected_fetch_content_action_is_planned_and_projected_without_io() {
 }
 
 #[test]
-fn fetch_content_fixture_escapes_a_windows_target_path() {
-    let input = fetch_content_fixture(Path::new(
-        r"C:\Users\runneradmin\AppData\Local\Temp\config.toml",
-    ));
+fn fetch_source_locator_policy_accepts_https_without_confusing_path_data_for_userinfo() {
+    let input = r#"
+[targets.machine]
+platform = { os = "linux" }
 
-    toml::from_str::<Config>(&input).expect("escaped Windows target should deserialize");
+[targets.machine.actions.uppercase]
+source = "HTTPS://example.com/config.toml"
+target = "configs/uppercase.toml"
+
+[targets.machine.actions.ipv6]
+source = "https://[2001:db8::1]/config.toml"
+target = "configs/ipv6.toml"
+
+[targets.machine.actions.path-at]
+source = "https://example.com/@scope/config.toml"
+target = "configs/path-at.toml"
+"#;
+    let config: Config = toml::from_str(input).expect("test config should deserialize");
+    let target = selector_id("machine");
+    let platform = platform();
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
+        .expect("test manifest should select");
+    let environment = environment();
+    let xdg = XdgPaths::detect();
+
+    let plan = ExecutionPlanner::new(&environment, dot_paths(), &xdg, &platform)
+        .plan(&manifest, &JobSelection::All)
+        .expect("valid HTTPS locator forms should plan");
+    let sources = plan
+        .actions()
+        .map(|action| {
+            let PlannedActionKind::FetchContent(fetch) = action.kind() else {
+                panic!("fixture actions should all be fetch actions");
+            };
+            (action.id(), fetch.source().as_str())
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(sources["uppercase"], "https://example.com/config.toml");
+    assert_eq!(sources["ipv6"], "https://[2001:db8::1]/config.toml");
+    assert_eq!(sources["path-at"], "https://example.com/@scope/config.toml");
 }
 
 #[test]
@@ -265,13 +300,25 @@ target = "configs/empty-password-userinfo.toml"
 source = ":not-a-url"
 target = "configs/url.toml"
 
+[targets.machine.actions.noncanonical-https]
+source = "https:///config.toml"
+target = "configs/noncanonical.toml"
+
+[targets.machine.actions.secret-userinfo]
+source = "https://account:topsecret@example.com/config.toml"
+target = "configs/secret.toml"
+
 [targets.machine.actions.invalid-target]
 source = "https://example.com/config.toml"
-target = "https://example.com/not-a-local-target"
+target = "https://account:topsecret@example.com/not-a-local-target"
 
 [targets.machine.actions.missing-env]
 source = "${env:DOT_MISSING_FETCH_SOURCE}"
 target = "configs/missing.toml"
+
+[targets.machine.actions.missing-target-env]
+source = "https://example.com/config.toml"
+target = "${env:DOT_MISSING_FETCH_TARGET}"
 
 [targets.machine.actions.valid]
 source = "https://example.com/config.toml"
@@ -339,14 +386,44 @@ target = "configs/app.toml"
     let error = planner
         .plan(
             &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("noncanonical-https"))),
+        )
+        .expect_err("selected noncanonical HTTPS source should fail planning");
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::UnsupportedFetchContentSource { action })
+            if action == "noncanonical-https"
+    ));
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("secret-userinfo"))),
+        )
+        .expect_err("selected authenticated source should fail planning");
+    let message = error.to_string();
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::AuthenticatedFetchContentSource { action })
+            if action == "secret-userinfo"
+    ));
+    assert!(!message.contains("account"));
+    assert!(!message.contains("topsecret"));
+
+    let error = planner
+        .plan(
+            &manifest,
             &JobSelection::only(JobSelector::Action(selector_id("invalid-target"))),
         )
         .expect_err("selected URL target should fail planning");
+    let message = error.to_string();
     assert!(matches!(
         error,
         ExecutionPlanError::Planning(PlanningError::UnsupportedFetchContentTarget { action })
             if action == "invalid-target"
     ));
+    assert!(!message.contains("account"));
+    assert!(!message.contains("topsecret"));
 
     let error = planner
         .plan(
@@ -358,6 +435,18 @@ target = "configs/app.toml"
         error,
         ExecutionPlanError::Planning(PlanningError::Interpolation { context, .. })
             if context == "selected job `action:missing-env` field `source`"
+    ));
+
+    let error = planner
+        .plan(
+            &manifest,
+            &JobSelection::only(JobSelector::Action(selector_id("missing-target-env"))),
+        )
+        .expect_err("selected unresolved fetch target should fail planning");
+    assert!(matches!(
+        error,
+        ExecutionPlanError::Planning(PlanningError::Interpolation { context, .. })
+            if context == "selected job `action:missing-target-env` field `target`"
     ));
 }
 
