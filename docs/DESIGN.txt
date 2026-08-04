@@ -406,12 +406,12 @@ configuration entry, which is the same path context represented by
 configuration entity directory; `${dot:real_config_dir}` explicitly selects
 that real directory.
 
-Dry-run resolves and displays the HTTPS source, local target, and conflict
-policy, but performs no network request and no target inspection. On apply, an
-action eligible to transfer always fetches its source fresh. There is no
-checksum or cache state, conditional request, retry, resume, decompression, or
-archive extraction. Richer transfer behavior belongs in a Command Action or an
-external script.
+Dry-run resolves the HTTPS source and local target, and its human table
+displays that resolved pair, but it performs no network request and no target
+inspection. On apply, an action eligible to transfer always fetches its source
+fresh. There is no checksum or cache state, conditional request, retry, resume,
+decompression, or archive extraction. Richer transfer behavior belongs in a
+Command Action or an external script.
 
 Apply classifies the final target component without following a symbolic link:
 
@@ -423,6 +423,12 @@ symbolic link  reject              replace
 directory      reject              reject
 special entry  reject              reject
 ```
+
+`replace` is not transactional, even without concurrent target mutation. Its
+transfer and flush complete in the staging file first, but commit removes the
+existing regular file or symbolic link before installing the staged file. If
+that final install fails, the target can be absent; dot does not restore the
+original entry.
 
 Thus `replace` permits only an existing regular file or symbolic link. A
 directory or other special filesystem entry is always rejected. Missing parent
@@ -443,7 +449,7 @@ cross-platform filesystem-object-identity or rollback guarantee, so the
 same-directory staging design must not be described as universally atomic or
 race-safe.
 
-Reports retain the resolved source URL, target path, and conflict policy. A
+The human report detail shows the resolved source URL and target path. A
 successful Fetch Content Action is CREATED or REPLACED. A failure records
 Fetch-stage evidence; the action detail and evidence together preserve the
 source, target, and materialization-stage failure detail. Because no child

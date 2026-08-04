@@ -792,9 +792,9 @@ containing the selected configuration entry, equivalent to the path context
 represented by `${dot:config_dir}`. It is not relative to the canonical entity
 directory unless the value explicitly uses `${dot:real_config_dir}`.
 
-Dry-run resolves and displays the source, target, and policy without network
-access or target inspection. On apply, every action eligible to transfer
-fetches the source fresh. Target handling is:
+Dry-run resolves the source and target, and its human table displays that
+resolved pair without network access or target inspection. On apply, every
+action eligible to transfer fetches the source fresh. Target handling is:
 
 | Existing final target entry | `error` | `replace` |
 | --- | --- | --- |
@@ -804,12 +804,16 @@ fetches the source fresh. Target handling is:
 | directory | reject | reject |
 | other special entry | reject | reject |
 
-`replace` therefore permits only a regular file or symbolic link. The transfer
-uses same-directory staging and a commit-time target reinspection, but these
-are best effort under a cooperative-concurrency assumption: another writer
-must not mutate the target concurrently. A concurrent mutation can cause
-failure or affect a competing entry; there is no cross-platform object-identity
-or rollback guarantee.
+`replace` therefore permits only a regular file or symbolic link. It is not
+transactional even without concurrent writers. Transfer and flush into a
+same-directory staging file happen first, but commit removes the existing file
+or symbolic link before installing the staged file. If that final install
+fails, the target can be absent; dot does not restore the original.
+
+Separately, commit-time target reinspection is best effort under a
+cooperative-concurrency assumption: another writer must not mutate the target
+concurrently. A concurrent mutation can cause failure or affect a competing
+entry; there is no cross-platform object-identity or rollback guarantee.
 
 Fetch Content is a one-shot materialization capability, not a download,
 artifact, or cache manager. It has no built-in integrity verification,
