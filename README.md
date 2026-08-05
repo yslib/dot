@@ -36,7 +36,7 @@ To build from source with stable Rust:
 ```console
 git clone https://github.com/yslib/dot.git
 cd dot
-cargo build --release
+cargo build --release --bin dot
 ```
 
 The binary is written to `target/release/dot` (`dot.exe` on Windows).

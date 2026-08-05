@@ -5,7 +5,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use dot::action::{ExecutionEnvironment, ExecutionError, IoMode, PreparedCommand, ProcessExecutor};
+use dot::interpolation::ExecutionEnvironment;
+use dot::native::process::{
+    ExecutionError, IoMode, PreparedCommand, ProcessExecutor, apply_environment_patch,
+};
 use dot::schema::{
     EnvironmentName, OneOrMany, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString,
 };
@@ -62,24 +65,28 @@ fn environment_patch_overrides_variables_and_wraps_the_effective_path() {
         .to_string_lossy()
         .into_owned();
     let mut environment = ExecutionEnvironment::empty();
-    environment
-        .apply_patch(&patch(
+    apply_environment_patch(
+        &mut environment,
+        &patch(
             None,
             None,
             &[("PATH", &original_path), ("DOT_VALUE", "base")],
-        ))
-        .expect("base patch should apply");
+        ),
+    )
+    .expect("base patch should apply");
 
-    environment
-        .apply_patch(&patch(
+    apply_environment_patch(
+        &mut environment,
+        &patch(
             Some(OneOrMany::Many(vec![
                 "first-bin".into(),
                 "second-bin".into(),
             ])),
             Some(OneOrMany::One("last-bin".into())),
             &[("DOT_VALUE", "action")],
-        ))
-        .expect("action patch should apply");
+        ),
+    )
+    .expect("action patch should apply");
 
     assert_eq!(environment.get("DOT_VALUE"), Some(OsStr::new("action")));
     let paths =
@@ -98,11 +105,10 @@ fn environment_patch_overrides_variables_and_wraps_the_effective_path() {
 #[test]
 fn prepared_command_copies_process_fields_and_layers_action_environment() {
     let mut base = ExecutionEnvironment::empty();
-    base.apply_patch(&patch(
-        None,
-        None,
-        &[("BASE_ONLY", "present"), ("SHARED", "base")],
-    ))
+    apply_environment_patch(
+        &mut base,
+        &patch(None, None, &[("BASE_ONLY", "present"), ("SHARED", "base")]),
+    )
     .expect("base environment should be valid");
     let action = ResolvedExecAction {
         program: "example-program".into(),
@@ -238,7 +244,8 @@ fn reports_a_program_that_cannot_be_started() {
         cwd: None,
         env: None,
     };
-    let command = PreparedCommand::from_exec_action(&action, &ExecutionEnvironment::capture())
+    let environment = ExecutionEnvironment::from_variables(env::vars_os());
+    let command = PreparedCommand::from_exec_action(&action, &environment)
         .expect("command should prepare even when its program is missing");
 
     let error = ProcessExecutor::new()

@@ -1,8 +1,8 @@
+//! Target, profile, and execution selections shared by inspection and native operations.
+
 use std::fmt;
 
-use crate::config::ConfigRequest;
 use crate::job::JobSelection;
-use crate::platform::PlatformInfo;
 use crate::schema::{SelectorIdentifier, SelectorIdentifierError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,7 +21,7 @@ impl fmt::Display for ProfileSelection {
 }
 
 impl ProfileSelection {
-    pub fn from_cli(value: Option<&str>) -> Result<Self, SelectorIdentifierError> {
+    pub fn parse(value: Option<&str>) -> Result<Self, SelectorIdentifierError> {
         match value {
             None | Some("@root") => Ok(Self::Root),
             Some(value) => SelectorIdentifier::new(value).map(Self::Named),
@@ -43,24 +43,7 @@ pub struct ScopeSelection {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecutionRequest {
+pub struct ExecutionSelection {
     pub scope: ScopeSelection,
     pub jobs: JobSelection,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Apply(ExecutionRequest),
-    DryRun(ExecutionRequest),
-    CheckProviders(ScopeSelection),
-    ListTargets { all: bool },
-    ListProfiles { target: Option<SelectorIdentifier> },
-    ListJobs(ScopeSelection),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Dispatch {
-    pub config: ConfigRequest,
-    pub operation: Operation,
-    pub platform_override: Option<PlatformInfo>,
 }

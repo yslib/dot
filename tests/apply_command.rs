@@ -1,3 +1,5 @@
+//! End-to-end apply command behavior.
+
 mod support;
 
 use std::env;

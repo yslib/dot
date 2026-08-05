@@ -7,15 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dot::action::ExecutionEnvironment;
-use dot::interpolation::{DotPaths, XdgPaths};
+use dot::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
 use dot::job::{JobId, JobSelection, JobSelector};
-use dot::job_runner::{ActionOutcome, BlockReason, JobOutcome, JobRunner, JobState};
-use dot::link::{LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
+use dot::native::job_execution::{ActionOutcome, BlockReason, JobOutcome, JobRunner, JobState};
+use dot::native::link::{LinkOutcome, LinkPhaseError};
+use dot::native::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
+use dot::native::provider::ProviderInstallOutcome;
 use dot::platform::PlatformInfo;
-use dot::provider::ProviderInstallOutcome;
 use dot::schema::{Config, Identifier, SelectorIdentifier};
 use support::fixture;
 

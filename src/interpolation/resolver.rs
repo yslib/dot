@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use crate::schema::{
-    EnvironmentName, ListType, ResolvedString, SchemaType, SchemaTypeMarker, StringType,
-};
+use crate::schema::{EnvironmentName, ListType, SchemaType, SchemaTypeMarker, StringType};
 
-use super::{DotPath, InterpolationError, ResolveContext, TemplateRole, XdgPath};
+use super::TemplateRole;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ResolverAvailability {
@@ -19,61 +17,18 @@ impl ResolverAvailability {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ResolvedValue {
-    String(ResolvedString),
-    StringList(Vec<ResolvedString>),
-}
-
-impl ResolvedValue {
-    fn schema_type(&self) -> SchemaType {
-        match self {
-            Self::String(_) => StringType::schema_type(),
-            Self::StringList(_) => ListType::<StringType>::schema_type(),
-        }
-    }
-
-    pub(super) fn into_string(self, resolver: &str) -> Result<ResolvedString, InterpolationError> {
-        match self {
-            Self::String(value) => Ok(value),
-            other => Err(InterpolationError::ResolverContractViolation {
-                resolver: resolver.to_owned(),
-                expected: StringType::schema_type(),
-                actual: other.schema_type(),
-            }),
-        }
-    }
-
-    pub(super) fn into_string_list(
-        self,
-        resolver: &str,
-    ) -> Result<Vec<ResolvedString>, InterpolationError> {
-        match self {
-            Self::StringList(values) => Ok(values),
-            other => Err(InterpolationError::ResolverContractViolation {
-                resolver: resolver.to_owned(),
-                expected: ListType::<StringType>::schema_type(),
-                actual: other.schema_type(),
-            }),
-        }
-    }
-}
-
-trait Resolver: Send + Sync {
-    fn namespace(&self) -> &'static str;
-    fn output_type(&self) -> SchemaType;
-    fn availability(&self) -> ResolverAvailability;
-    fn validate_payload(&self, payload: &str) -> bool;
-    fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResolverKind {
+    Environment,
+    DotPath,
+    XdgPath,
+    Package,
 }
 
 pub(super) struct ResolverEntry {
+    kind: ResolverKind,
     output_type: SchemaType,
-    resolver: Box<dyn Resolver>,
+    availability: ResolverAvailability,
 }
 
 impl ResolverEntry {
@@ -81,29 +36,36 @@ impl ResolverEntry {
         &self.output_type
     }
 
-    pub(super) fn availability(&self) -> ResolverAvailability {
-        self.resolver.availability()
+    pub(super) const fn availability(&self) -> ResolverAvailability {
+        self.availability
     }
 
     pub(super) fn validate_payload(&self, payload: &str) -> bool {
-        self.resolver.validate_payload(payload)
+        match self.kind {
+            ResolverKind::Environment => EnvironmentName::new(payload).is_ok(),
+            ResolverKind::DotPath => matches!(
+                payload,
+                "config" | "config_dir" | "real_config" | "real_config_dir" | "cwd"
+            ),
+            ResolverKind::XdgPath => matches!(
+                payload,
+                "home"
+                    | "config"
+                    | "config_local"
+                    | "data"
+                    | "data_local"
+                    | "cache"
+                    | "state"
+                    | "runtime"
+                    | "executable"
+                    | "documents"
+            ),
+            ResolverKind::Package => matches!(payload, "names" | "provider_args"),
+        }
     }
 
-    pub(super) fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError> {
-        let value = self.resolver.resolve(payload, context)?;
-        let actual = value.schema_type();
-        if actual != self.output_type {
-            return Err(InterpolationError::ResolverContractViolation {
-                resolver: self.resolver.namespace().to_owned(),
-                expected: self.output_type.clone(),
-                actual,
-            });
-        }
-        Ok(value)
+    pub(crate) const fn kind(&self) -> ResolverKind {
+        self.kind
     }
 }
 
@@ -111,317 +73,74 @@ type ResolverRegistry = BTreeMap<&'static str, ResolverEntry>;
 
 static RESOLVERS: LazyLock<ResolverRegistry> = LazyLock::new(build_resolver_registry);
 
-fn register<R>(registry: &mut ResolverRegistry, resolver: R)
-where
-    R: Resolver + 'static,
-{
-    let namespace = resolver.namespace();
-    let output_type = resolver.output_type();
-    let previous = registry.insert(
-        namespace,
-        ResolverEntry {
-            output_type,
-            resolver: Box::new(resolver),
-        },
-    );
-    assert!(
-        previous.is_none(),
-        "duplicate resolver namespace `{namespace}`"
-    );
-}
-
 fn build_resolver_registry() -> ResolverRegistry {
-    let mut registry = BTreeMap::new();
-    register(&mut registry, EnvResolver);
-    register(&mut registry, DotResolver);
-    register(&mut registry, XdgResolver);
-    register(&mut registry, PackageResolver);
-    registry
+    BTreeMap::from([
+        (
+            "dot",
+            ResolverEntry {
+                kind: ResolverKind::DotPath,
+                output_type: StringType::schema_type(),
+                availability: ResolverAvailability::Everywhere,
+            },
+        ),
+        (
+            "env",
+            ResolverEntry {
+                kind: ResolverKind::Environment,
+                output_type: StringType::schema_type(),
+                availability: ResolverAvailability::Everywhere,
+            },
+        ),
+        (
+            "package",
+            ResolverEntry {
+                kind: ResolverKind::Package,
+                output_type: ListType::<StringType>::schema_type(),
+                availability: ResolverAvailability::ProviderInstallOnly,
+            },
+        ),
+        (
+            "xdg",
+            ResolverEntry {
+                kind: ResolverKind::XdgPath,
+                output_type: StringType::schema_type(),
+                availability: ResolverAvailability::Everywhere,
+            },
+        ),
+    ])
 }
 
 pub(super) fn lookup_resolver(namespace: &str) -> Option<&'static ResolverEntry> {
     RESOLVERS.get(namespace)
 }
 
-struct EnvResolver;
-
-impl Resolver for EnvResolver {
-    fn namespace(&self) -> &'static str {
-        "env"
-    }
-
-    fn output_type(&self) -> SchemaType {
-        StringType::schema_type()
-    }
-
-    fn availability(&self) -> ResolverAvailability {
-        ResolverAvailability::Everywhere
-    }
-
-    fn validate_payload(&self, payload: &str) -> bool {
-        EnvironmentName::new(payload).is_ok()
-    }
-
-    fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError> {
-        let value = context.environment.get(payload).ok_or_else(|| {
-            InterpolationError::MissingEnvironmentVariable {
-                name: payload.to_owned(),
-            }
-        })?;
-        let value =
-            value
-                .to_str()
-                .ok_or_else(|| InterpolationError::NonUnicodeEnvironmentVariable {
-                    name: payload.to_owned(),
-                })?;
-        Ok(ResolvedValue::String(ResolvedString::from(value)))
-    }
-}
-
-struct DotResolver;
-
-impl Resolver for DotResolver {
-    fn namespace(&self) -> &'static str {
-        "dot"
-    }
-
-    fn output_type(&self) -> SchemaType {
-        StringType::schema_type()
-    }
-
-    fn availability(&self) -> ResolverAvailability {
-        ResolverAvailability::Everywhere
-    }
-
-    fn validate_payload(&self, payload: &str) -> bool {
-        DotPath::from_payload(payload).is_some()
-    }
-
-    fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError> {
-        let path = context.dot.get(
-            DotPath::from_payload(payload)
-                .expect("payload was validated by the resolver definition"),
-        );
-        let value = path
-            .to_str()
-            .ok_or_else(|| InterpolationError::NonUnicodePath {
-                name: payload.to_owned(),
-            })?;
-        Ok(ResolvedValue::String(ResolvedString::from(value)))
-    }
-}
-
-struct XdgResolver;
-
-impl Resolver for XdgResolver {
-    fn namespace(&self) -> &'static str {
-        "xdg"
-    }
-
-    fn output_type(&self) -> SchemaType {
-        StringType::schema_type()
-    }
-
-    fn availability(&self) -> ResolverAvailability {
-        ResolverAvailability::Everywhere
-    }
-
-    fn validate_payload(&self, payload: &str) -> bool {
-        XdgPath::from_payload(payload).is_some()
-    }
-
-    fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError> {
-        let path = XdgPath::from_payload(payload)
-            .and_then(|path| context.xdg.get(path))
-            .ok_or_else(|| InterpolationError::UnavailablePath {
-                name: payload.to_owned(),
-            })?;
-        let value = path
-            .to_str()
-            .ok_or_else(|| InterpolationError::NonUnicodePath {
-                name: payload.to_owned(),
-            })?;
-        Ok(ResolvedValue::String(ResolvedString::from(value)))
-    }
-}
-
-struct PackageResolver;
-
-impl Resolver for PackageResolver {
-    fn namespace(&self) -> &'static str {
-        "package"
-    }
-
-    fn output_type(&self) -> SchemaType {
-        ListType::<StringType>::schema_type()
-    }
-
-    fn availability(&self) -> ResolverAvailability {
-        ResolverAvailability::ProviderInstallOnly
-    }
-
-    fn validate_payload(&self, payload: &str) -> bool {
-        matches!(payload, "names" | "provider_args")
-    }
-
-    fn resolve(
-        &self,
-        payload: &str,
-        context: &ResolveContext<'_>,
-    ) -> Result<ResolvedValue, InterpolationError> {
-        let package = context
-            .package
-            .ok_or(InterpolationError::MissingPackageContext)?;
-        let values = match payload {
-            "names" => package.names,
-            "provider_args" => package.provider_args,
-            _ => unreachable!("payload was validated by the resolver"),
-        };
-        Ok(ResolvedValue::StringList(
-            values.iter().cloned().map(ResolvedString::from).collect(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use crate::schema::{ListType, SchemaTypeMarker, StringType};
 
-    use crate::action::ExecutionEnvironment;
-    use crate::schema::{ListType, ResolvedString, SchemaType, SchemaTypeMarker, StringType};
-
-    use super::super::{DotPaths, InterpolationError, ResolveContext, XdgPaths};
-    use super::{
-        EnvResolver, ResolvedValue, Resolver, ResolverAvailability, build_resolver_registry,
-        lookup_resolver, register,
-    };
-
-    struct WrongOutputResolver;
-
-    impl Resolver for WrongOutputResolver {
-        fn namespace(&self) -> &'static str {
-            "wrong"
-        }
-
-        fn output_type(&self) -> SchemaType {
-            SchemaType::String
-        }
-
-        fn availability(&self) -> ResolverAvailability {
-            ResolverAvailability::Everywhere
-        }
-
-        fn validate_payload(&self, _: &str) -> bool {
-            true
-        }
-
-        fn resolve(
-            &self,
-            _: &str,
-            _: &ResolveContext<'_>,
-        ) -> Result<ResolvedValue, InterpolationError> {
-            Ok(ResolvedValue::StringList(Vec::new()))
-        }
-    }
+    use super::{ResolverAvailability, build_resolver_registry, lookup_resolver};
 
     #[test]
-    fn resolver_entry_rejects_values_that_violate_the_declared_output_type() {
-        let mut registry = Default::default();
-        register(&mut registry, WrongOutputResolver);
-        let environment = ExecutionEnvironment::empty();
-        let dot = DotPaths::new(
-            Path::new("/repo/dot.toml"),
-            Path::new("/repo"),
-            Path::new("/repo/dot.toml"),
-            Path::new("/repo"),
-            Path::new("/work"),
-        );
-        let xdg = XdgPaths::default();
-        let context = ResolveContext::new(&environment, dot, &xdg);
-
-        assert_eq!(
-            registry["wrong"].resolve("payload", &context),
-            Err(InterpolationError::ResolverContractViolation {
-                resolver: "wrong".into(),
-                expected: SchemaType::String,
-                actual: ListType::<StringType>::schema_type(),
-            })
-        );
-    }
-
-    #[test]
-    fn checked_conversions_preserve_the_resolver_namespace_in_contract_errors() {
-        assert_eq!(
-            ResolvedValue::StringList(Vec::new()).into_string("package"),
-            Err(InterpolationError::ResolverContractViolation {
-                resolver: "package".into(),
-                expected: SchemaType::String,
-                actual: ListType::<StringType>::schema_type(),
-            })
-        );
-        assert_eq!(
-            ResolvedValue::String(ResolvedString::from("value")).into_string_list("env"),
-            Err(InterpolationError::ResolverContractViolation {
-                resolver: "env".into(),
-                expected: ListType::<StringType>::schema_type(),
-                actual: SchemaType::String,
-            })
-        );
-    }
-
-    #[test]
-    fn registry_contains_each_builtin_namespace_in_sorted_order() {
+    fn registry_declares_builtin_types_and_availability() {
         let registry = build_resolver_registry();
 
         assert_eq!(
             registry.keys().copied().collect::<Vec<_>>(),
             ["dot", "env", "package", "xdg"]
         );
-    }
-
-    #[test]
-    fn builtin_output_types_match_their_declared_values() {
-        let registry = build_resolver_registry();
-
         for namespace in ["env", "dot", "xdg"] {
             assert_eq!(
                 registry[namespace].output_type(),
                 &StringType::schema_type()
             );
+            assert_eq!(
+                registry[namespace].availability(),
+                ResolverAvailability::Everywhere
+            );
         }
         assert_eq!(
             registry["package"].output_type(),
             &ListType::<StringType>::schema_type()
-        );
-    }
-
-    #[test]
-    fn builtin_availability_matches_its_template_role() {
-        let registry = build_resolver_registry();
-
-        assert_eq!(
-            registry["env"].availability(),
-            ResolverAvailability::Everywhere
-        );
-        assert_eq!(
-            registry["dot"].availability(),
-            ResolverAvailability::Everywhere
-        );
-        assert_eq!(
-            registry["xdg"].availability(),
-            ResolverAvailability::Everywhere
         );
         assert_eq!(
             registry["package"].availability(),
@@ -430,29 +149,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "duplicate resolver namespace `env`")]
-    fn duplicate_namespaces_are_rejected() {
-        let mut registry = Default::default();
-
-        register(&mut registry, EnvResolver);
-        register(&mut registry, EnvResolver);
-    }
-
-    #[test]
-    fn builtin_resolvers_validate_only_their_declared_payloads() {
+    fn builtin_payload_validation_is_schema_only() {
         let registry = build_resolver_registry();
 
         assert!(registry["env"].validate_payload("HOME"));
         assert!(!registry["env"].validate_payload(""));
-        for payload in [
-            "config",
-            "config_dir",
-            "real_config",
-            "real_config_dir",
-            "cwd",
-        ] {
-            assert!(registry["dot"].validate_payload(payload));
-        }
+        assert!(registry["dot"].validate_payload("real_config_dir"));
         assert!(!registry["dot"].validate_payload("home"));
         assert!(registry["xdg"].validate_payload("executable"));
         assert!(!registry["xdg"].validate_payload("repository"));
@@ -462,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_finds_each_builtin_and_rejects_unknown_namespaces() {
+    fn lookup_rejects_unknown_namespaces() {
         for namespace in ["env", "dot", "xdg", "package"] {
             assert!(lookup_resolver(namespace).is_some());
         }

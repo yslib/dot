@@ -1,12 +1,13 @@
+//! Native execution planning.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use url::Url;
 
-use crate::action::{CommandPreparationError, ExecutionEnvironment};
 use crate::interpolation::{
-    DotPaths, ExecActionResolutionError, InterpolationError, PackageContext, ResolveContext,
-    XdgPaths, promote_provider_install_args, provider_args_resolver_count,
+    DotPaths, ExecActionResolutionError, ExecutionEnvironment, InterpolationError, PackageContext,
+    ResolveContext, XdgPaths, promote_provider_install_args, provider_args_resolver_count,
     resolve_environment_patch, resolve_exec_action_with_fields, resolve_literal_string,
     resolve_provider_install_action_with_args, resolve_string_expression,
 };
@@ -18,6 +19,8 @@ use crate::schema::{
     OneOrMany, Package, Provider, ProviderPackage, ResolvedCommandAction, ResolvedEnvironmentPatch,
     ResolvedExecAction, SelectorIdentifier, SourceCommandAction, SourceExecAction,
 };
+
+use super::process::{CommandPreparationError, apply_environment_patch};
 
 #[derive(Debug)]
 pub struct ExecutionPlan {
@@ -515,7 +518,7 @@ impl<'a> ExecutionPlanner<'a> {
                     source,
                 })?;
             if let Some(activate) = &activate {
-                environment.apply_patch(activate).map_err(|source| {
+                apply_environment_patch(&mut environment, activate).map_err(|source| {
                     PlanningError::EnvironmentPatch {
                         provider: provider_id.to_string(),
                         source,

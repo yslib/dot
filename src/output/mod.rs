@@ -1,5 +1,5 @@
-mod table;
+//! Platform-independent output formats.
+
 mod tsv;
 
-pub use table::TableRenderer;
 pub use tsv::{PreparedTsv, TsvRecord, TsvRenderer};

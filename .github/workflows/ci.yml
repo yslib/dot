@@ -35,6 +35,9 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-targets --all-features
 
+      - name: Check reusable library without host capabilities
+        run: cargo check --locked --lib --no-default-features
+
   target-tests:
     name: Test ${{ matrix.platform }}
     needs: quality

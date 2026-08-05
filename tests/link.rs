@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dot::action::ExecutionEnvironment;
-use dot::interpolation::{DotPaths, XdgPaths};
+use dot::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
 use dot::job::JobSelection;
-use dot::link::{self, LinkError, LinkOutcome, LinkPhaseError};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{ExecutionPlan, ExecutionPlanner};
+use dot::native::link::{self, LinkError, LinkOutcome, LinkPhaseError};
+use dot::native::plan::{ExecutionPlan, ExecutionPlanner};
 use dot::platform::PlatformInfo;
 use dot::schema::{Config, SelectorIdentifier};
 use support::fixture;
@@ -80,7 +79,7 @@ fn plan_fixture(
     let target = selector_id("machine");
     let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
         .expect("test manifest should select");
-    let environment = ExecutionEnvironment::capture();
+    let environment = ExecutionEnvironment::from_variables(env::vars_os());
     let xdg = XdgPaths::detect();
     let config_path = workspace.path().join("dot.toml");
     let dot_paths = DotPaths::new(

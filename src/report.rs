@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::diagnostic::ErrorHint;
-use crate::plan::PlannedFetchContentAction;
 use crate::platform::PlatformInfo;
 use crate::schema::{
     FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedCommandAction,
@@ -16,6 +14,13 @@ pub struct CommandReport {
     pub status: ReportStatus,
     pub items: Vec<ReportItem>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ErrorHint {
+    pub code: String,
+    pub summary: String,
+    pub suggestion: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,11 +205,15 @@ impl ActionInfo {
         Self::Command(CommandActionInfo::from_resolved(action))
     }
 
-    pub fn from_fetch_content(action: &PlannedFetchContentAction) -> Self {
+    pub fn fetch_content(
+        source: impl Into<String>,
+        target: impl Into<PathBuf>,
+        on_conflict: FetchContentConflict,
+    ) -> Self {
         Self::FetchContent {
-            source: action.source().to_string(),
-            target: action.target().to_owned(),
-            on_conflict: action.on_conflict(),
+            source: source.into(),
+            target: target.into(),
+            on_conflict,
         }
     }
 }

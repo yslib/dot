@@ -1,24 +1,21 @@
 use std::path::Path;
 
-use super::{ExecutionCommandError, ExecutionRequest};
-use crate::action::ExecutionResult;
-use crate::action_runner::{
+use crate::interpolation::DotPaths;
+use crate::manifest::{EffectiveManifest, ManifestError};
+use crate::native::command_action::{
     ActionStage, CommandActionOutcome, CommandActionRunError, FetchContentOutcome,
 };
-use crate::config::LoadedConfig;
-use crate::diagnostic::lookup;
-use crate::interpolation::{DotPaths, XdgPaths};
-use crate::job_runner::{
+use crate::native::config_file::ConfigFile;
+use crate::native::diagnostic::lookup;
+use crate::native::job_execution::{
     ActionOutcome, BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState,
 };
-use crate::link::LinkOutcome;
-use crate::manifest::EffectiveManifest;
-use crate::plan::{
+use crate::native::link::LinkOutcome;
+use crate::native::plan::{
     ExecutionPlan, ExecutionPlanner, PlannedActionKind, PlannedJob, PlannedPackage,
     PlannedProviderInstall,
 };
-use crate::platform::PlatformInfo;
-use crate::provider::{
+use crate::native::provider::{
     ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStage,
 };
 use crate::report::{
@@ -27,26 +24,42 @@ use crate::report::{
     ProviderItem, ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus,
     ReportSubject,
 };
+use crate::selection::ExecutionSelection;
 
-pub(super) fn run(
-    config: &Path,
-    request: &ExecutionRequest,
-) -> Result<CommandReport, ExecutionCommandError> {
-    let loaded = LoadedConfig::load(config)?;
-    let platform = PlatformInfo::detect();
+use super::process::ExecutionResult;
+use super::runtime::NativeRuntime;
+
+pub fn apply(
+    config: &ConfigFile,
+    runtime: &NativeRuntime,
+    selection: &ExecutionSelection,
+) -> Result<CommandReport, ApplyError> {
+    let platform = runtime.platform();
     let manifest = EffectiveManifest::select_for_execution(
-        loaded.config(),
-        &platform,
-        request.scope.target.as_ref(),
-        request.scope.profile.named(),
+        config.config(),
+        platform,
+        selection.scope.target.as_ref(),
+        selection.scope.profile.named(),
     )?;
-    let xdg_paths = XdgPaths::detect();
-    let dot_paths = DotPaths::from(&loaded);
-    let planner = ExecutionPlanner::new(loaded.environment(), dot_paths, &xdg_paths, &platform);
-    let plan = planner.plan(&manifest, &request.jobs)?;
-    let execution = JobRunner::new(loaded.environment()).run(&plan);
+    let planner = ExecutionPlanner::new(
+        runtime.environment(),
+        DotPaths::from(config),
+        runtime.xdg_paths(),
+        platform,
+    );
+    let plan = planner.plan(&manifest, &selection.jobs)?;
+    let execution = JobRunner::new(runtime.environment()).run(&plan);
 
-    Ok(build_report(loaded.path(), &plan, &execution))
+    Ok(build_report(config.path(), &plan, &execution))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyError {
+    #[error(transparent)]
+    Manifest(#[from] ManifestError),
+
+    #[error(transparent)]
+    Plan(#[from] crate::native::plan::ExecutionPlanError),
 }
 
 fn build_report(
@@ -139,7 +152,11 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
             let (status, evidence) = selected_action_result(result);
             let action_info = match action.kind() {
                 PlannedActionKind::Command(action) => ActionInfo::from_resolved_command(action),
-                PlannedActionKind::FetchContent(action) => ActionInfo::from_fetch_content(action),
+                PlannedActionKind::FetchContent(action) => ActionInfo::fetch_content(
+                    action.source().to_string(),
+                    action.target().to_owned(),
+                    action.on_conflict(),
+                ),
             };
             ReportItem {
                 id: action.id().to_owned(),
@@ -167,7 +184,7 @@ fn report_item(job: &PlannedJob, state: &JobState, platform_os: &str) -> ReportI
 }
 
 fn provider_item(
-    provider: &crate::plan::PlannedProvider,
+    provider: &crate::native::plan::PlannedProvider,
     result: &Result<ProviderOutcome, ProviderError>,
 ) -> ReportItem {
     let (status, evidence) = match result {
@@ -264,8 +281,8 @@ fn provider_package_report_item(
 }
 
 fn link_item(
-    link: &crate::plan::PlannedLink,
-    result: &Result<LinkOutcome, crate::link::LinkError>,
+    link: &crate::native::plan::PlannedLink,
+    result: &Result<LinkOutcome, crate::native::link::LinkError>,
     platform_os: &str,
 ) -> ReportItem {
     let (status, evidence) = match result {
@@ -343,7 +360,7 @@ fn selected_action_result(result: &ActionOutcome) -> (ItemStatus, Vec<Evidence>)
 }
 
 fn report_link_item(
-    link: &crate::plan::PlannedLink,
+    link: &crate::native::plan::PlannedLink,
     status: ItemStatus,
     evidence: Vec<Evidence>,
 ) -> ReportItem {
@@ -425,7 +442,7 @@ fn message_evidence(stage: EvidenceStage, message: impl Into<String>) -> Evidenc
     }
 }
 
-fn link_error_evidence(error: &crate::link::LinkError, os: &str) -> Evidence {
+fn link_error_evidence(error: &crate::native::link::LinkError, os: &str) -> Evidence {
     let hints = error
         .diagnostic_context()
         .and_then(|(operation, source)| lookup(os, operation, source))
@@ -458,11 +475,18 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
-    use crate::app::{ProfileSelection, ScopeSelection};
-    use crate::diagnostic::Operation;
-    use crate::link::LinkError;
+    use crate::native::diagnostic::Operation;
+    use crate::native::link::LinkError;
+    use crate::selection::{ProfileSelection, ScopeSelection};
 
     static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
+
+    fn run(path: &Path, selection: &ExecutionSelection) -> Result<CommandReport, ApplyError> {
+        let config = ConfigFile::load(crate::native::ConfigLocation::Path(path.to_owned()))
+            .expect("test config should load");
+        let runtime = NativeRuntime::detect();
+        apply(&config, &runtime, selection)
+    }
 
     struct TempWorkspace {
         directory: PathBuf,
@@ -628,8 +652,8 @@ mod tests {
         }
     }
 
-    fn request() -> ExecutionRequest {
-        ExecutionRequest {
+    fn request() -> ExecutionSelection {
+        ExecutionSelection {
             scope: ScopeSelection {
                 target: None,
                 profile: ProfileSelection::Root,

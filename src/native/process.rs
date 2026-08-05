@@ -4,96 +4,35 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
+use crate::interpolation::ExecutionEnvironment;
 use crate::schema::{OneOrMany, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ExecutionEnvironment {
-    variables: Vec<(OsString, OsString)>,
-}
+pub fn apply_environment_patch(
+    environment: &mut ExecutionEnvironment,
+    patch: &ResolvedEnvironmentPatch,
+) -> Result<(), CommandPreparationError> {
+    for (name, value) in &patch.variables {
+        environment.insert(name.as_str(), value.value());
+    }
 
-impl ExecutionEnvironment {
-    pub fn capture() -> Self {
-        let mut environment = Self::empty();
-        for (name, value) in env::vars_os() {
-            environment.insert(name, value);
+    if patch.path_prepend.is_some() || patch.path_append.is_some() {
+        let mut paths = Vec::new();
+        if let Some(prepend) = &patch.path_prepend {
+            paths.extend(values(prepend).map(PathBuf::from));
         }
-        environment
-    }
-
-    pub const fn empty() -> Self {
-        Self {
-            variables: Vec::new(),
+        if let Some(current) = environment.get("PATH") {
+            paths.extend(env::split_paths(current));
         }
-    }
-
-    pub fn get(&self, name: impl AsRef<OsStr>) -> Option<&OsStr> {
-        let name = name.as_ref();
-        self.variables
-            .iter()
-            .find(|(candidate, _)| environment_names_equal(candidate, name))
-            .map(|(_, value)| value.as_os_str())
-    }
-
-    pub fn apply_patch(
-        &mut self,
-        patch: &ResolvedEnvironmentPatch,
-    ) -> Result<(), CommandPreparationError> {
-        for (name, value) in &patch.variables {
-            self.insert(name.as_str(), value.value());
+        if let Some(append) = &patch.path_append {
+            paths.extend(values(append).map(PathBuf::from));
         }
 
-        if patch.path_prepend.is_some() || patch.path_append.is_some() {
-            let mut paths = Vec::new();
-            if let Some(prepend) = &patch.path_prepend {
-                paths.extend(values(prepend).map(PathBuf::from));
-            }
-            if let Some(current) = self.get("PATH") {
-                paths.extend(env::split_paths(current));
-            }
-            if let Some(append) = &patch.path_append {
-                paths.extend(values(append).map(PathBuf::from));
-            }
-
-            let path = env::join_paths(paths)
-                .map_err(|source| CommandPreparationError::InvalidPathEnvironment { source })?;
-            self.insert("PATH", path);
-        }
-
-        Ok(())
+        let path = env::join_paths(paths)
+            .map_err(|source| CommandPreparationError::InvalidPathEnvironment { source })?;
+        environment.insert("PATH", path);
     }
 
-    fn insert(&mut self, name: impl Into<OsString>, value: impl Into<OsString>) {
-        let name = name.into();
-        let value = value.into();
-
-        if let Some((stored_name, stored_value)) = self
-            .variables
-            .iter_mut()
-            .find(|(candidate, _)| environment_names_equal(candidate, &name))
-        {
-            *stored_name = name;
-            *stored_value = value;
-        } else {
-            self.variables.push((name, value));
-        }
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
-        self.variables
-            .iter()
-            .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
-    }
-}
-
-#[cfg(windows)]
-fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
-    left.to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy())
-}
-
-#[cfg(not(windows))]
-fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
-    left == right
+    Ok(())
 }
 
 fn values(value: &OneOrMany<ResolvedString>) -> impl Iterator<Item = &str> {
@@ -113,34 +52,13 @@ pub struct PreparedCommand {
 }
 
 impl PreparedCommand {
-    /// Prepares a command only from a resolved action.
-    ///
-    /// Source expressions cannot cross the execution boundary:
-    ///
-    /// ```compile_fail,E0308
-    /// use dot::action::{ExecutionEnvironment, PreparedCommand};
-    /// use dot::schema::{ExecAction, StringExpressionSource};
-    ///
-    /// let source_action =
-    ///     ExecAction::<StringExpressionSource, StringExpressionSource> {
-    ///         program: "echo".into(),
-    ///         args: vec!["${env:HOME}".into()],
-    ///         cwd: None,
-    ///         env: None,
-    ///     };
-    ///
-    /// let _ = PreparedCommand::from_exec_action(
-    ///     &source_action,
-    ///     &ExecutionEnvironment::empty(),
-    /// );
-    /// ```
     pub fn from_exec_action(
         action: &ResolvedExecAction,
         base_environment: &ExecutionEnvironment,
     ) -> Result<Self, CommandPreparationError> {
         let mut environment = base_environment.clone();
         if let Some(patch) = &action.env {
-            environment.apply_patch(patch)?;
+            apply_environment_patch(&mut environment, patch)?;
         }
 
         Ok(Self {
@@ -235,7 +153,13 @@ impl ProcessExecutor {
         let mut process = Command::new(command.program());
         process.args(command.args());
         process.env_clear();
-        process.envs(command.environment.iter());
+        process.envs(
+            command
+                .environment
+                .variables
+                .iter()
+                .map(|(name, value)| (name, value)),
+        );
         if let Some(cwd) = command.cwd() {
             process.current_dir(cwd);
         }

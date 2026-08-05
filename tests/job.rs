@@ -1,23 +1,19 @@
 mod support;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::path::Path;
 
-use dot::action::ExecutionEnvironment;
-use dot::config::LoadedConfig;
-use dot::interpolation::{DotPaths, XdgPaths};
+use dot::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
 use dot::job::{JobId, JobKind, JobSelection, JobSelector, JobSelectorParseError};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{
+use dot::native::plan::{
     ExecutionPlan, ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlannedJob,
     PlanningError,
 };
+use dot::native::{ConfigFile, ConfigLocation};
 use dot::platform::PlatformInfo;
-use dot::schema::{
-    Config, EnvironmentName, Identifier, ResolvedEnvironmentPatch, ResolvedString,
-    SelectorIdentifier, SelectorIdentifierError,
-};
+use dot::schema::{Config, Identifier, SelectorIdentifier, SelectorIdentifierError};
 use support::fixture;
 
 #[cfg(not(windows))]
@@ -56,28 +52,11 @@ fn platform() -> PlatformInfo {
 }
 
 fn environment() -> ExecutionEnvironment {
-    let mut environment = ExecutionEnvironment::empty();
-    environment
-        .apply_patch(&ResolvedEnvironmentPatch {
-            path_prepend: None,
-            path_append: None,
-            variables: BTreeMap::from([
-                (
-                    EnvironmentName::new("HOME").expect("test name should be valid"),
-                    ResolvedString::from(TEST_HOME),
-                ),
-                (
-                    EnvironmentName::new("ROOT").expect("test name should be valid"),
-                    ResolvedString::from("/opt"),
-                ),
-                (
-                    EnvironmentName::new("RUNNER").expect("test name should be valid"),
-                    ResolvedString::from("bash"),
-                ),
-            ]),
-        })
-        .expect("test environment should be valid");
-    environment
+    ExecutionEnvironment::from_variables([
+        ("HOME", TEST_HOME),
+        ("ROOT", "/opt"),
+        ("RUNNER", "bash"),
+    ])
 }
 
 fn plan_fixture(selection: &JobSelection) -> ExecutionPlan {
@@ -232,7 +211,8 @@ fn job_selection_errors_use_canonical_job_selectors() {
 #[test]
 fn selected_link_does_not_resolve_an_unselected_action() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+        .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
     let manifest =
@@ -383,7 +363,8 @@ fn execution_plan_error_exposes_its_contained_error_as_the_immediate_source() {
 #[test]
 fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+        .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
     let manifest =
@@ -454,7 +435,8 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
 #[test]
 fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = LoadedConfig::load(&path).expect("the complete config should validate statically");
+    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+        .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
     let manifest =

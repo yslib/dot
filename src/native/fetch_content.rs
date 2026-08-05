@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use url::Url;
 
-use crate::plan::PlannedFetchContentAction;
+use super::plan::PlannedFetchContentAction;
 use crate::schema::FetchContentConflict;
 
 const MAX_REDIRECTS: u32 = 5;
@@ -376,6 +376,14 @@ fn remove_native_symlink(target: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+fn remove_native_symlink(_: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "symbolic links are not supported on this platform",
+    ))
+}
+
 pub(crate) struct UreqHttpsTransport {
     agent: ureq::Agent,
 }
@@ -432,7 +440,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::plan::PlannedFetchContentAction;
+    use crate::native::plan::PlannedFetchContentAction;
     use crate::schema::FetchContentConflict;
 
     enum FakeResult {

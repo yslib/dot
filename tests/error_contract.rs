@@ -4,18 +4,19 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
-use dot::action::{CommandPreparationError, ExecutionError};
-use dot::action_runner::{ActionStage, CommandActionRunError};
-use dot::check::ProviderCheckError;
-use dot::config::{ConfigDiscoveryError, ConfigLoadError};
-use dot::diagnostic::Operation;
 use dot::interpolation::InterpolationError;
 use dot::job::{JobSelector, JobSelectorParseError};
-use dot::link::{LinkError, LinkPhaseError};
 use dot::manifest::ManifestError;
-use dot::plan::{JobSelectionError, PlanningError};
+use dot::native::ConfigFileError;
+use dot::native::command_action::{ActionStage, CommandActionRunError};
+use dot::native::config_file::ConfigDiscoveryError;
+use dot::native::diagnostic::Operation;
+use dot::native::link::{LinkError, LinkPhaseError};
+use dot::native::plan::{JobSelectionError, PlanningError};
+use dot::native::process::{CommandPreparationError, ExecutionError};
+use dot::native::provider::{ProviderError, ProviderInstallError, ProviderStage};
+use dot::native::provider_check::ProviderProbeError;
 use dot::platform::PlatformInfo;
-use dot::provider::{ProviderError, ProviderInstallError, ProviderStage};
 use dot::schema::{
     Identifier, OneOrMany, PlatformConstraint, SchemaType, SelectorIdentifier,
     SelectorIdentifierError,
@@ -139,23 +140,23 @@ fn action_run_errors_expose_their_wrapper_errors() {
 #[test]
 fn provider_check_errors_expose_their_wrapper_errors() {
     let errors = [
-        ProviderCheckError::ActivateInterpolation(interpolation_error()),
-        ProviderCheckError::ProbeInterpolation(interpolation_error()),
+        ProviderProbeError::ActivateInterpolation(interpolation_error()),
+        ProviderProbeError::ProbeInterpolation(interpolation_error()),
     ];
     for error in &errors {
         assert_source_is::<InterpolationError>(error);
     }
 
     let errors = [
-        ProviderCheckError::ActivatePreparation(preparation_error()),
-        ProviderCheckError::ProbePreparation(preparation_error()),
+        ProviderProbeError::ActivatePreparation(preparation_error()),
+        ProviderProbeError::ProbePreparation(preparation_error()),
     ];
     for error in &errors {
         assert_source_is::<CommandPreparationError>(error);
     }
 
-    let converted = ProviderCheckError::from(execution_error());
-    assert!(matches!(&converted, ProviderCheckError::Execution(_)));
+    let converted = ProviderProbeError::from(execution_error());
+    assert!(matches!(&converted, ProviderProbeError::Execution(_)));
     assert_source_is::<ExecutionError>(&converted);
 }
 
@@ -176,16 +177,16 @@ fn config_discovery_errors_expose_io_errors() {
 
 #[test]
 fn config_load_errors_expose_their_immediate_errors() {
-    let current_directory = ConfigLoadError::CurrentDirectory { source: io_error() };
-    let canonicalize = ConfigLoadError::Canonicalize {
+    let current_directory = ConfigFileError::CurrentDirectory { source: io_error() };
+    let canonicalize = ConfigFileError::Canonicalize {
         path: PathBuf::from("dot.toml"),
         source: io_error(),
     };
-    let read = ConfigLoadError::Read {
+    let read = ConfigFileError::Read {
         path: PathBuf::from("dot.toml"),
         source: io_error(),
     };
-    let parse = ConfigLoadError::Parse {
+    let parse = ConfigFileError::Parse {
         path: PathBuf::from("dot.toml"),
         source: toml_error(),
     };
@@ -198,7 +199,7 @@ fn config_load_errors_expose_their_immediate_errors() {
 
 #[test]
 fn config_load_validation_preserves_all_three_immediate_source_layers() {
-    let error = ConfigLoadError::Validation {
+    let error = ConfigFileError::Validation {
         path: PathBuf::from("dot.toml"),
         source: validation_error(ConfigValidationErrorKind::Expression(interpolation_error())),
     };

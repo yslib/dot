@@ -4,15 +4,18 @@ use std::io::Write;
 use std::path::Path;
 use std::process;
 
-use dot::action::ExecutionEnvironment;
-use dot::check::{ProviderCheckError, ProviderChecker, ProviderReadiness, build_report};
-use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
+use dot::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
+use dot::native::provider_check::{
+    ProviderChecker, ProviderProbeError, ProviderReadiness, build_report,
+};
+use dot::native::{ConfigFile, ConfigLocation, NativeRuntime};
 use dot::platform::PlatformInfo;
 use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
 use dot::schema::{
     Entries, EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, Provider,
-    ProviderInstallArgSource, ResolvedEnvironmentPatch, ResolvedString, StringExpressionSource,
+    ProviderInstallArgSource, StringExpressionSource,
 };
+use dot::selection::{ProfileSelection, ScopeSelection};
 
 fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
     EnvironmentPatch {
@@ -24,22 +27,6 @@ fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
                 (
                     EnvironmentName::new(*name).expect("test name should be valid"),
                     (*value).into(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>(),
-    }
-}
-
-fn resolved_environment_patch(variables: &[(&str, &str)]) -> ResolvedEnvironmentPatch {
-    ResolvedEnvironmentPatch {
-        path_prepend: None,
-        path_append: None,
-        variables: variables
-            .iter()
-            .map(|(name, value)| {
-                (
-                    EnvironmentName::new(*name).expect("test name should be valid"),
-                    ResolvedString::from(*value),
                 )
             })
             .collect::<BTreeMap<_, _>>(),
@@ -81,11 +68,7 @@ fn provider(mode: &str, value: &str) -> Provider {
 }
 
 fn base_environment() -> ExecutionEnvironment {
-    let mut environment = ExecutionEnvironment::empty();
-    environment
-        .apply_patch(&resolved_environment_patch(&[("BASE_ROOT", "/base")]))
-        .expect("base environment should be valid");
-    environment
+    ExecutionEnvironment::from_variables([("BASE_ROOT", "/base")])
 }
 
 fn dot_paths() -> DotPaths<'static> {
@@ -106,6 +89,32 @@ fn platform() -> PlatformInfo {
         distro_families: BTreeSet::new(),
         environments: BTreeSet::from(["native".to_owned()]),
     }
+}
+
+#[test]
+fn high_level_provider_check_projects_an_empty_selected_manifest() {
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let path = directory.path().join("dot.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[targets.machine]\nplatform = {{ os = {:?} }}\n",
+            env::consts::OS
+        ),
+    )
+    .expect("test configuration should be written");
+    let config = ConfigFile::load(ConfigLocation::Path(path)).expect("config should load");
+    let runtime = NativeRuntime::detect();
+    let scope = ScopeSelection {
+        target: Some("machine".try_into().expect("target should be valid")),
+        profile: ProfileSelection::Root,
+    };
+
+    let report = dot::native::check_providers(&config, &runtime, runtime.platform(), &scope)
+        .expect("provider check should complete");
+
+    assert_eq!(report.status, ReportStatus::Succeeded);
+    assert!(report.items.is_empty());
 }
 
 #[test]
@@ -331,19 +340,19 @@ fn source_promotion_errors_are_provider_local_and_do_not_stop_later_probes() {
     );
     assert!(matches!(
         report.results()[0].error(),
-        Some(ProviderCheckError::ActivateInterpolation(
+        Some(ProviderProbeError::ActivateInterpolation(
             InterpolationError::UnclosedResolver { .. }
         ))
     ));
     assert!(matches!(
         report.results()[1].error(),
-        Some(ProviderCheckError::ProbeInterpolation(
+        Some(ProviderProbeError::ProbeInterpolation(
             InterpolationError::UnknownResolver { name }
         )) if name == "unknown"
     ));
     assert!(matches!(
         report.results()[2].error(),
-        Some(ProviderCheckError::ProbeInterpolation(
+        Some(ProviderProbeError::ProbeInterpolation(
             InterpolationError::ResolverUnavailable { resolver }
         )) if resolver == "package"
     ));

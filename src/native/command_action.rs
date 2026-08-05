@@ -1,12 +1,16 @@
+//! Execution of built-in command actions.
+
 use std::fmt;
 
-pub use crate::fetch_content::{FetchContentError, FetchContentOutcome};
+pub use super::fetch_content::{FetchContentError, FetchContentOutcome};
 
-use crate::action::{
-    CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
-    PreparedCommand, ProcessExecutor,
-};
+use crate::interpolation::ExecutionEnvironment;
 use crate::schema::{ResolvedCommandAction, ResolvedExecAction};
+
+use super::process::{
+    CommandPreparationError, ExecutionError, ExecutionResult, IoMode, PreparedCommand,
+    ProcessExecutor,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionStage {

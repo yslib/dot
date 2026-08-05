@@ -1,3 +1,5 @@
+//! Terminal rendering for native command reports.
+
 use std::io::{self, Write};
 
 use comfy_table::{
@@ -11,11 +13,11 @@ use crate::report::{
 };
 
 #[derive(Clone, Copy, Debug)]
-pub struct TableRenderer {
+pub struct TerminalRenderer {
     terminal: bool,
 }
 
-impl TableRenderer {
+impl TerminalRenderer {
     pub const fn new(terminal: bool) -> Self {
         Self { terminal }
     }

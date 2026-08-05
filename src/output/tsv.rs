@@ -44,6 +44,13 @@ impl TsvRenderer {
     pub fn render<R: TsvRecord>(&self, records: &[R], output: &mut dyn Write) -> io::Result<()> {
         self.prepare(records)?.render(output)
     }
+
+    /// Renders records into an owned UTF-8 string.
+    pub fn render_to_string<R: TsvRecord>(&self, records: &[R]) -> io::Result<String> {
+        let mut output = Vec::new();
+        self.render(records, &mut output)?;
+        Ok(String::from_utf8(output).expect("TSV fields and escapes are always UTF-8"))
+    }
 }
 
 /// A complete validated set of TSV fields ready for output.

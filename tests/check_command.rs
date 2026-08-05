@@ -1,3 +1,5 @@
+//! End-to-end provider check command behavior.
+
 mod support;
 
 use std::env;

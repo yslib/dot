@@ -3,23 +3,24 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use dot::action::ExecutionEnvironment;
-use dot::dry_run;
-use dot::interpolation::{DotPaths, InterpolationError, XdgPaths};
+use dot::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
 use dot::job::{JobKind, JobSelection, JobSelector};
 use dot::manifest::EffectiveManifest;
-use dot::plan::{
+use dot::native::dry_run;
+use dot::native::plan::{
     ExecutionPlanError, ExecutionPlanner, PlannedActionKind, PlannedProviderInstall, PlanningError,
 };
+use dot::native::{ConfigFile, ConfigLocation, NativeRuntime};
 use dot::platform::PlatformInfo;
 use dot::report::{
     ActionInfo, ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus,
     ReportSubject,
 };
 use dot::schema::{
-    Config, EnvironmentName, FetchContentConflict, LinkConflict, LinkMissingParent,
-    ResolvedEnvironmentPatch, ResolvedString, SelectorIdentifier,
+    Config, FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedString,
+    SelectorIdentifier,
 };
+use dot::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
 use support::fixture;
 
 #[cfg(not(windows))]
@@ -54,28 +55,11 @@ fn selector_id(value: &str) -> SelectorIdentifier {
 }
 
 fn environment() -> ExecutionEnvironment {
-    let mut environment = ExecutionEnvironment::empty();
-    environment
-        .apply_patch(&ResolvedEnvironmentPatch {
-            path_prepend: None,
-            path_append: None,
-            variables: BTreeMap::from([
-                (
-                    EnvironmentName::new("HOME").expect("test name should be valid"),
-                    ResolvedString::from(TEST_HOME),
-                ),
-                (
-                    EnvironmentName::new("ROOT").expect("test name should be valid"),
-                    ResolvedString::from("/opt"),
-                ),
-                (
-                    EnvironmentName::new("RUNNER").expect("test name should be valid"),
-                    ResolvedString::from("bash"),
-                ),
-            ]),
-        })
-        .expect("test environment should be valid");
-    environment
+    ExecutionEnvironment::from_variables([
+        ("HOME", TEST_HOME),
+        ("ROOT", "/opt"),
+        ("RUNNER", "bash"),
+    ])
 }
 
 fn dot_paths() -> DotPaths<'static> {
@@ -149,32 +133,22 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
 #[test]
 fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded =
-        dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
+    let config =
+        ConfigFile::load(ConfigLocation::Path(path)).expect("the complete config should validate");
+    let runtime = NativeRuntime::detect();
     let platform = platform();
-    let target = selector_id("machine");
-    let manifest =
-        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
-            .expect("test manifest should select");
-    let environment = environment();
-    let xdg = XdgPaths::detect();
-    let config_dir = path.parent().expect("fixture path should have a parent");
-    let planner = ExecutionPlanner::new(
-        &environment,
-        DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD)),
-        &xdg,
-        &platform,
-    );
-    let plan = planner
-        .plan(
-            &manifest,
-            &JobSelection::only(JobSelector::Link(
-                "nvim".try_into().expect("test selector should be valid"),
-            )),
-        )
-        .expect("unselected runtime values must remain unresolved");
+    let selection = ExecutionSelection {
+        scope: ScopeSelection {
+            target: Some(selector_id("machine")),
+            profile: ProfileSelection::Root,
+        },
+        jobs: JobSelection::only(JobSelector::Link(
+            "nvim".try_into().expect("test selector should be valid"),
+        )),
+    };
 
-    let report = dry_run::build_report(&path, &plan);
+    let report = dot::native::dry_run(&config, &runtime, &platform, &selection)
+        .expect("unselected runtime values must remain unresolved");
 
     assert_eq!(report.items.len(), 1);
     assert_eq!(report.items[0].id, "nvim");
@@ -673,8 +647,8 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
 #[test]
 fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let path = fixture::path("selection/valid-selected-provider-runtime-errors.toml");
-    let loaded =
-        dot::config::LoadedConfig::load(&path).expect("the complete config should validate");
+    let loaded = dot::native::ConfigFile::load(dot::native::ConfigLocation::Path(path.clone()))
+        .expect("the complete config should validate");
     let platform = platform();
     let target = selector_id("machine");
     let manifest =

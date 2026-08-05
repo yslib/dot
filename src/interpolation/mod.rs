@@ -1,12 +1,13 @@
+//! Static validation and pure evaluation of configuration expressions.
+
+mod environment;
 mod resolver;
+
+pub use environment::ExecutionEnvironment;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use directories::{BaseDirs, UserDirs};
-
-use crate::action::ExecutionEnvironment;
-use crate::config::LoadedConfig;
 use crate::schema::{
     EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType, LiteralString,
     LiteralStringSource, OneOrMany, ParsedStringForm, ParsedTemplate as ParsedStringTemplate,
@@ -16,7 +17,7 @@ use crate::schema::{
     TypedVariable, UntypedVariableReference,
 };
 
-use resolver::{ResolverEntry, lookup_resolver};
+use resolver::{ResolverEntry, ResolverKind, lookup_resolver};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DotPaths<'a> {
@@ -46,18 +47,6 @@ impl<'a> DotPaths<'a> {
 
     pub const fn config_dir(&self) -> &'a Path {
         self.config_dir
-    }
-}
-
-impl<'a> From<&'a LoadedConfig> for DotPaths<'a> {
-    fn from(loaded: &'a LoadedConfig) -> Self {
-        Self::new(
-            loaded.path(),
-            loaded.directory(),
-            loaded.real_path(),
-            loaded.real_directory(),
-            loaded.invocation_cwd(),
-        )
     }
 }
 
@@ -96,7 +85,7 @@ impl DotPaths<'_> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum XdgPath {
+pub(crate) enum XdgPath {
     Home,
     Config,
     ConfigLocal,
@@ -129,40 +118,10 @@ impl XdgPath {
 
 #[derive(Clone, Debug, Default)]
 pub struct XdgPaths {
-    values: BTreeMap<XdgPath, PathBuf>,
+    pub(crate) values: BTreeMap<XdgPath, PathBuf>,
 }
 
 impl XdgPaths {
-    pub fn detect() -> Self {
-        let mut values = BTreeMap::new();
-
-        if let Some(base) = BaseDirs::new() {
-            values.insert(XdgPath::Home, base.home_dir().to_path_buf());
-            values.insert(XdgPath::Config, base.config_dir().to_path_buf());
-            values.insert(XdgPath::ConfigLocal, base.config_local_dir().to_path_buf());
-            values.insert(XdgPath::Data, base.data_dir().to_path_buf());
-            values.insert(XdgPath::DataLocal, base.data_local_dir().to_path_buf());
-            values.insert(XdgPath::Cache, base.cache_dir().to_path_buf());
-            if let Some(path) = base.state_dir() {
-                values.insert(XdgPath::State, path.to_path_buf());
-            }
-            if let Some(path) = base.runtime_dir() {
-                values.insert(XdgPath::Runtime, path.to_path_buf());
-            }
-            if let Some(path) = base.executable_dir() {
-                values.insert(XdgPath::Executable, path.to_path_buf());
-            }
-        }
-
-        if let Some(user) = UserDirs::new()
-            && let Some(path) = user.document_dir()
-        {
-            values.insert(XdgPath::Documents, path.to_path_buf());
-        }
-
-        Self { values }
-    }
-
     fn get(&self, path: XdgPath) -> Option<&Path> {
         self.values.get(&path).map(PathBuf::as_path)
     }
@@ -209,6 +168,112 @@ impl<'a> ResolveContext<'a> {
         self.package = Some(package);
         self
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ResolvedValue {
+    String(ResolvedString),
+    StringList(Vec<ResolvedString>),
+}
+
+impl ResolvedValue {
+    fn schema_type(&self) -> SchemaType {
+        match self {
+            Self::String(_) => StringType::schema_type(),
+            Self::StringList(_) => ListType::<StringType>::schema_type(),
+        }
+    }
+
+    fn into_string(self, resolver: &str) -> Result<ResolvedString, InterpolationError> {
+        match self {
+            Self::String(value) => Ok(value),
+            other => Err(InterpolationError::ResolverContractViolation {
+                resolver: resolver.to_owned(),
+                expected: StringType::schema_type(),
+                actual: other.schema_type(),
+            }),
+        }
+    }
+
+    fn into_string_list(self, resolver: &str) -> Result<Vec<ResolvedString>, InterpolationError> {
+        match self {
+            Self::StringList(values) => Ok(values),
+            other => Err(InterpolationError::ResolverContractViolation {
+                resolver: resolver.to_owned(),
+                expected: ListType::<StringType>::schema_type(),
+                actual: other.schema_type(),
+            }),
+        }
+    }
+}
+
+fn resolve_variable(
+    namespace: &str,
+    payload: &str,
+    context: &ResolveContext<'_>,
+) -> Result<ResolvedValue, InterpolationError> {
+    let resolver = lookup_resolver(namespace).expect("typed resolver exists");
+    let value = match resolver.kind() {
+        ResolverKind::Environment => {
+            let value = context.environment.get(payload).ok_or_else(|| {
+                InterpolationError::MissingEnvironmentVariable {
+                    name: payload.to_owned(),
+                }
+            })?;
+            let value = value.to_str().ok_or_else(|| {
+                InterpolationError::NonUnicodeEnvironmentVariable {
+                    name: payload.to_owned(),
+                }
+            })?;
+            ResolvedValue::String(ResolvedString::from(value))
+        }
+        ResolverKind::DotPath => {
+            let path = context.dot.get(
+                DotPath::from_payload(payload)
+                    .expect("payload was validated by the resolver definition"),
+            );
+            let value = path
+                .to_str()
+                .ok_or_else(|| InterpolationError::NonUnicodePath {
+                    name: payload.to_owned(),
+                })?;
+            ResolvedValue::String(ResolvedString::from(value))
+        }
+        ResolverKind::XdgPath => {
+            let path = XdgPath::from_payload(payload)
+                .and_then(|path| context.xdg.get(path))
+                .ok_or_else(|| InterpolationError::UnavailablePath {
+                    name: payload.to_owned(),
+                })?;
+            let value = path
+                .to_str()
+                .ok_or_else(|| InterpolationError::NonUnicodePath {
+                    name: payload.to_owned(),
+                })?;
+            ResolvedValue::String(ResolvedString::from(value))
+        }
+        ResolverKind::Package => {
+            let package = context
+                .package
+                .ok_or(InterpolationError::MissingPackageContext)?;
+            let values = match payload {
+                "names" => package.names,
+                "provider_args" => package.provider_args,
+                _ => unreachable!("payload was validated by the resolver definition"),
+            };
+            ResolvedValue::StringList(values.iter().cloned().map(ResolvedString::from).collect())
+        }
+    };
+
+    let actual = value.schema_type();
+    if &actual != resolver.output_type() {
+        return Err(InterpolationError::ResolverContractViolation {
+            resolver: namespace.to_owned(),
+            expected: resolver.output_type().clone(),
+            actual,
+        });
+    }
+    Ok(value)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -456,6 +521,7 @@ pub fn resolve_exec_action(
 pub(crate) enum ExecActionResolutionError {
     Program(InterpolationError),
     Argument {
+        #[cfg_attr(not(feature = "native"), allow(dead_code))]
         index: usize,
         source: InterpolationError,
     },
@@ -605,9 +671,7 @@ fn evaluate_string_variable(
     context: &ResolveContext<'_>,
 ) -> Result<ResolvedString, InterpolationError> {
     let reference = variable.reference();
-    let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    resolver
-        .resolve(reference.payload(), context)?
+    resolve_variable(reference.resolver(), reference.payload(), context)?
         .into_string(reference.resolver())
 }
 
@@ -616,9 +680,7 @@ fn evaluate_string_list_variable(
     context: &ResolveContext<'_>,
 ) -> Result<Vec<ResolvedString>, InterpolationError> {
     let reference = variable.reference();
-    let resolver = lookup_resolver(reference.resolver()).expect("typed resolver exists");
-    resolver
-        .resolve(reference.payload(), context)?
+    resolve_variable(reference.resolver(), reference.payload(), context)?
         .into_string_list(reference.resolver())
 }
 
@@ -671,42 +733,23 @@ mod tests {
 
     use directories::{BaseDirs, UserDirs};
 
-    use crate::action::ExecutionEnvironment;
-    use crate::config::LoadedConfig;
+    use crate::native::{ConfigFile, ConfigLocation, NativeRuntime};
     use crate::schema::{
         EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
-        OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedEnvironmentPatch,
-        ResolvedString, StringExpression, StringExpressionSource, StringTemplatePart, StringType,
-        TypedVariable,
+        OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedString, StringExpression,
+        StringExpressionSource, StringTemplatePart, StringType, TypedVariable,
     };
 
     use super::{
-        DotPaths, InterpolationError, PackageContext, ResolveContext, XdgPath, XdgPaths,
-        evaluate_provider_install_args, promote_literal_string, promote_provider_install_arg,
-        promote_provider_install_args, promote_string_expression, resolve_environment_patch,
-        resolve_exec_action, resolve_literal_string, resolve_provider_install_action,
-        resolve_string_expression,
+        DotPaths, ExecutionEnvironment, InterpolationError, PackageContext, ResolveContext,
+        XdgPath, XdgPaths, evaluate_provider_install_args, promote_literal_string,
+        promote_provider_install_arg, promote_provider_install_args, promote_string_expression,
+        resolve_environment_patch, resolve_exec_action, resolve_literal_string,
+        resolve_provider_install_action, resolve_string_expression,
     };
 
     fn environment(variables: &[(&str, &str)]) -> ExecutionEnvironment {
-        let patch = ResolvedEnvironmentPatch {
-            path_prepend: None,
-            path_append: None,
-            variables: variables
-                .iter()
-                .map(|(name, value)| {
-                    (
-                        EnvironmentName::new(*name).expect("test name should be valid"),
-                        ResolvedString::from(*value),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>(),
-        };
-        let mut environment = ExecutionEnvironment::empty();
-        environment
-            .apply_patch(&patch)
-            .expect("test environment patch should apply");
-        environment
+        ExecutionEnvironment::from_variables(variables.iter().copied())
     }
 
     fn dot_paths() -> DotPaths<'static> {
@@ -936,9 +979,10 @@ mod tests {
     #[test]
     fn dot_paths_from_loaded_config_exposes_canonical_paths() {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dot.toml");
-        let loaded = LoadedConfig::load(fixture).expect("fixture should load");
+        let config = ConfigFile::load(ConfigLocation::Path(fixture)).expect("fixture should load");
+        let runtime = NativeRuntime::detect();
         let xdg = xdg_paths(&[]);
-        let context = ResolveContext::new(loaded.environment(), DotPaths::from(&loaded), &xdg);
+        let context = ResolveContext::new(runtime.environment(), DotPaths::from(&config), &xdg);
 
         let real_config = resolve_string_expression(
             &StringExpressionSource::from("${dot:real_config}"),
@@ -951,10 +995,10 @@ mod tests {
         )
         .expect("real config directory should resolve");
 
-        assert_eq!(PathBuf::from(real_config.value()), loaded.real_path());
+        assert_eq!(PathBuf::from(real_config.value()), config.real_path());
         assert_eq!(
             PathBuf::from(real_config_dir.value()),
-            loaded.real_directory()
+            config.real_directory()
         );
     }
 

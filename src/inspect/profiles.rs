@@ -1,46 +1,40 @@
+//! Declared profile catalog inspection.
+
 use std::borrow::Cow;
 
-use crate::config::LoadedConfigDocument;
-use crate::manifest::{EffectiveManifest, profile_entries};
+use crate::manifest::{EffectiveManifest, ManifestError, profile_entries};
 use crate::output::TsvRecord;
 use crate::platform::PlatformInfo;
-use crate::schema::SelectorIdentifier;
+use crate::schema::{Config, SelectorIdentifier};
 
-use super::{ManifestCommandError, ProfileSelection};
+use crate::selection::ProfileSelection;
 
-pub(super) struct Catalog {
-    loaded: LoadedConfigDocument,
+pub(super) struct Catalog<'a> {
+    config: &'a Config,
     target: SelectorIdentifier,
 }
 
-impl Catalog {
-    pub(super) fn load(
-        config: &std::path::Path,
+impl<'a> Catalog<'a> {
+    pub(super) fn new(
+        config: &'a Config,
         platform: &PlatformInfo,
         requested_target: Option<&SelectorIdentifier>,
-    ) -> Result<Self, ManifestCommandError> {
-        let loaded = LoadedConfigDocument::load(config)?;
-        let selected = EffectiveManifest::select_for_inspection(
-            loaded.config(),
-            platform,
-            requested_target,
-            None,
-        )?;
-        let target = loaded
-            .config()
+    ) -> Result<Self, ManifestError> {
+        let selected =
+            EffectiveManifest::select_for_inspection(config, platform, requested_target, None)?;
+        let target = config
             .targets
             .get_key_value(selected.target())
             .expect("the inspected target came from this configuration")
             .0
             .clone();
 
-        Ok(Self { loaded, target })
+        Ok(Self { config, target })
     }
 
-    pub(super) fn records(&self) -> Vec<ProfileRecord<'_>> {
+    pub(super) fn records(&self) -> Vec<ProfileRecord> {
         let target = self
-            .loaded
-            .config()
+            .config
             .targets
             .get(self.target.as_str())
             .expect("the catalog owns the selected target");
@@ -53,18 +47,29 @@ impl Catalog {
         }];
         records.extend(profiles.map(|entry| ProfileRecord {
             profile: ProfileSelection::Named(entry.id.clone()),
-            path: entry.path,
+            path: entry.path.into_iter().cloned().collect(),
         }));
         records
     }
 }
 
-pub(super) struct ProfileRecord<'a> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileRecord {
     profile: ProfileSelection,
-    path: Vec<&'a SelectorIdentifier>,
+    path: Vec<SelectorIdentifier>,
 }
 
-impl TsvRecord for ProfileRecord<'_> {
+impl ProfileRecord {
+    pub const fn profile(&self) -> &ProfileSelection {
+        &self.profile
+    }
+
+    pub fn path(&self) -> &[SelectorIdentifier] {
+        &self.path
+    }
+}
+
+impl TsvRecord for ProfileRecord {
     fn fields(&self) -> Vec<Cow<'_, str>> {
         let (profile, path) = match &self.profile {
             ProfileSelection::Root => (
@@ -84,20 +89,5 @@ impl TsvRecord for ProfileRecord<'_> {
         };
 
         vec![profile, path, Cow::Owned(self.path.len().to_string())]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn records_preserve_typed_profile_facts_until_rendering() {
-        fn assert_types<'a>(record: ProfileRecord<'a>) {
-            let _: ProfileSelection = record.profile;
-            let _: Vec<&'a SelectorIdentifier> = record.path;
-        }
-
-        let _ = assert_types;
     }
 }

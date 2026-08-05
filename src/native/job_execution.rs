@@ -1,17 +1,23 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::fmt::Debug;
 
-use crate::action::ExecutionEnvironment;
-use crate::action_runner::{
+use super::command_action::CommandActionRunner;
+use super::command_action::{
     CommandActionOutcome, CommandActionRunError, FetchContentError, FetchContentOutcome,
 };
-use crate::job::JobId;
-use crate::job_executor::JobExecutor;
-use crate::link::{LinkError, LinkOutcome, LinkPhaseError};
-use crate::plan::{ExecutionPlan, PlannedJob, PlannedPackage};
-use crate::provider::{
-    ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderOutcome, ProviderStatus,
+use super::fetch_content::{FetchContentRunner, UreqHttpsTransport};
+use super::link::{self, LinkReport};
+use super::link::{LinkError, LinkOutcome, LinkPhaseError};
+use super::plan::{
+    ExecutionPlan, PlannedAction, PlannedActionKind, PlannedJob, PlannedLink, PlannedManualPackage,
+    PlannedPackage, PlannedProvider, PlannedProviderInstall,
 };
+use super::provider::{
+    ProviderError, ProviderInstallError, ProviderInstallOutcome, ProviderInstallStatus,
+    ProviderOutcome, ProviderRunner, ProviderStatus,
+};
+use crate::interpolation::ExecutionEnvironment;
+use crate::job::JobId;
 use crate::schema::Identifier;
 
 #[derive(Debug)]
@@ -129,6 +135,59 @@ impl JobExecutionReport {
 
     pub const fn link_phase_error(&self) -> Option<&LinkPhaseError> {
         self.link_phase_error.as_ref()
+    }
+}
+
+struct JobExecutor<'a> {
+    provider_runner: ProviderRunner<'a>,
+    command_action_runner: CommandActionRunner<'a>,
+    fetch_transport: UreqHttpsTransport,
+}
+
+impl<'a> JobExecutor<'a> {
+    fn new(environment: &'a ExecutionEnvironment) -> Self {
+        Self {
+            provider_runner: ProviderRunner::new(environment),
+            command_action_runner: CommandActionRunner::new(environment),
+            fetch_transport: UreqHttpsTransport::new(),
+        }
+    }
+
+    fn ensure_provider(&self, provider: &PlannedProvider) -> ProviderStatus {
+        self.provider_runner.ensure(provider)
+    }
+
+    fn install_provider_package(
+        &self,
+        install: &PlannedProviderInstall,
+        provider: &ProviderStatus,
+    ) -> ProviderInstallStatus {
+        self.provider_runner.install(install, provider)
+    }
+
+    fn install_manual_package(
+        &self,
+        package: &PlannedManualPackage,
+    ) -> Result<CommandActionOutcome, CommandActionRunError> {
+        self.command_action_runner.run(package.install())
+    }
+
+    fn run_action(&self, action: &PlannedAction) -> ActionOutcome {
+        match action.kind() {
+            PlannedActionKind::Command(action) => {
+                ActionOutcome::Command(self.command_action_runner.run(action))
+            }
+            PlannedActionKind::FetchContent(action) => ActionOutcome::FetchContent(
+                FetchContentRunner::new(&self.fetch_transport).run(action),
+            ),
+        }
+    }
+
+    fn reconcile_links<'p>(
+        &self,
+        links: impl IntoIterator<Item = &'p PlannedLink>,
+    ) -> Result<LinkReport, LinkPhaseError> {
+        link::reconcile(links)
     }
 }
 

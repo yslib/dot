@@ -1,3 +1,5 @@
+//! End-to-end configuration discovery behavior.
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;

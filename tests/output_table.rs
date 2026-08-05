@@ -1,13 +1,12 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use dot::diagnostic::ErrorHint;
-use dot::output::TableRenderer;
+use dot::native::TerminalRenderer;
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, Evidence, EvidenceStage,
-    ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource,
-    ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ErrorHint, Evidence,
+    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem,
+    ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{FetchContentConflict, LinkConflict, LinkMissingParent};
 
@@ -118,7 +117,7 @@ fn renders_manual_packages_from_command_facts() {
     });
 
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report, &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
@@ -136,7 +135,7 @@ fn renders_manual_packages_from_command_facts() {
 #[test]
 fn renders_every_subject_through_one_dense_table() {
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report(), &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
@@ -205,7 +204,7 @@ fn renders_fetch_content_as_an_action_with_fetch_facts() {
     });
 
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report, &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
@@ -244,7 +243,7 @@ fn renders_fetch_failure_evidence_without_fabricating_process_output() {
     });
 
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report, &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
@@ -274,7 +273,7 @@ fn wraps_long_details_instead_of_expanding_the_table_without_bound() {
     command.exec.args = vec!["x".repeat(240)];
 
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report, &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");
@@ -310,7 +309,7 @@ fn renders_structured_hints_after_the_original_error() {
     }];
 
     let mut output = Vec::new();
-    TableRenderer::new(false)
+    TerminalRenderer::new(false)
         .render(&report, &mut output)
         .expect("table should render");
     let output = String::from_utf8(output).expect("table should be UTF-8");

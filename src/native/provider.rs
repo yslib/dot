@@ -1,10 +1,11 @@
 use std::fmt;
 
-use crate::action::{
-    CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
-    PreparedCommand, ProcessExecutor,
+use super::plan::{PlannedProvider, PlannedProviderInstall};
+use super::process::{
+    CommandPreparationError, ExecutionError, ExecutionResult, IoMode, PreparedCommand,
+    ProcessExecutor, apply_environment_patch,
 };
-use crate::plan::{PlannedProvider, PlannedProviderInstall};
+use crate::interpolation::ExecutionEnvironment;
 use crate::schema::ResolvedExecAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,8 +279,7 @@ impl<'a> ProviderRunner<'a> {
     ) -> Result<ExecutionEnvironment, ProviderError> {
         let mut environment = self.base_environment.clone();
         if let Some(activate) = provider.activate() {
-            environment
-                .apply_patch(activate)
+            apply_environment_patch(&mut environment, activate)
                 .map_err(|source| ProviderError::Environment { stage, source })?;
         }
         Ok(environment)

@@ -1,6 +1,8 @@
+//! Native operating-system diagnostics.
+
 use std::io;
 
-mod windows;
+pub use crate::report::ErrorHint;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
@@ -8,26 +10,27 @@ pub enum Operation {
     StartProcess,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ErrorHint {
-    pub code: String,
-    pub summary: String,
-    pub suggestion: String,
+#[derive(Clone, Copy, Debug)]
+struct Mapping {
+    operation: Operation,
+    raw_code: i32,
+    code: &'static str,
+    summary: &'static str,
+    suggestion: &'static str,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Mapping {
-    pub operation: Operation,
-    pub raw_code: i32,
-    pub code: &'static str,
-    pub summary: &'static str,
-    pub suggestion: &'static str,
-}
+const WINDOWS_MAPPINGS: &[Mapping] = &[Mapping {
+    operation: Operation::CreateSymbolicLink,
+    raw_code: 1314,
+    code: "windows.symlink.privilege-required",
+    summary: "symbolic-link creation requires permission",
+    suggestion: "enable Windows Developer Mode or run dot from an elevated shell",
+}];
 
 pub fn lookup(os: &str, operation: Operation, error: &io::Error) -> Option<ErrorHint> {
     let raw_code = error.raw_os_error()?;
     let mappings = match os {
-        "windows" => windows::MAPPINGS,
+        "windows" => WINDOWS_MAPPINGS,
         _ => return None,
     };
     let mapping = mappings

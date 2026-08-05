@@ -88,7 +88,7 @@ jobs:
         run: cargo test --locked --all-targets --all-features --target ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --locked --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --bin dot --target ${{ matrix.target }}
 
       - name: Stage binary
         if: runner.os != 'Windows'

@@ -1,6 +1,6 @@
 use std::io;
 
-use dot::diagnostic::{Operation, lookup};
+use dot::native::diagnostic::{Operation, lookup};
 
 #[test]
 fn maps_windows_symlink_privilege_error_to_a_structured_hint() {

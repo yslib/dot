@@ -4,8 +4,8 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::diagnostic::Operation;
-use crate::plan::PlannedLink;
+use super::diagnostic::Operation;
+use super::plan::PlannedLink;
 use crate::schema::{LinkConflict, LinkMissingParent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -318,6 +318,14 @@ fn create_native_symlink(source: &Path, target: &Path, kind: SourceKind) -> io::
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+fn create_native_symlink(_: &Path, _: &Path, _: SourceKind) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "symbolic links are not supported on this platform",
+    ))
+}
+
 #[cfg(unix)]
 fn remove_native_symlink(target: &Path, _: &fs::FileType) -> io::Result<()> {
     fs::remove_file(target)
@@ -332,6 +340,14 @@ fn remove_native_symlink(target: &Path, file_type: &fs::FileType) -> io::Result<
     } else {
         fs::remove_file(target)
     }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn remove_native_symlink(_: &Path, _: &fs::FileType) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "symbolic links are not supported on this platform",
+    ))
 }
 
 #[cfg(not(windows))]
@@ -488,7 +504,7 @@ pub enum LinkPhaseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::Operation;
+    use crate::native::diagnostic::Operation;
 
     #[test]
     fn link_io_error_retains_typed_diagnostic_context() {

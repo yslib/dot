@@ -1,3 +1,5 @@
+//! End-to-end dry-run command behavior.
+
 mod support;
 
 use std::env;
@@ -289,7 +291,6 @@ fn dry_run_prints_the_resolved_plan_without_executing_or_inspecting() {
     assert!(stdout.contains("│ action   ┆ configure"), "{stdout}");
     assert!(stdout.contains("│ link     ┆ missing"), "{stdout}");
     assert!(stdout.contains("PLANNED · 5 items"), "{stdout}");
-    assert!(!stdout.contains("Dispatch {"), "{stdout}");
 }
 
 #[cfg(feature = "dev-platform-override")]

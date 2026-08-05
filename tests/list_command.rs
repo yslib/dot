@@ -1,3 +1,5 @@
+//! End-to-end list command behavior.
+
 mod support;
 
 use std::collections::BTreeSet;

@@ -1,17 +1,59 @@
-use crate::action::{
-    CommandPreparationError, ExecutionEnvironment, ExecutionError, ExecutionResult, IoMode,
-    PreparedCommand, ProcessExecutor,
-};
+//! Provider readiness inspection and report projection.
+
 use crate::interpolation::{
-    DotPaths, InterpolationError, ResolveContext, XdgPaths, resolve_environment_patch,
-    resolve_exec_action,
+    DotPaths, ExecutionEnvironment, InterpolationError, ResolveContext, XdgPaths,
+    resolve_environment_patch, resolve_exec_action,
 };
+use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::platform::PlatformInfo;
 use crate::report::{
     CommandInfo, CommandReport, Evidence, EvidenceStage, ItemStatus, ProviderItem, ReportCommand,
     ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use crate::schema::{Entries, OneOrMany, Provider};
+use crate::selection::ScopeSelection;
+
+use super::config_file::ConfigFile;
+use super::process::{
+    CommandPreparationError, ExecutionError, ExecutionResult, IoMode, PreparedCommand,
+    ProcessExecutor, apply_environment_patch,
+};
+use super::runtime::NativeRuntime;
+
+pub fn check_providers(
+    config: &ConfigFile,
+    runtime: &NativeRuntime,
+    compatibility_platform: &PlatformInfo,
+    scope: &ScopeSelection,
+) -> Result<CommandReport, ProviderCheckError> {
+    let manifest = EffectiveManifest::select_for_execution(
+        config.config(),
+        compatibility_platform,
+        scope.target.as_ref(),
+        scope.profile.named(),
+    )?;
+    let checker = ProviderChecker::new(
+        runtime.environment(),
+        DotPaths::from(config),
+        runtime.xdg_paths(),
+    );
+    let checks = checker.check(manifest.providers());
+
+    Ok(build_report(
+        config.path(),
+        manifest.target(),
+        manifest.profile(),
+        compatibility_platform,
+        manifest.providers(),
+        &checks,
+    ))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderCheckError {
+    #[error(transparent)]
+    Manifest(#[from] ManifestError),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderReadiness {
@@ -22,7 +64,7 @@ pub enum ProviderReadiness {
 #[derive(Debug)]
 pub struct ProviderCheckResult {
     provider: String,
-    outcome: Result<ExecutionResult, ProviderCheckError>,
+    outcome: Result<ExecutionResult, ProviderProbeError>,
 }
 
 impl ProviderCheckResult {
@@ -41,7 +83,7 @@ impl ProviderCheckResult {
         self.outcome.as_ref().ok()
     }
 
-    pub fn error(&self) -> Option<&ProviderCheckError> {
+    pub fn error(&self) -> Option<&ProviderProbeError> {
         self.outcome.as_ref().err()
     }
 }
@@ -147,7 +189,7 @@ fn captured_text(output: Option<&[u8]>) -> Option<String> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ProviderCheckError {
+pub enum ProviderProbeError {
     #[error("failed to resolve provider activate: {0}")]
     ActivateInterpolation(#[source] InterpolationError),
     #[error("failed to apply provider activate: {0}")]
@@ -191,29 +233,28 @@ impl<'a> ProviderChecker<'a> {
         ProviderCheckReport { results }
     }
 
-    fn check_one(&self, provider: &Provider) -> Result<ExecutionResult, ProviderCheckError> {
+    fn check_one(&self, provider: &Provider) -> Result<ExecutionResult, ProviderProbeError> {
         let mut environment = self.base_environment.clone();
 
         if let Some(activate) = &provider.activate {
             let activate = {
                 let context = ResolveContext::new(&environment, self.dot_paths, self.xdg_paths);
                 resolve_environment_patch(activate, &context)
-                    .map_err(ProviderCheckError::ActivateInterpolation)?
+                    .map_err(ProviderProbeError::ActivateInterpolation)?
             };
-            environment
-                .apply_patch(&activate)
-                .map_err(ProviderCheckError::ActivatePreparation)?;
+            apply_environment_patch(&mut environment, &activate)
+                .map_err(ProviderProbeError::ActivatePreparation)?;
         }
 
         let probe = {
             let context = ResolveContext::new(&environment, self.dot_paths, self.xdg_paths);
             resolve_exec_action(&provider.probe, &context)
-                .map_err(ProviderCheckError::ProbeInterpolation)?
+                .map_err(ProviderProbeError::ProbeInterpolation)?
         };
         let command = PreparedCommand::from_exec_action(&probe, &environment)
-            .map_err(ProviderCheckError::ProbePreparation)?;
+            .map_err(ProviderProbeError::ProbePreparation)?;
         ProcessExecutor::new()
             .execute(&command, IoMode::Capture)
-            .map_err(ProviderCheckError::from)
+            .map_err(ProviderProbeError::from)
     }
 }

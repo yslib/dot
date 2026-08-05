@@ -1,14 +1,54 @@
 use std::path::Path;
 
-use crate::plan::{
-    ExecutionPlan, PlannedAction, PlannedActionKind, PlannedJob, PlannedLink, PlannedManualPackage,
-    PlannedPackage, PlannedProvider, PlannedProviderInstall,
+use crate::interpolation::DotPaths;
+use crate::manifest::{EffectiveManifest, ManifestError};
+use crate::platform::PlatformInfo;
+use crate::selection::ExecutionSelection;
+
+use super::config_file::ConfigFile;
+use super::plan::{
+    ExecutionPlan, ExecutionPlanError, ExecutionPlanner, PlannedAction, PlannedActionKind,
+    PlannedJob, PlannedLink, PlannedManualPackage, PlannedPackage, PlannedProvider,
+    PlannedProviderInstall,
 };
+use super::runtime::NativeRuntime;
 use crate::report::{
     ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ItemStatus, LinkItem,
     PackageItem, PackageSource, ProviderItem, ProviderPackageSource, ReportCommand, ReportContext,
     ReportItem, ReportStatus, ReportSubject,
 };
+
+pub fn dry_run(
+    config: &ConfigFile,
+    runtime: &NativeRuntime,
+    compatibility_platform: &PlatformInfo,
+    selection: &ExecutionSelection,
+) -> Result<CommandReport, DryRunError> {
+    let manifest = EffectiveManifest::select_for_execution(
+        config.config(),
+        compatibility_platform,
+        selection.scope.target.as_ref(),
+        selection.scope.profile.named(),
+    )?;
+    let planner = ExecutionPlanner::new(
+        runtime.environment(),
+        DotPaths::from(config),
+        runtime.xdg_paths(),
+        compatibility_platform,
+    );
+    let plan = planner.plan(&manifest, &selection.jobs)?;
+
+    Ok(build_report(config.path(), &plan))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DryRunError {
+    #[error(transparent)]
+    Manifest(#[from] ManifestError),
+
+    #[error(transparent)]
+    Plan(#[from] ExecutionPlanError),
+}
 
 pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
     let items = plan
@@ -94,7 +134,11 @@ fn manual_package_item(package: &PlannedManualPackage) -> ReportItem {
 fn action_item(action: &PlannedAction) -> ReportItem {
     let action_info = match action.kind() {
         PlannedActionKind::Command(action) => ActionInfo::from_resolved_command(action),
-        PlannedActionKind::FetchContent(action) => ActionInfo::from_fetch_content(action),
+        PlannedActionKind::FetchContent(action) => ActionInfo::fetch_content(
+            action.source().to_string(),
+            action.target().to_owned(),
+            action.on_conflict(),
+        ),
     };
     ReportItem {
         id: action.id().to_owned(),

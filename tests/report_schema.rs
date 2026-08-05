@@ -1,12 +1,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use dot::diagnostic::ErrorHint;
 use dot::platform::PlatformInfo;
 use dot::report::{
-    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, Evidence, EvidenceStage,
-    ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem, ProviderPackageSource,
-    ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
+    ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ErrorHint, Evidence,
+    EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem,
+    ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
 use dot::schema::{
     FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedExecAction, SourceExecAction,
