@@ -14,4 +14,4 @@ exec = { program = "${env:DOT_INTENTIONALLY_MISSING}" }
 
 [targets.machine.links.nvim]
 source = "../support/readable.txt"
-target = "${env:HOME}/.config/nvim"
+target = "${dot:config_dir}/nvim"
