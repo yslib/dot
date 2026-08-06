@@ -122,8 +122,8 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
         ids,
         [
             (JobKind::Provider, "system".into()),
-            (JobKind::Package, "alpha".into()),
             (JobKind::Package, "manual".into()),
+            (JobKind::Package, "alpha".into()),
             (JobKind::Action, "configure".into()),
             (JobKind::Link, "gitconfig".into()),
         ]
@@ -525,12 +525,12 @@ fn plans_only_selected_effective_records_and_defers_unused_runtime_values() {
             .iter()
             .map(|provider| provider.id())
             .collect::<Vec<_>>(),
-        ["shared", "unused-broken"]
+        ["unused-broken", "shared"]
     );
-    assert_eq!(providers[0].probe().program.value(), "selected-probe");
-    assert!(providers[0].activate().is_none());
-    assert!(providers[0].ensure().is_empty());
-    assert_eq!(providers[1].probe().program.value(), "unused-probe");
+    assert_eq!(providers[0].probe().program.value(), "unused-probe");
+    assert_eq!(providers[1].probe().program.value(), "selected-probe");
+    assert!(providers[1].activate().is_none());
+    assert!(providers[1].ensure().is_empty());
     let provider_installs = plan.provider_installs().collect::<Vec<_>>();
     assert_eq!(
         provider_installs
@@ -991,18 +991,19 @@ fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
     assert!(matches!(
         &report.items[1].subject,
         ReportSubject::Package(package)
+            if matches!(&package.source, PackageSource::Manual { .. })
+    ));
+    assert_eq!(report.items[1].id, "manual");
+    assert!(matches!(
+        &report.items[2].subject,
+        ReportSubject::Package(package)
             if matches!(
                 &package.source,
                 PackageSource::Provider(ProviderPackageSource::Single { provider, .. })
                     if provider == "system"
             )
     ));
-    assert_eq!(report.items[1].id, "alpha");
-    assert!(matches!(
-        &report.items[2].subject,
-        ReportSubject::Package(package)
-            if matches!(&package.source, PackageSource::Manual { .. })
-    ));
+    assert_eq!(report.items[2].id, "alpha");
     assert!(matches!(&report.items[3].subject, ReportSubject::Action(_)));
     assert!(matches!(&report.items[4].subject, ReportSubject::Link(_)));
 }

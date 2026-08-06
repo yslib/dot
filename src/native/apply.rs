@@ -551,9 +551,9 @@ mod tests {
             item_sequence(&report),
             [
                 ("ready", SubjectKind::Provider),
-                ("cli-tools", SubjectKind::ProviderPackageBatch),
-                ("tool", SubjectKind::ProviderPackageSingle),
                 ("manual-tool", SubjectKind::ManualPackage),
+                ("tool", SubjectKind::ProviderPackageSingle),
+                ("cli-tools", SubjectKind::ProviderPackageBatch),
                 ("configure", SubjectKind::Action),
                 ("config", SubjectKind::Link),
             ]

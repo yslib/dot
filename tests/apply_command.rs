@@ -252,9 +252,9 @@ fn apply_runs_the_complete_plan_in_phase_order_and_prints_a_summary() {
         workspace.recorded_events(),
         [
             "probe-ready",
-            "install-ready",
-            "install-ready",
             "manual-ok",
+            "install-ready",
+            "install-ready",
             "action-ok"
         ]
     );
@@ -305,9 +305,9 @@ fn apply_continues_unrelated_work_and_fails_when_any_runtime_item_fails() {
         [
             "probe-missing",
             "probe-ready",
-            "install-ready",
             "manual-fail",
             "manual-ok",
+            "install-ready",
             "action-fail",
             "action-ok",
         ]

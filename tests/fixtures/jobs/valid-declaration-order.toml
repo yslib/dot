@@ -1,0 +1,42 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers.zulu]
+probe = { program = "zulu", args = ["--version"] }
+install = { program = "zulu", args = ["install", "${package:names}"] }
+
+[targets.machine.providers.alpha]
+probe = { program = "alpha", args = ["--version"] }
+install = { program = "alpha", args = ["install", "${package:names}"] }
+
+[targets.machine.packages.alpha-first]
+provider = "alpha"
+
+[targets.machine.packages.manual-zulu.install]
+exec = { program = "manual-zulu" }
+
+[targets.machine.packages.zulu-first]
+provider = "zulu"
+
+[targets.machine.packages.manual-alpha.install]
+exec = { program = "manual-alpha" }
+
+[targets.machine.packages.alpha-second]
+provider = "alpha"
+
+[targets.machine.packages.zulu-second]
+provider = "zulu"
+
+[targets.machine.actions.zulu]
+exec = { program = "zulu-action" }
+
+[targets.machine.actions.alpha]
+exec = { program = "alpha-action" }
+
+[targets.machine.links.zulu]
+source = "zulu"
+target = "${dot:config_dir}/zulu"
+
+[targets.machine.links.alpha]
+source = "alpha"
+target = "${dot:config_dir}/alpha"
