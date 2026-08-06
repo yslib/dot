@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::error::ErrorKind;
@@ -33,6 +34,20 @@ struct Cli {
     #[arg(short, long, global = true, value_name = "SOURCE")]
     config: Option<ConfigSource>,
 
+    /// Git repository containing a root .dot.toml
+    #[arg(
+        long,
+        global = true,
+        value_name = "REPOSITORY",
+        requires = "git_worktree",
+        conflicts_with = "config"
+    )]
+    git: Option<String>,
+
+    /// Persistent worktree path for --git
+    #[arg(long, global = true, value_name = "PATH", requires = "git")]
+    git_worktree: Option<PathBuf>,
+
     /// Inject PlatformInfo for development-time compatibility selection; host environment, XDG
     /// paths, commands, and filesystem state remain unchanged
     #[cfg(feature = "dev-platform-override")]
@@ -59,9 +74,15 @@ impl Cli {
         #[cfg(not(feature = "dev-platform-override"))]
         let platform_override: Option<PlatformInfo> = None;
 
-        let request = self
-            .config
-            .map_or(ConfigRequest::Discover, ConfigRequest::Source);
+        let request = match (self.config, self.git, self.git_worktree) {
+            (Some(source), None, None) => ConfigRequest::Source(source),
+            (None, Some(repository), Some(worktree)) => ConfigRequest::Git {
+                repository,
+                worktree,
+            },
+            (None, None, None) => ConfigRequest::Discover,
+            _ => unreachable!("clap validated the configuration source arguments"),
+        };
         let config = match load_config(request) {
             Ok(config) => config,
             Err(error) => return command_error(error),

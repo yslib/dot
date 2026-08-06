@@ -19,8 +19,10 @@ use dot_core::schema::Config;
 use dot_core::validation::ConfigValidationError;
 use dot_core::{ConfigFile, ConfigFileError};
 
+mod git;
 mod https;
 
+pub(crate) use git::GitError;
 pub(crate) use https::HttpsError;
 
 const DEFAULT_CONFIG_FILENAME: &str = ".dot.toml";
@@ -121,6 +123,10 @@ fn detect_user_config_root() -> Option<UserConfigRoot> {
 pub(crate) enum ConfigRequest {
     Discover,
     Source(ConfigSource),
+    Git {
+        repository: String,
+        worktree: PathBuf,
+    },
 }
 
 impl ConfigRequest {
@@ -184,6 +190,9 @@ impl ConfigRequest {
     {
         match self {
             Self::Source(source) => Ok(source),
+            Self::Git { worktree, .. } => Ok(ConfigSource::Path(
+                absolute_path(&worktree, invocation_cwd).join(DEFAULT_CONFIG_FILENAME),
+            )),
             Self::Discover => {
                 let local = invocation_cwd.join(DEFAULT_CONFIG_FILENAME);
 
@@ -214,6 +223,18 @@ impl ConfigRequest {
 pub(crate) fn load_config(request: ConfigRequest) -> Result<ConfigFile, ConfigLoadError> {
     let invocation_cwd =
         env::current_dir().map_err(|source| ConfigLoadError::CurrentDirectory { source })?;
+    if let ConfigRequest::Git {
+        repository,
+        worktree,
+    } = request
+    {
+        let worktree = absolute_path(&worktree, &invocation_cwd);
+        git::prepare(&repository, &worktree).map_err(|source| ConfigLoadError::AcquireGit {
+            worktree: worktree.clone(),
+            source,
+        })?;
+        return load_local(&worktree.join(DEFAULT_CONFIG_FILENAME), &invocation_cwd);
+    }
     match request.resolve(&invocation_cwd)? {
         ConfigSource::Path(path) => load_local(&path, &invocation_cwd),
         ConfigSource::Https(url) => {
@@ -315,6 +336,15 @@ pub(crate) enum ConfigLoadError {
         url: Url,
         #[source]
         source: HttpsError,
+    },
+    #[error(
+        "failed to prepare Git configuration worktree `{}`: {source}",
+        .worktree.display()
+    )]
+    AcquireGit {
+        worktree: PathBuf,
+        #[source]
+        source: GitError,
     },
     #[error(
         "failed to canonicalize configuration `{}`: {source}",

@@ -112,3 +112,38 @@ fn rejects_unsupported_config_source_protocols_during_cli_parsing() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("protocol `http`"), "{stderr}");
 }
+
+#[test]
+fn requires_a_complete_non_conflicting_git_source_group() {
+    for args in [
+        &["--git", "file:///source.git", "list", "targets"][..],
+        &["--git-worktree", "checkout", "list", "targets"][..],
+        &[
+            "--config",
+            "config.toml",
+            "--git",
+            "file:///source.git",
+            "--git-worktree",
+            "checkout",
+            "list",
+            "targets",
+        ][..],
+    ] {
+        let output = run(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(output.status.code(), Some(2), "args: {args:?}\n{stderr}");
+    }
+}
+
+#[test]
+fn help_documents_git_source_values_without_reusing_target() {
+    let output = run(&["apply", "--help"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(output.status.success(), "{stdout}");
+    assert!(normalized.contains("--git <REPOSITORY>"), "{stdout}");
+    assert!(normalized.contains("--git-worktree <PATH>"), "{stdout}");
+    assert!(normalized.contains("--target <TARGET>"), "{stdout}");
+}
