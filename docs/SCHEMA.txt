@@ -45,6 +45,16 @@ homogeneous in `A` unless `A` is an explicitly declared sum type, such as
 `#flat_list_part<T, E>`. A schema map has homogeneous value type `A`; a schema
 record may declare fields of different types.
 
+A schema keyed table `{ <id>: A }` retains TOML declaration order. For the
+provider, package, action, and link tables that become execution records, an
+effective manifest applies the target first, then the selected profile's
+lexical ancestors, then the selected profile. Replacing an existing id removes
+its earlier position and inserts the complete replacement at its deeper
+declaration position. That position is the record's final effective declaration
+position. This ordering contract does not make field order inside a schema
+record or key order in a general schema map, including environment variables,
+an execution order.
+
 Schema map keys are restricted to `#string_key_type`:
 
 #string_key_type =
@@ -365,8 +375,9 @@ profiles?: { <profile_id: #selector_identifier>: #profile },
 
 A selected profile inherits the target and each profile on its lexical ancestor
 path. Provider, package, link, and action records are atomic: a deeper record
-with the same key replaces the complete ancestor record. Record fields and
-lists are not merged. Profiles cannot replace the target platform.
+with the same key replaces the complete ancestor record and takes the deeper
+declaration's position in the effective table. Record fields and lists are not
+merged. Profiles cannot replace the target platform.
 
 
 ### platform_constraint

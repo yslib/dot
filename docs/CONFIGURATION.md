@@ -56,7 +56,8 @@ validation diagnostics continue to identify the entry path.
 - [Link types](#link-types): [`Link`](#link),
   [`LinkConflict`](#linkconflict), and
   [`LinkMissingParent`](#linkmissingparent).
-- [Cross-cutting validation and defaults](#cross-cutting-validation-and-defaults),
+- [Execution order, selection, and failure behavior](#execution-order-selection-and-failure-behavior),
+  [Cross-cutting validation and defaults](#cross-cutting-validation-and-defaults),
   [Interpolation](#interpolation), and [Complete example](#complete-example).
 
 The complete configuration tree is:
@@ -287,9 +288,12 @@ ripgrep = { provider = "brew" }
 Keys cannot interpolate. Provider maps use broad `identifier` keys. Target,
 profile, package, link, and action maps use `selector_identifier` keys because
 those identities are externally selectable. Each key is unique within its
-declaration map. During profile inheritance, the same record key at a deeper
-level replaces the entire ancestor record; no field-level merge, list merge,
-deletion, or tombstone syntax exists.
+declaration map, and keyed tables retain TOML declaration order. During profile
+inheritance, the same record key at a deeper level replaces the entire ancestor
+record, removes its earlier position, and takes the deeper declaration's
+position in the effective table. No field-level merge, list merge, deletion, or
+tombstone syntax exists. Record-field order and general map key order, including
+environment-variable order, are not execution schedules.
 
 ## Structural types
 
@@ -368,7 +372,8 @@ Profiles form a lexical tree, not a reference graph. Exactly zero or one node
 is selected directly by its globally unique id within a target. A child
 inherits its target and ancestors; siblings and descendants outside that path
 do not participate. A deeper record with the same key completely replaces its
-ancestor record. Profiles cannot alter the target platform.
+ancestor record and moves to the deeper declaration's position in the effective
+keyed table. Profiles cannot alter the target platform.
 
 ### PlatformConstraint
 
@@ -442,9 +447,11 @@ cli-tools = { provider = "brew", names = ["bat", "fd", "fzf"] }
 
 Single and Batch are distinct variants. Runtime never infers the kind from an
 optional or empty `names` value. Every declaration is one explicit install
-unit and one report item; dot performs no automatic provider grouping.
-Provider ids and names are non-interpolated identifiers. `provider_args`
-elements are non-interpolated literal-string sources.
+unit and one report item; dot never coalesces separate declarations into one
+install invocation or report unit. Provider-backed units are grouped by
+provider only to determine execution order. Provider ids and names are
+non-interpolated identifiers. `provider_args` elements are non-interpolated
+literal-string sources.
 
 ### SingleProviderPackage
 
@@ -470,8 +477,9 @@ provider_args = ["--quiet"]
 A Single has no `names` field. Its surrounding package key (`ripgrep` here) is
 both the concrete name sent to the provider and the stable report id. A ready
 provider invokes `install` exactly once for this unit; an unavailable provider
-blocks the unit without invoking install. Separate Singles are never grouped,
-even when their provider and arguments match.
+blocks the unit without invoking install. Separate Singles are never coalesced
+into one install invocation or report unit, even when their provider and
+arguments match; sharing a provider groups them only for execution order.
 
 `provider_args` belongs to this unit and preserves order. If it is non-empty,
 the referenced provider's `install.args` must contain exactly one complete
@@ -710,9 +718,9 @@ on_conflict = "replace"
 ```
 
 Both forms use the surrounding action key as the `action:ID` selector and
-report identity. They run in the same action phase in stable id order. One
-action failure does not stop later actions or the deferred link phase, but it
-does contribute to the final failed apply status.
+report identity. They run in the same action phase in final effective
+declaration order. One action failure does not stop later actions or the
+deferred link phase, but it does contribute to the final failed apply status.
 
 ### Command Action
 
@@ -903,6 +911,44 @@ optional = { source = "home/b", target = "/tmp/b", on_missing_parent = "skip" }
 `create` recursively creates a missing target parent. `skip` treats the link as
 currently inapplicable and makes no mutation. This policy is independent of
 `LinkConflict`.
+
+## Execution order, selection, and failure behavior
+
+The effective manifest is merged in this order: target, lexical profile
+ancestors from outermost to innermost, then the selected profile. A same-id
+replacement is a whole-record replacement at the deeper declaration's position.
+The resulting final effective declaration positions define this serial phase
+and subphase order:
+
+1. Providers in final effective provider declaration order. Every selected
+   provider completes its readiness lifecycle before any package starts; each
+   provider's `ensure` list retains its declared list order.
+2. Manual packages in final effective package declaration order.
+3. Provider-backed packages, grouped by final effective provider declaration
+   order and, within each provider group, by final effective package declaration
+   order.
+4. Actions in final effective action declaration order.
+5. Links in final effective link declaration order.
+
+Manual packages therefore run after the complete provider-readiness phase and
+before provider-backed installs. Complete selection includes all effective
+providers and jobs. Exact selection filters the same phase sequence to the
+requested package, action, and link identities plus the providers required by
+selected provider-backed packages. The order of repeated CLI selectors is only
+selection input and never schedules work.
+
+Runtime failure isolation remains local wherever later work is safe. A provider
+failure blocks only provider-backed packages that require it; unrelated
+providers and packages continue. A failed provider install, manual package, or
+action does not stop unrelated later work. Before any selected link mutates the
+filesystem, the complete selected link phase is preflighted for duplicate
+resolved targets. A duplicate blocks that whole link phase; without a duplicate,
+normalization, source-preparation, and reconciliation failures remain local to
+their links and later nonblocked links continue.
+
+Structural list commands and human-readable table renderers do not guarantee
+row order. Their rows may naturally reflect current containers or traversal,
+but that presentation is not a scheduling rule or stable ordering interface.
 
 ## Cross-cutting validation and defaults
 

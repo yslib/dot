@@ -21,7 +21,6 @@ owned, selected, resolved `ExecutionPlan`.
 - Selecting a provider directly.
 - Selecting one concrete name inside a provider Batch.
 - Arbitrary job dependencies, topological scheduling, or concurrency.
-- Inferring execution order from TOML declaration order or selector order.
 - Persistent job state, retry, rollback, or resume.
 - Turning dry-run into simulation or provider check into planning.
 
@@ -95,6 +94,9 @@ enum JobSelection {
 work. Typed variants also keep equal text such as `package:setup`,
 `action:setup`, and `link:setup` distinct.
 
+The `BTreeSet` in `JobSelection::Only` is a membership structure only. Its
+iteration order is not plan or execution order.
+
 Target, profile, package, action, and link IDs use the selector-safe grammar
 from `SCHEMA.txt`. Provider IDs remain broad identifiers.
 
@@ -133,6 +135,11 @@ ExecutionPlan                        (owned, selected, resolved)
 merge. It can project borrowed package, action, and link identities for list
 commands without resolving values.
 
+The merge applies the target first, then lexical profile ancestors from
+outermost to innermost, then the selected profile. A deeper declaration with an
+existing id replaces the whole record, removes its ancestor position, and is
+inserted at the deeper declaration's position in the effective keyed table.
+
 `ExecutionPlanner` receives both `&EffectiveManifest` and `&JobSelection`.
 Selection is therefore part of planning, not a filter applied after a larger
 plan exists. The planner returns exactly one owned `ExecutionPlan` containing
@@ -170,8 +177,8 @@ atomic steps:
 2. For `Only`, add the minimum provider closure and reject a selected
    provider-backed package whose effective provider is absent.
 3. Resolve selected providers.
-4. Resolve selected provider-backed packages and provider install commands.
-5. Resolve selected manual packages.
+4. Resolve selected manual packages.
+5. Resolve selected provider-backed packages and provider install commands.
 6. Resolve selected actions.
 7. Resolve selected links and require absolute resolved targets.
 8. Return the complete owned `ExecutionPlan`.
@@ -211,16 +218,19 @@ A package Batch remains one job and cannot be split by name.
 Both complete and exact plans use the same phase and subphase order:
 
 ```text
-1. providers                 by provider ID
-2. provider-backed packages by package ID
-3. manual packages          by package ID
-4. actions                  by action ID
-5. links                    by link ID
+1. providers                 by final effective provider declaration order
+2. manual packages          by final effective package declaration order
+3. provider-backed packages grouped by final effective provider declaration
+                             order, then by final effective package declaration
+                             order within each group
+4. actions                   by final effective action declaration order
+5. links                     by final effective link declaration order
 ```
 
-The maps are `BTreeMap`-backed. Exact selection filters this canonical sequence
-without reordering it. Provider-backed and manual packages remain separate
-subphases rather than one mixed package-ID order.
+Schema keyed tables retain declaration order, including the repositioning of a
+same-id profile replacement described above. Exact selection filters this final
+sequence without reordering it; CLI selector occurrence order does not schedule
+work. Manual and provider-backed packages remain separate subphases.
 
 `JobRunner` executes synchronously and serially:
 
@@ -228,16 +238,18 @@ subphases rather than one mixed package-ID order.
    package starts: apply activation, probe, conditionally run ensure in
    declaration order, then reapply activation and probe once when ensure
    succeeds.
-2. Every selected provider-backed package runs after the provider phase. It
+2. Selected manual-package Command Actions run after the complete provider
+   readiness phase.
+3. Every selected provider-backed package runs after manual packages. It
    receives the successful in-memory `ProviderStatus` for its declared
-   provider.
-3. Selected manual-package Command Actions run.
-4. Selected global Actions run by action ID, dispatching each structural
-   variant to its Command or Fetch Content runner.
+   provider, and provider groups follow final effective provider declaration
+   order.
+4. Selected global Actions run in final effective declaration order,
+   dispatching each structural variant to its Command or Fetch Content runner.
 5. Selected link targets are normalized first so duplicate resolved targets
    can be detected. Without a duplicate, target-normalization and source
    preparation errors remain attached to their individual links, and later
-   nonblocked links reconcile in canonical order.
+   nonblocked links reconcile in final effective declaration order.
 
 `ProviderStatus` is transient dependency output. It carries readiness and the
 activated child environment needed by provider installs; it is not persisted
@@ -306,7 +318,9 @@ packages, actions, or links.
 
 The structural list commands also do not construct an `ExecutionPlan`.
 `list jobs` stops at the unresolved merged manifest and lists only packages,
-actions, and links; providers never appear as selectable rows.
+actions, and links; providers never appear as selectable rows. List rows may
+naturally reflect current containers or traversal, but structural inspection
+does not guarantee row order and does not define execution order.
 
 ## Reporting
 
@@ -324,9 +338,10 @@ The presentation-independent report vocabulary remains:
 - link results: `SATISFIED`, `CREATED`, `REPLACED`, `SKIPPED`, `FAILED`, or
   `BLOCKED`.
 
-The human table renderer is not a stable serialized interface. The stable
-machine-facing selection interface is the headerless TSV emitted by the list
-commands.
+The human table renderer is not a stable serialized interface and does not
+guarantee row order. The headerless TSV emitted by list commands is the
+machine-facing selection interface, but its row order is likewise not
+guaranteed.
 
 ## Module boundaries
 

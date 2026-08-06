@@ -206,7 +206,7 @@ fn list_targets_filters_compatible_targets_by_default() {
 }
 
 #[test]
-fn list_targets_all_reports_fixed_columns_labels_and_btree_order() {
+fn list_targets_all_reports_fixed_columns_and_compatibility_labels() {
     assert_eq!(
         success_stdout(&["list", "targets", "--all"]),
         concat!(
@@ -218,7 +218,7 @@ fn list_targets_all_reports_fixed_columns_labels_and_btree_order() {
 }
 
 #[test]
-fn list_profiles_allows_explicit_incompatible_target_and_uses_preorder() {
+fn list_profiles_allows_an_explicit_incompatible_target() {
     assert_eq!(
         success_stdout(&["list", "profiles", "--target", "never"]),
         concat!(
@@ -248,7 +248,7 @@ fn list_jobs_inspects_unresolved_effective_jobs_without_provider_rows() {
 }
 
 #[test]
-fn list_jobs_merges_a_nested_profile_in_canonical_job_order() {
+fn list_jobs_merges_a_nested_profile_records() {
     assert_eq!(
         success_stdout(&["list", "jobs", "--target", "never", "--profile", "laptop",]),
         concat!(

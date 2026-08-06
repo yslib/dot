@@ -166,7 +166,7 @@ fn target_entries_borrow_targets_and_label_platform_compatibility() {
 }
 
 #[test]
-fn profile_entries_are_borrowed_recursive_preorder_without_the_root() {
+fn profile_entries_borrow_nested_records_without_the_root() {
     let config = parse_fixture("manifest/valid-profile-tree.toml");
     let (target_id, target) = config
         .targets
@@ -211,7 +211,7 @@ fn profile_entries_are_borrowed_recursive_preorder_without_the_root() {
 }
 
 #[test]
-fn profile_entries_report_duplicate_names_in_deterministic_preorder() {
+fn profile_entries_report_duplicate_names_with_both_paths() {
     let config = parse_fixture("manifest/invalid-duplicate-profile-name.toml");
     let (target_id, target) = config
         .targets
@@ -233,7 +233,7 @@ fn profile_entries_report_duplicate_names_in_deterministic_preorder() {
 }
 
 #[test]
-fn unresolved_jobs_borrow_records_in_execution_category_order() {
+fn unresolved_jobs_borrow_effective_record_references() {
     let config = parse_fixture("manifest/valid-compatible-target-inference.toml");
     let manifest = EffectiveManifest::select_for_execution(&config, &platform("linux"), None, None)
         .expect("the Linux target should be inferred");

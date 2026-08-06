@@ -146,9 +146,9 @@ indivisible job. Selector argument order does not control execution order.
 
 ## Machine-readable lists
 
-The `list` commands provide stable catalogs for shell scripts, completion
-engines, fzf, and other external tools. Output is UTF-8, headerless TSV with
-one record per line and fixed columns:
+The `list` commands provide machine-facing catalogs for shell scripts,
+completion engines, fzf, and other external tools. Output is UTF-8, headerless
+TSV with one record per line and fixed columns:
 
 ```text
 list targets:   TARGET  COMPATIBILITY  OS  ARCH  DISTRO  DISTRO_FAMILY  ENVIRONMENT
@@ -157,9 +157,10 @@ list jobs:      SELECTOR KIND          ID  VIA  DETAIL
 ```
 
 `list targets` includes only compatible targets by default; `--all` includes
-every target and labels compatibility. `list profiles` starts with
+every target and labels compatibility. `list profiles` includes the root row
 `@root<TAB><root><TAB>0`. `list jobs` describes the unresolved effective
-package, action, and link records and never emits provider rows.
+package, action, and link records and never emits provider rows. Row order is
+not guaranteed and may reflect current containers or traversal.
 
 The first field is the canonical reusable selector and is written verbatim.
 In later fields, backslash, tab, carriage return, and newline are escaped as
@@ -237,7 +238,10 @@ replace complete earlier records; record fields and lists do not merge.
 A provider declares how to probe and install, with optional activation and
 ensure actions. Every provider-backed package is one declared install unit: a
 Single uses its table key as the package name, while a Batch supplies an
-explicit non-empty `names` list. `dot` does not infer grouping.
+explicit non-empty `names` list. `dot` never coalesces separately declared
+Single or Batch units into one install invocation or report unit, even when
+their provider and arguments match. Provider grouping affects scheduling order
+only.
 
 <!-- readme-configuration-example:start -->
 
@@ -288,11 +292,15 @@ renders that plan without running provider, package, or action commands and
 without inspecting or changing link state. Its output describes intent, not
 whether the current machine can satisfy it.
 
-Apply executes serially in stable provider, provider-backed package, manual
-package, action, and link phases. A provider failure blocks only selected
-packages that require it; unrelated selected work continues. Planning is
-atomic, and the final report exits non-zero if any selected item failed or was
-blocked.
+Apply executes serially in stable phases: providers in final effective provider
+declaration order; manual packages in final effective package declaration
+order; provider-backed packages grouped by final effective provider declaration
+order and, within each group, by final effective package declaration order;
+then actions and links in their final effective declaration order. Every
+selected provider completes its readiness lifecycle before the package phase
+starts. A provider failure blocks only selected packages that require it;
+unrelated selected work continues. Planning is atomic, and the final report
+exits non-zero if any selected item failed or was blocked.
 
 `check providers` is separate from job selection and independently attempts
 every effective provider. Activation resolution/application or probe
@@ -304,8 +312,9 @@ inspect links. Because a launched probe is an arbitrary external command,
 provider check is diagnostic, not a side-effect-free simulation.
 
 Apply and dry-run reports are human-readable tables, not stable serialized
-interfaces. The list-command TSV contract is the stable machine-facing
-interface. Version 0.1.0 does not provide `--json`.
+interfaces. The list-command TSV contract is stable only for its column shape,
+escaping, selector field, and field meanings; it does not guarantee row order.
+Version 0.1.0 does not provide `--json`.
 
 ## Goals
 
