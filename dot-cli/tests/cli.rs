@@ -1,5 +1,12 @@
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_dot"))
         .args(args)
@@ -111,6 +118,49 @@ fn rejects_unsupported_config_source_protocols_during_cli_parsing() {
 
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("protocol `http`"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn accepts_a_non_utf8_local_config_path() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "dot-cli-non-utf8-config-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&root).expect("temporary directory should be created");
+    let path = root.join(OsString::from_vec(b"config-\xff.toml".to_vec()));
+    let write_result = fs::write(
+        &path,
+        r#"[targets.current]
+platform = { os = ["linux", "macos", "windows"] }
+"#,
+    );
+    if let Err(source) = write_result {
+        fs::remove_dir(&root).expect("temporary directory should be removed");
+        #[cfg(target_vendor = "apple")]
+        {
+            // APFS rejects invalid-UTF-8 names before the CLI can observe them.
+            assert_eq!(source.raw_os_error(), Some(92), "unexpected write error");
+            return;
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        panic!("test manifest should be written: {source}");
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dot"))
+        .arg("--config")
+        .arg(&path)
+        .args(["list", "targets"])
+        .output()
+        .expect("dot should start");
+    fs::remove_dir_all(&root).expect("temporary directory should be removed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
 }
 
 #[test]

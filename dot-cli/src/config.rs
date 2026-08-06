@@ -6,6 +6,7 @@
 )]
 
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,15 @@ const DEFAULT_CONFIG_FILENAME: &str = ".dot.toml";
 pub(crate) enum ConfigSource {
     Path(PathBuf),
     Https(Url),
+}
+
+impl ConfigSource {
+    pub(crate) fn from_os_string(value: OsString) -> Result<Self, ConfigSourceError> {
+        match value.into_string() {
+            Ok(value) => value.parse(),
+            Err(value) => Ok(Self::Path(PathBuf::from(value))),
+        }
+    }
 }
 
 impl FromStr for ConfigSource {
