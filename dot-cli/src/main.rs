@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::error::ErrorKind;
@@ -15,7 +14,7 @@ use dot_core::report::{CommandReport, ReportStatus};
 use dot_core::schema::SelectorIdentifier;
 use dot_core::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
 
-use config::{ConfigLocation, load_config};
+use config::{ConfigRequest, ConfigSource, load_config};
 
 mod config;
 #[cfg(feature = "dev-platform-override")]
@@ -30,9 +29,9 @@ mod platform_override;
     subcommand_required = true
 )]
 struct Cli {
-    /// Path to the TOML manifest; defaults to ./.dot.toml, then the user fallback
-    #[arg(short, long, global = true, value_name = "PATH")]
-    config: Option<PathBuf>,
+    /// Path or HTTPS URL to the TOML manifest; defaults to ./.dot.toml, then the user fallback
+    #[arg(short, long, global = true, value_name = "SOURCE")]
+    config: Option<ConfigSource>,
 
     /// Inject PlatformInfo for development-time compatibility selection; host environment, XDG
     /// paths, commands, and filesystem state remain unchanged
@@ -60,10 +59,10 @@ impl Cli {
         #[cfg(not(feature = "dev-platform-override"))]
         let platform_override: Option<PlatformInfo> = None;
 
-        let location = self
+        let request = self
             .config
-            .map_or(ConfigLocation::Discover, ConfigLocation::Path);
-        let config = match load_config(location) {
+            .map_or(ConfigRequest::Discover, ConfigRequest::Source);
+        let config = match load_config(request) {
             Ok(config) => config,
             Err(error) => return command_error(error),
         };

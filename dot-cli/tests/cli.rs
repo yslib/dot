@@ -99,7 +99,16 @@ fn exposes_standard_help_version_and_config_discovery_documentation() {
 
     assert!(help.status.success(), "{stdout}");
     assert!(version.status.success());
-    assert!(normalized.contains("--config <PATH>"), "{stdout}");
+    assert!(normalized.contains("--config <SOURCE>"), "{stdout}");
     assert!(stdout.contains("./.dot.toml"), "{stdout}");
     assert!(normalized.contains("user fallback"), "{stdout}");
+}
+
+#[test]
+fn rejects_unsupported_config_source_protocols_during_cli_parsing() {
+    let output = run(&["--config", "http://example.com/dot.toml", "list", "targets"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("protocol `http`"), "{stderr}");
 }
