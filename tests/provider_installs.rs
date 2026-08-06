@@ -167,7 +167,7 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) ->
         })
         .collect::<SelectableEntries<_>>();
     let config = Config {
-        targets: BTreeMap::from([(
+        targets: [(
             selector_id("test"),
             Target {
                 platform: PlatformConstraint {
@@ -179,11 +179,13 @@ fn plan_for(providers: Vec<(&str, Provider)>, packages: Vec<TestPackage<'_>>) ->
                 },
                 providers,
                 packages,
-                links: BTreeMap::new(),
-                actions: BTreeMap::new(),
-                profiles: BTreeMap::new(),
+                links: Default::default(),
+                actions: Default::default(),
+                profiles: Default::default(),
             },
-        )]),
+        )]
+        .into_iter()
+        .collect::<SelectableEntries<_>>(),
     };
     let platform = PlatformInfo::detect();
     let manifest = EffectiveManifest::select_for_execution(&config, &platform, None, None)

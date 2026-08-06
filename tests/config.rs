@@ -35,6 +35,96 @@ fn parses_a_valid_fixture_from_memory_with_static_validation() {
 }
 
 #[test]
+fn preserves_schema_keyed_table_declaration_order() {
+    let source = r#"
+[targets.zulu]
+platform = { os = "linux" }
+
+[targets.zulu.providers.zulu]
+probe = { program = "probe-zulu" }
+install = { program = "install-zulu", args = ["${package:names}"] }
+
+[targets.zulu.providers.alpha]
+probe = { program = "probe-alpha" }
+install = { program = "install-alpha", args = ["${package:names}"] }
+
+[targets.zulu.packages.zulu]
+install = { exec = { program = "package-zulu" } }
+
+[targets.zulu.packages.alpha]
+install = { exec = { program = "package-alpha" } }
+
+[targets.zulu.actions.zulu]
+exec = { program = "action-zulu" }
+
+[targets.zulu.actions.alpha]
+exec = { program = "action-alpha" }
+
+[targets.zulu.links.zulu]
+source = "source-zulu"
+target = "target-zulu"
+
+[targets.zulu.links.alpha]
+source = "source-alpha"
+target = "target-alpha"
+
+[targets.zulu.profiles.zulu]
+
+[targets.zulu.profiles.alpha]
+
+[targets.alpha]
+platform = { os = "linux" }
+"#;
+
+    let config = Config::parse(source).expect("configuration should parse");
+    let zulu = config
+        .targets
+        .get("zulu")
+        .expect("zulu target should exist");
+
+    assert_eq!(
+        config
+            .targets
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+    assert_eq!(
+        zulu.providers
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+    assert_eq!(
+        zulu.packages
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+    assert_eq!(
+        zulu.actions
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+    assert_eq!(
+        zulu.links.keys().map(|id| id.as_str()).collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+    assert_eq!(
+        zulu.profiles
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["zulu", "alpha"]
+    );
+}
+
+#[test]
 fn distinguishes_deserialization_and_validation_errors_when_parsing_from_memory() {
     let deserialization_source = fs::read_to_string(fixture::path("config/invalid-syntax.toml"))
         .expect("fixture should be readable");

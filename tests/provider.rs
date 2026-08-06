@@ -14,7 +14,7 @@ use dot::native::provider::{ProviderOutcome, ProviderRunner, ProviderStage};
 use dot::platform::PlatformInfo;
 use dot::schema::{
     Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, Identifier, OneOrMany,
-    PlatformConstraint, Provider, ProviderInstallArgSource, SelectorIdentifier,
+    PlatformConstraint, Provider, ProviderInstallArgSource, SelectableEntries, SelectorIdentifier,
     StringExpressionSource, Target,
 };
 
@@ -138,7 +138,7 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
         .map(|(id, provider)| (provider_id(id), provider))
         .collect::<Entries<_>>();
     let config = Config {
-        targets: BTreeMap::from([(
+        targets: [(
             selector_id("test"),
             Target {
                 platform: PlatformConstraint {
@@ -149,12 +149,14 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
                     environment: None,
                 },
                 providers,
-                packages: BTreeMap::new(),
-                links: BTreeMap::new(),
-                actions: BTreeMap::new(),
-                profiles: BTreeMap::new(),
+                packages: Default::default(),
+                links: Default::default(),
+                actions: Default::default(),
+                profiles: Default::default(),
             },
-        )]),
+        )]
+        .into_iter()
+        .collect::<SelectableEntries<_>>(),
     };
     let platform = PlatformInfo::detect();
     let manifest = EffectiveManifest::select_for_execution(&config, &platform, None, None)

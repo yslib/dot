@@ -119,7 +119,7 @@ fn high_level_provider_check_projects_an_empty_selected_manifest() {
 
 #[test]
 fn checks_every_provider_with_its_activated_environment() {
-    let providers: Entries<Provider> = BTreeMap::from([
+    let providers: Entries<Provider> = [
         (
             "not-ready".try_into().expect("test id should be valid"),
             provider("not-ready", "${env:BASE_ROOT}/second"),
@@ -128,7 +128,9 @@ fn checks_every_provider_with_its_activated_environment() {
             "ready".try_into().expect("test id should be valid"),
             provider("ready", "${env:BASE_ROOT}/first"),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
@@ -158,10 +160,12 @@ fn checks_every_provider_with_its_activated_environment() {
 
 #[test]
 fn projects_readiness_and_captured_output_to_structured_evidence() {
-    let providers: Entries<Provider> = BTreeMap::from([(
+    let providers: Entries<Provider> = [(
         "system".try_into().expect("test id should be valid"),
         provider("not-ready", "${env:BASE_ROOT}/system"),
-    )]);
+    )]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
@@ -230,10 +234,12 @@ fn ignores_provider_ensure_and_install_expression_errors() {
         cwd: Some("${package:names}".into()),
         env: None,
     };
-    let providers: Entries<Provider> = BTreeMap::from([(
+    let providers: Entries<Provider> = [(
         "ignored".try_into().expect("test id should be valid"),
         ignored,
-    )]);
+    )]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
@@ -253,7 +259,7 @@ fn an_unstartable_probe_does_not_stop_later_providers() {
     let mut missing = provider("unused", "unused");
     missing.probe.program = "dot-provider-probe-that-must-not-exist-3b33529b".into();
     missing.activate = None;
-    let providers: Entries<Provider> = BTreeMap::from([
+    let providers: Entries<Provider> = [
         (
             "a-missing".try_into().expect("test id should be valid"),
             missing,
@@ -262,7 +268,9 @@ fn an_unstartable_probe_does_not_stop_later_providers() {
             "z-ready".try_into().expect("test id should be valid"),
             provider("ready", "later-provider-ran"),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
@@ -295,7 +303,7 @@ fn source_promotion_errors_are_provider_local_and_do_not_stop_later_probes() {
     unavailable_probe.activate = None;
     unavailable_probe.probe.program = "${package:names}".into();
 
-    let providers: Entries<Provider> = BTreeMap::from([
+    let providers: Entries<Provider> = [
         (
             "a-malformed-activate"
                 .try_into()
@@ -318,7 +326,9 @@ fn source_promotion_errors_are_provider_local_and_do_not_stop_later_probes() {
             "z-ready".try_into().expect("test id should be valid"),
             provider("ready", "later-provider-probe-ran"),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
@@ -371,10 +381,12 @@ fn source_promotion_errors_are_provider_local_and_do_not_stop_later_probes() {
 
 #[test]
 fn reports_when_provider_activation_cannot_be_resolved() {
-    let providers: Entries<Provider> = BTreeMap::from([(
+    let providers: Entries<Provider> = [(
         "broken".try_into().expect("test id should be valid"),
         provider("ready", "${env:DOT_CHECK_UNDEFINED_VALUE}"),
-    )]);
+    )]
+    .into_iter()
+    .collect::<Entries<_>>();
     let xdg = XdgPaths::detect();
     let environment = base_environment();
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
