@@ -25,18 +25,25 @@ jobs:
         uses: dtolnay/rust-toolchain@1.96.1
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --locked --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
+
+      - name: Run dot-cli default-feature tests
+        run: cargo test --locked -p dot-cli --all-targets
 
       - name: Check reusable library without host capabilities
-        run: cargo check --locked --lib --no-default-features
+        run: cargo check --locked -p dot-core --lib --no-default-features
+
+      - name: Check reusable library for WebAssembly
+        run: cargo check --locked -p dot-core --lib --no-default-features --target wasm32-unknown-unknown
 
   target-tests:
     name: Test ${{ matrix.platform }}
@@ -71,4 +78,4 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Run target tests
-        run: cargo test --locked --all-targets --all-features --target ${{ matrix.target }}
+        run: cargo test --locked --workspace --all-targets --all-features --target ${{ matrix.target }}

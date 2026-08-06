@@ -2,11 +2,11 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use dot::manifest::{
+use dot_core::manifest::{
     EffectiveManifest, ManifestError, ManifestJobRef, profile_entries, target_entries,
 };
-use dot::platform::PlatformInfo;
-use dot::schema::{Action, Config, Package, ProviderPackage, SelectorIdentifier};
+use dot_core::platform::PlatformInfo;
+use dot_core::schema::{Action, Config, Package, ProviderPackage, SelectorIdentifier};
 use support::fixture;
 
 fn parse_fixture(name: &str) -> Config {

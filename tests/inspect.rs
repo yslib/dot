@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
-use dot::inspect::Inspector;
-use dot::output::{TsvRecord, TsvRenderer};
-use dot::platform::PlatformInfo;
-use dot::schema::SelectorIdentifier;
-use dot::selection::{ProfileSelection, ScopeSelection};
+use dot_core::inspect::Inspector;
+use dot_core::output::{TsvRecord, TsvRenderer};
+use dot_core::platform::PlatformInfo;
+use dot_core::schema::SelectorIdentifier;
+use dot_core::selection::{ProfileSelection, ScopeSelection};
 
 const SOURCE: &str = include_str!("fixtures/list/valid-catalog.toml");
 
@@ -27,7 +27,7 @@ fn render<R: TsvRecord>(records: &[R]) -> String {
 #[test]
 fn target_tsv_includes_declared_targets_and_compatibility_labels() {
     let records = {
-        let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
+        let config = dot_core::schema::Config::parse(SOURCE).expect("configuration should parse");
         Inspector::new(&config, &platform()).targets(true)
     };
     let output = render(&records);
@@ -45,7 +45,7 @@ fn target_tsv_includes_declared_targets_and_compatibility_labels() {
 #[test]
 fn incompatible_target_profile_tsv_includes_root_and_nested_profiles() {
     let records = {
-        let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
+        let config = dot_core::schema::Config::parse(SOURCE).expect("configuration should parse");
         let target = SelectorIdentifier::new("never").expect("target should parse");
         Inspector::new(&config, &platform())
             .profiles(Some(&target))
@@ -66,7 +66,7 @@ fn incompatible_target_profile_tsv_includes_root_and_nested_profiles() {
 
 #[test]
 fn root_and_named_profile_jobs_include_effective_records_and_details() {
-    let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
+    let config = dot_core::schema::Config::parse(SOURCE).expect("configuration should parse");
     let target = SelectorIdentifier::new("never").expect("target should parse");
     let root_scope = ScopeSelection {
         target: Some(target.clone()),

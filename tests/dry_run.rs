@@ -3,24 +3,25 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use dot::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
-use dot::job::{JobKind, JobSelection, JobSelector};
-use dot::manifest::EffectiveManifest;
-use dot::native::dry_run;
-use dot::native::plan::{
+use dot_core::ConfigFile;
+use dot_core::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
+use dot_core::job::{JobKind, JobSelection, JobSelector};
+use dot_core::manifest::EffectiveManifest;
+use dot_core::native::NativeRuntime;
+use dot_core::native::dry_run;
+use dot_core::native::plan::{
     ExecutionPlanError, ExecutionPlanner, PlannedActionKind, PlannedProviderInstall, PlanningError,
 };
-use dot::native::{ConfigLocation, NativeRuntime, load_config};
-use dot::platform::PlatformInfo;
-use dot::report::{
+use dot_core::platform::PlatformInfo;
+use dot_core::report::{
     ActionInfo, ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus,
     ReportSubject,
 };
-use dot::schema::{
+use dot_core::schema::{
     Config, FetchContentConflict, LinkConflict, LinkMissingParent, ResolvedString,
     SelectorIdentifier,
 };
-use dot::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
+use dot_core::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
 use support::fixture;
 
 #[cfg(not(windows))]
@@ -127,8 +128,23 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
 #[test]
 fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let config =
-        load_config(ConfigLocation::Path(path)).expect("the complete config should validate");
+    let parsed = Config::parse(&fixture::read(
+        "selection/valid-selected-runtime-isolation.toml",
+    ))
+    .expect("the complete config should validate");
+    let real_path = std::fs::canonicalize(&path).expect("fixture should canonicalize");
+    let config = ConfigFile::new(
+        parsed,
+        path.parent()
+            .expect("fixture should have a parent")
+            .to_owned(),
+        real_path
+            .parent()
+            .expect("canonical fixture should have a parent")
+            .to_owned(),
+        std::env::current_dir().expect("test should have a current directory"),
+    )
+    .expect("fixture context should be absolute");
     let runtime = NativeRuntime::detect();
     let platform = platform();
     let selection = ExecutionSelection {
@@ -141,7 +157,7 @@ fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
         )),
     };
 
-    let report = dot::native::dry_run(&config, &runtime, &platform, &selection)
+    let report = dot_core::native::dry_run(&config, &runtime, &platform, &selection)
         .expect("unselected runtime values must remain unresolved");
 
     assert_eq!(report.items.len(), 1);
@@ -627,13 +643,14 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
 #[test]
 fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let path = fixture::path("selection/valid-selected-provider-runtime-errors.toml");
-    let loaded = dot::native::load_config(dot::native::ConfigLocation::Path(path.clone()))
-        .expect("the complete config should validate");
+    let config = Config::parse(&fixture::read(
+        "selection/valid-selected-provider-runtime-errors.toml",
+    ))
+    .expect("the complete config should validate");
     let platform = platform();
     let target = selector_id("machine");
-    let manifest =
-        EffectiveManifest::select_for_execution(loaded.config(), &platform, Some(&target), None)
-            .expect("test manifest should select");
+    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
+        .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");

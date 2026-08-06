@@ -475,9 +475,20 @@ mod tests {
     static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
     fn run(path: &Path, selection: &ExecutionSelection) -> Result<CommandReport, ApplyError> {
-        let config =
-            crate::native::load_config(crate::native::ConfigLocation::Path(path.to_owned()))
-                .expect("test config should load");
+        let source = fs::read_to_string(path).expect("test config should be readable");
+        let parsed = crate::schema::Config::parse(&source).expect("test config should parse");
+        let config_dir = path
+            .parent()
+            .expect("test config should have a parent")
+            .to_owned();
+        let real_path = fs::canonicalize(path).expect("test config should canonicalize");
+        let real_config_dir = real_path
+            .parent()
+            .expect("canonical test config should have a parent")
+            .to_owned();
+        let cwd = env::current_dir().expect("test should have a current directory");
+        let config = ConfigFile::new(parsed, config_dir, real_config_dir, cwd)
+            .expect("test config context should be absolute");
         let runtime = NativeRuntime::detect();
         apply(&config, &runtime, selection)
     }

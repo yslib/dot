@@ -832,7 +832,8 @@ JobSelection::Only. Bare IDs, provider selectors, unknown kinds, malformed
 selector identifiers, and duplicate occurrences are errors. Providers are not
 selectable.
 
-Development builds may enable the `dev-platform-override` feature. Its
+Development builds of the `dot-cli` package may enable the
+`dev-platform-override` feature. Its
 global `--platform` inline TOML argument controls compatibility for dry-run,
 provider check, target-list labels/filtering, and omitted-target inference in
 profile/job lists. Commands, environment, XDG paths, and filesystem

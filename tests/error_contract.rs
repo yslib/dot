@@ -4,25 +4,22 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
-use dot::ConfigFileError;
-use dot::interpolation::InterpolationError;
-use dot::job::{JobSelector, JobSelectorParseError};
-use dot::manifest::ManifestError;
-use dot::native::ConfigLoadError;
-use dot::native::command_action::{ActionStage, CommandActionRunError};
-use dot::native::config_loader::ConfigDiscoveryError;
-use dot::native::diagnostic::Operation;
-use dot::native::link::{LinkError, LinkPhaseError};
-use dot::native::plan::{JobSelectionError, PlanningError};
-use dot::native::process::{CommandPreparationError, ExecutionError};
-use dot::native::provider::{ProviderError, ProviderInstallError, ProviderStage};
-use dot::native::provider_check::ProviderProbeError;
-use dot::platform::PlatformInfo;
-use dot::schema::{
+use dot_core::interpolation::InterpolationError;
+use dot_core::job::{JobSelector, JobSelectorParseError};
+use dot_core::manifest::ManifestError;
+use dot_core::native::command_action::{ActionStage, CommandActionRunError};
+use dot_core::native::diagnostic::Operation;
+use dot_core::native::link::{LinkError, LinkPhaseError};
+use dot_core::native::plan::{JobSelectionError, PlanningError};
+use dot_core::native::process::{CommandPreparationError, ExecutionError};
+use dot_core::native::provider::{ProviderError, ProviderInstallError, ProviderStage};
+use dot_core::native::provider_check::ProviderProbeError;
+use dot_core::platform::PlatformInfo;
+use dot_core::schema::{
     Identifier, OneOrMany, PlatformConstraint, SchemaType, SelectorIdentifier,
     SelectorIdentifierError,
 };
-use dot::validation::{ConfigValidationError, ConfigValidationErrorKind, ConfigValidationJob};
+use dot_core::validation::{ConfigValidationError, ConfigValidationErrorKind, ConfigValidationJob};
 
 fn assert_no_source(error: &(dyn Error + 'static)) {
     assert!(
@@ -54,11 +51,6 @@ fn join_paths_error() -> env::JoinPathsError {
     let invalid_path = "invalid\"path";
 
     env::join_paths([invalid_path]).expect_err("test path should be invalid in PATH")
-}
-
-fn toml_error() -> toml::de::Error {
-    toml::from_str::<toml::Value>("invalid = [")
-        .expect_err("test TOML should be syntactically invalid")
 }
 
 fn identifier(value: &str) -> Identifier {
@@ -159,59 +151,6 @@ fn provider_check_errors_expose_their_wrapper_errors() {
     let converted = ProviderProbeError::from(execution_error());
     assert!(matches!(&converted, ProviderProbeError::Execution(_)));
     assert_source_is::<ExecutionError>(&converted);
-}
-
-#[test]
-fn config_discovery_inspect_error_exposes_its_io_error() {
-    let error = ConfigDiscoveryError::Inspect {
-        path: PathBuf::from("candidate"),
-        source: io_error(),
-    };
-
-    assert_source_is::<io::Error>(&error);
-}
-
-#[test]
-fn config_load_errors_expose_their_immediate_errors() {
-    let current_directory = ConfigLoadError::CurrentDirectory { source: io_error() };
-    let canonicalize = ConfigLoadError::Canonicalize {
-        path: PathBuf::from("dot.toml"),
-        source: io_error(),
-    };
-    let read = ConfigLoadError::Read {
-        path: PathBuf::from("dot.toml"),
-        source: io_error(),
-    };
-    let parse = ConfigLoadError::Parse {
-        path: PathBuf::from("dot.toml"),
-        source: toml_error(),
-    };
-
-    assert_source_is::<io::Error>(&current_directory);
-    assert_source_is::<io::Error>(&canonicalize);
-    assert_source_is::<io::Error>(&read);
-    assert_source_is::<toml::de::Error>(&parse);
-}
-
-#[test]
-fn config_load_validation_preserves_all_three_immediate_source_layers() {
-    let error = ConfigLoadError::Validation {
-        path: PathBuf::from("dot.toml"),
-        source: validation_error(ConfigValidationErrorKind::Expression(interpolation_error())),
-    };
-
-    let validation = assert_source_is::<ConfigValidationError>(&error);
-    let kind = assert_source_is::<ConfigValidationErrorKind>(validation);
-    assert_source_is::<InterpolationError>(kind);
-}
-
-#[test]
-fn config_load_errors_expose_protocol_construction_errors() {
-    let error = ConfigLoadError::ConfigFile(ConfigFileError::RelativeCwd {
-        path: PathBuf::from("relative"),
-    });
-
-    assert_source_is::<ConfigFileError>(&error);
 }
 
 #[test]
@@ -510,21 +449,6 @@ fn provider_mismatch_has_no_source() {
         expected: "expected".to_owned(),
         actual: "actual".to_owned(),
     });
-}
-
-#[test]
-fn source_less_config_discovery_errors_have_no_source() {
-    let errors = [
-        ConfigDiscoveryError::UserDirectoryUnavailable,
-        ConfigDiscoveryError::NotFound {
-            local: PathBuf::from("local"),
-            user: PathBuf::from("user"),
-        },
-    ];
-
-    for error in &errors {
-        assert_no_source(error);
-    }
 }
 
 #[test]

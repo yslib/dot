@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dot::interpolation::ExecutionEnvironment;
-use dot::native::command_action::{ActionStage, CommandActionOutcome, CommandActionRunner};
-use dot::schema::{
+use dot_core::interpolation::ExecutionEnvironment;
+use dot_core::native::command_action::{ActionStage, CommandActionOutcome, CommandActionRunner};
+use dot_core::schema::{
     EnvironmentName, ResolvedCommandAction, ResolvedEnvironmentPatch, ResolvedExecAction,
     ResolvedString,
 };

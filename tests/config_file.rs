@@ -1,8 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use dot::schema::Config;
-use dot::{ConfigFile, ConfigFileError};
+use dot_core::schema::Config;
+use dot_core::{ConfigFile, ConfigFileError};
 
 fn config() -> Config {
     Config::parse(

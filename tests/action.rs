@@ -5,11 +5,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use dot::interpolation::ExecutionEnvironment;
-use dot::native::process::{
+use dot_core::interpolation::ExecutionEnvironment;
+use dot_core::native::process::{
     ExecutionError, IoMode, PreparedCommand, ProcessExecutor, apply_environment_patch,
 };
-use dot::schema::{
+use dot_core::schema::{
     EnvironmentName, OneOrMany, ResolvedEnvironmentPatch, ResolvedExecAction, ResolvedString,
 };
 

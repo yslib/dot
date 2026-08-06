@@ -720,15 +720,18 @@ pub enum InterpolationError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::env;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     use directories::{BaseDirs, UserDirs};
 
-    use crate::native::{ConfigLocation, NativeRuntime, load_config};
+    use crate::ConfigFile;
+    use crate::native::NativeRuntime;
     use crate::schema::{
-        EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
-        OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedString, StringExpression,
-        StringExpressionSource, StringTemplatePart, StringType, TypedVariable,
+        Config, EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType,
+        LiteralStringSource, OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedString,
+        StringExpression, StringExpressionSource, StringTemplatePart, StringType, TypedVariable,
     };
 
     use super::{
@@ -980,9 +983,24 @@ mod tests {
     }
 
     #[test]
-    fn dot_paths_from_loaded_config_exposes_the_canonical_directory() {
+    fn dot_paths_from_config_file_exposes_the_canonical_directory() {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dot.toml");
-        let config = load_config(ConfigLocation::Path(fixture)).expect("fixture should load");
+        let source = fs::read_to_string(&fixture).expect("fixture should be readable");
+        let parsed = Config::parse(&source).expect("fixture should parse");
+        let real_fixture = fs::canonicalize(&fixture).expect("fixture should canonicalize");
+        let config = ConfigFile::new(
+            parsed,
+            fixture
+                .parent()
+                .expect("fixture should have a parent")
+                .to_owned(),
+            real_fixture
+                .parent()
+                .expect("canonical fixture should have a parent")
+                .to_owned(),
+            env::current_dir().expect("test should have a current directory"),
+        )
+        .expect("fixture context should be absolute");
         let runtime = NativeRuntime::detect();
         let xdg = xdg_paths(&[]);
         let context = ResolveContext::new(runtime.environment(), DotPaths::from(&config), &xdg);

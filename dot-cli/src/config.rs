@@ -1,5 +1,10 @@
 //! Local configuration discovery and filesystem loading.
 
+#![expect(
+    clippy::result_large_err,
+    reason = "direct typed error sources preserve Error::source downcasts"
+)]
+
 use std::env;
 use std::fs;
 use std::io;
@@ -7,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use directories::BaseDirs;
 
-use crate::config::ConfigParseError;
-use crate::schema::Config;
-use crate::validation::ConfigValidationError;
-use crate::{ConfigFile, ConfigFileError};
+use dot_core::config::ConfigParseError;
+use dot_core::schema::Config;
+use dot_core::validation::ConfigValidationError;
+use dot_core::{ConfigFile, ConfigFileError};
 
 const DEFAULT_CONFIG_FILENAME: &str = ".dot.toml";
 
@@ -227,7 +232,19 @@ pub enum ConfigLoadError {
 mod tests {
     use std::error::Error;
 
+    use dot_core::interpolation::InterpolationError;
+    use dot_core::schema::{Identifier, SelectorIdentifier};
+    use dot_core::validation::{ConfigValidationErrorKind, ConfigValidationJob};
+
     use super::*;
+
+    fn fixture_path(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("dot-cli should be inside the workspace")
+            .join("tests/fixtures")
+            .join(relative)
+    }
 
     fn unique_temp_path(label: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -525,13 +542,12 @@ mod tests {
     #[test]
     fn static_document_loads_config_and_absolute_path_metadata() {
         let invocation_cwd = env::current_dir().expect("test should have a current directory");
-        let relative_path = Path::new("tests/fixtures/dot.toml");
-        let expected_path = invocation_cwd.join(relative_path);
+        let expected_path = fixture_path("dot.toml");
         let expected_real_path =
-            fs::canonicalize(relative_path).expect("fixture path should canonicalize");
+            fs::canonicalize(&expected_path).expect("fixture path should canonicalize");
 
-        let loaded = load_config(ConfigLocation::Path(relative_path.to_path_buf()))
-            .expect("fixture should load");
+        let loaded =
+            load_config(ConfigLocation::Path(expected_path.clone())).expect("fixture should load");
 
         assert_eq!(loaded.config().targets.len(), 6);
         assert_eq!(loaded.config_dir(), expected_path.parent().unwrap());
@@ -551,8 +567,7 @@ mod tests {
         let directory = unique_temp_path("config-symlink");
         fs::create_dir(&directory).expect("temporary directory should be created");
         let entry = directory.join(".dot.toml");
-        let real =
-            fs::canonicalize("tests/fixtures/dot.toml").expect("fixture should canonicalize");
+        let real = fs::canonicalize(fixture_path("dot.toml")).expect("fixture should canonicalize");
         std::os::unix::fs::symlink(&real, &entry).expect("configuration symlink should be created");
 
         let result = load_config(ConfigLocation::Path(entry.clone()));
@@ -563,5 +578,161 @@ mod tests {
         let loaded = result.expect("configuration symlink should load");
         assert_eq!(loaded.config_dir(), directory);
         assert_eq!(loaded.real_config_dir(), real.parent().unwrap());
+    }
+
+    #[test]
+    fn relative_paths_are_made_absolute_against_the_invocation_directory() {
+        let invocation_cwd = Path::new("/work");
+
+        assert_eq!(
+            absolute_path(Path::new("config/dot.toml"), invocation_cwd),
+            invocation_cwd.join("config/dot.toml")
+        );
+    }
+
+    #[test]
+    fn relative_manifest_loads_with_absolute_protocol_context() {
+        let invocation_cwd = env::current_dir().expect("test should have a current directory");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_nanos();
+        let relative_dir = PathBuf::from("target").join(format!(
+            "dot-relative-config-{}-{nonce}",
+            std::process::id()
+        ));
+        let absolute_dir = invocation_cwd.join(&relative_dir);
+        fs::create_dir_all(&absolute_dir).expect("temporary directory should be created");
+        let relative_path = relative_dir.join("dot.toml");
+        let absolute_path = absolute_dir.join("dot.toml");
+        fs::write(
+            &absolute_path,
+            r#"[targets.machine]
+platform = { os = ["linux", "macos", "windows"] }
+"#,
+        )
+        .expect("test manifest should be written");
+
+        let result = load_config(ConfigLocation::Path(relative_path));
+        let real_dir =
+            fs::canonicalize(&absolute_dir).expect("temporary directory should canonicalize");
+        fs::remove_dir_all(&absolute_dir).expect("temporary directory should be removed");
+
+        let loaded = result.expect("relative manifest should load");
+        assert_eq!(loaded.config_dir(), absolute_dir);
+        assert_eq!(loaded.real_config_dir(), real_dir);
+        assert_eq!(loaded.cwd(), invocation_cwd);
+    }
+
+    #[test]
+    fn missing_manifest_reports_the_requested_absolute_entry_path() {
+        let missing = unique_temp_path("missing-manifest");
+
+        let error = load_config(ConfigLocation::Path(missing.clone()))
+            .expect_err("missing manifest should fail");
+
+        match &error {
+            ConfigLoadError::Canonicalize { path, source } => {
+                assert_eq!(path, &missing);
+                assert_eq!(source.kind(), io::ErrorKind::NotFound);
+            }
+            other => panic!("expected canonicalize error, got {other:?}"),
+        }
+        assert!(
+            error
+                .to_string()
+                .contains(missing.to_string_lossy().as_ref())
+        );
+        assert!(Error::source(&error).is_some());
+    }
+
+    #[test]
+    fn invalid_documents_and_manifests_report_the_requested_absolute_path() {
+        let invalid_document = fixture_path("config/invalid-syntax.toml");
+        let parse_error = load_config(ConfigLocation::Path(invalid_document.clone()))
+            .expect_err("invalid TOML should fail");
+        assert!(matches!(
+            parse_error,
+            ConfigLoadError::Parse { ref path, .. } if path == &invalid_document
+        ));
+
+        let invalid_manifest = fixture_path("manifest/invalid-duplicate-profile-name.toml");
+        let validation_error = load_config(ConfigLocation::Path(invalid_manifest.clone()))
+            .expect_err("invalid manifest should fail");
+        assert!(matches!(
+            validation_error,
+            ConfigLoadError::Validation { ref path, .. } if path == &invalid_manifest
+        ));
+    }
+
+    fn test_validation_error() -> ConfigValidationError {
+        ConfigValidationError {
+            target: SelectorIdentifier::new("target").expect("test target should be valid"),
+            profile: None,
+            job: Some(ConfigValidationJob::Provider(
+                Identifier::new("provider").expect("test provider should be valid"),
+            )),
+            field: Some("field".to_owned()),
+            kind: ConfigValidationErrorKind::Expression(InterpolationError::UnclosedResolver {
+                offset: 0,
+            }),
+        }
+    }
+
+    #[test]
+    fn load_errors_preserve_their_typed_immediate_sources() {
+        let io_errors = [
+            ConfigLoadError::CurrentDirectory {
+                source: io::Error::other("test I/O failure"),
+            },
+            ConfigLoadError::Canonicalize {
+                path: PathBuf::from("dot.toml"),
+                source: io::Error::other("test I/O failure"),
+            },
+            ConfigLoadError::Read {
+                path: PathBuf::from("dot.toml"),
+                source: io::Error::other("test I/O failure"),
+            },
+        ];
+        for error in &io_errors {
+            assert!(
+                Error::source(error)
+                    .and_then(|source| source.downcast_ref::<io::Error>())
+                    .is_some()
+            );
+        }
+
+        let parse = ConfigLoadError::Parse {
+            path: PathBuf::from("dot.toml"),
+            source: toml::from_str::<toml::Value>("invalid = [")
+                .expect_err("test TOML should be invalid"),
+        };
+        assert!(
+            Error::source(&parse)
+                .and_then(|source| source.downcast_ref::<toml::de::Error>())
+                .is_some()
+        );
+
+        let validation = ConfigLoadError::Validation {
+            path: PathBuf::from("dot.toml"),
+            source: test_validation_error(),
+        };
+        let validation_source = Error::source(&validation)
+            .and_then(|source| source.downcast_ref::<ConfigValidationError>())
+            .expect("validation error should be the immediate source");
+        assert!(
+            Error::source(validation_source)
+                .and_then(|source| source.downcast_ref::<ConfigValidationErrorKind>())
+                .is_some()
+        );
+
+        let protocol = ConfigLoadError::ConfigFile(ConfigFileError::RelativeCwd {
+            path: PathBuf::from("relative"),
+        });
+        assert!(
+            Error::source(&protocol)
+                .and_then(|source| source.downcast_ref::<ConfigFileError>())
+                .is_some()
+        );
     }
 }

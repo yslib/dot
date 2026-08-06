@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use dot::native::TerminalRenderer;
-use dot::platform::PlatformInfo;
-use dot::report::{
+use dot_core::native::TerminalRenderer;
+use dot_core::platform::PlatformInfo;
+use dot_core::report::{
     ActionInfo, ActionItem, CommandActionInfo, CommandInfo, CommandReport, ErrorHint, Evidence,
     EvidenceStage, ItemStatus, LinkItem, PackageItem, PackageSource, ProviderItem,
     ProviderPackageSource, ReportCommand, ReportContext, ReportItem, ReportStatus, ReportSubject,
 };
-use dot::schema::{FetchContentConflict, LinkConflict, LinkMissingParent};
+use dot_core::schema::{FetchContentConflict, LinkConflict, LinkMissingParent};
 
 fn command(program: &str, args: &[&str]) -> CommandInfo {
     CommandInfo {

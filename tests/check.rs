@@ -4,18 +4,19 @@ use std::io::Write;
 use std::path::Path;
 use std::process;
 
-use dot::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
-use dot::native::provider_check::{
+use dot_core::ConfigFile;
+use dot_core::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, XdgPaths};
+use dot_core::native::NativeRuntime;
+use dot_core::native::provider_check::{
     ProviderChecker, ProviderProbeError, ProviderReadiness, build_report,
 };
-use dot::native::{ConfigLocation, NativeRuntime, load_config};
-use dot::platform::PlatformInfo;
-use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
-use dot::schema::{
-    Entries, EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, Provider,
+use dot_core::platform::PlatformInfo;
+use dot_core::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
+use dot_core::schema::{
+    Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction, OneOrMany, Provider,
     ProviderInstallArgSource, StringExpressionSource,
 };
-use dot::selection::{ProfileSelection, ScopeSelection};
+use dot_core::selection::{ProfileSelection, ScopeSelection};
 
 fn environment_patch(variables: &[(&str, &str)]) -> EnvironmentPatch {
     EnvironmentPatch {
@@ -97,14 +98,27 @@ fn high_level_provider_check_projects_an_empty_selected_manifest() {
         ),
     )
     .expect("test configuration should be written");
-    let config = load_config(ConfigLocation::Path(path)).expect("config should load");
+    let source = std::fs::read_to_string(&path).expect("test configuration should be readable");
+    let parsed = Config::parse(&source).expect("test configuration should parse");
+    let config_dir = path
+        .parent()
+        .expect("test configuration should have a parent")
+        .to_owned();
+    let real_path = std::fs::canonicalize(&path).expect("test configuration should canonicalize");
+    let real_config_dir = real_path
+        .parent()
+        .expect("canonical configuration should have a parent")
+        .to_owned();
+    let cwd = env::current_dir().expect("test should have a current directory");
+    let config = ConfigFile::new(parsed, config_dir, real_config_dir, cwd)
+        .expect("test configuration context should be absolute");
     let runtime = NativeRuntime::detect();
     let scope = ScopeSelection {
         target: Some("machine".try_into().expect("target should be valid")),
         profile: ProfileSelection::Root,
     };
 
-    let report = dot::native::check_providers(&config, &runtime, runtime.platform(), &scope)
+    let report = dot_core::native::check_providers(&config, &runtime, runtime.platform(), &scope)
         .expect("provider check should complete");
 
     assert_eq!(report.status, ReportStatus::Succeeded);

@@ -8,6 +8,10 @@ coordinates external package providers, manual installation actions, generic
 actions, and symbolic links. The manifest remains a readable inventory of the
 environment it describes.
 
+The Rust workspace separates the reusable `dot-core` library from `dot-cli`,
+the package that owns local configuration discovery and produces the `dot`
+executable.
+
 > [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete
 > application example used to develop `dot`. It describes an Arch Linux
 > base/Hyprland/laptop profile tree plus independent macOS and Windows
@@ -36,7 +40,7 @@ To build from source with stable Rust:
 ```console
 git clone https://github.com/yslib/dot.git
 cd dot
-cargo build --release --bin dot
+cargo build --release -p dot-cli --bin dot
 ```
 
 The binary is written to `target/release/dot` (`dot.exe` on Windows).
@@ -351,7 +355,7 @@ The development-only `dev-platform-override` Cargo feature adds the global
 `--platform <TOML>` option for compatibility testing:
 
 ```console
-cargo run --features dev-platform-override -- \
+cargo run -p dot-cli --features dev-platform-override -- \
   --platform '{ os = "windows", arch = "x86_64" }' \
   dry-run
 ```

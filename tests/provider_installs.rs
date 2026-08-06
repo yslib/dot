@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dot::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
-use dot::job::JobSelection;
-use dot::manifest::EffectiveManifest;
-use dot::native::plan::{ExecutionPlan, ExecutionPlanner};
-use dot::native::provider::{ProviderInstallError, ProviderInstallOutcome, ProviderRunner};
-use dot::platform::PlatformInfo;
-use dot::schema::{
+use dot_core::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
+use dot_core::job::JobSelection;
+use dot_core::manifest::EffectiveManifest;
+use dot_core::native::plan::{ExecutionPlan, ExecutionPlanner};
+use dot_core::native::provider::{ProviderInstallError, ProviderInstallOutcome, ProviderRunner};
+use dot_core::platform::PlatformInfo;
+use dot_core::schema::{
     BatchProviderPackage, Config, Entries, EnvironmentName, EnvironmentPatch, ExecAction,
     Identifier, OneOrMany, Package, PlatformConstraint, Provider, ProviderInstallArgSource,
     ProviderPackage, SelectableEntries, SelectorIdentifier, SingleProviderPackage,

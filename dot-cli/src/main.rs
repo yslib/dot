@@ -6,16 +6,20 @@ use std::process::ExitCode;
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Error, Parser, Subcommand};
 
-use dot::inspect::{InspectError, Inspector};
-use dot::job::{JobSelection, JobSelector};
-use dot::native::{
-    ConfigLocation, NativeRuntime, TerminalRenderer, apply, check_providers, dry_run, load_config,
-};
-use dot::output::{TsvRecord, TsvRenderer};
-use dot::platform::PlatformInfo;
-use dot::report::{CommandReport, ReportStatus};
-use dot::schema::SelectorIdentifier;
-use dot::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
+use dot_core::inspect::{InspectError, Inspector};
+use dot_core::job::{JobSelection, JobSelector};
+use dot_core::native::{NativeRuntime, TerminalRenderer, apply, check_providers, dry_run};
+use dot_core::output::{TsvRecord, TsvRenderer};
+use dot_core::platform::PlatformInfo;
+use dot_core::report::{CommandReport, ReportStatus};
+use dot_core::schema::SelectorIdentifier;
+use dot_core::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
+
+use config::{ConfigLocation, load_config};
+
+mod config;
+#[cfg(feature = "dev-platform-override")]
+mod platform_override;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -37,7 +41,7 @@ struct Cli {
         long,
         global = true,
         value_name = "TOML",
-        value_parser = dot::platform::parse_override
+        value_parser = platform_override::parse
     )]
     platform: Option<PlatformInfo>,
 

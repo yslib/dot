@@ -2,27 +2,22 @@ mod support;
 
 use std::error::Error;
 
-use dot::interpolation::InterpolationError;
-use dot::native::{ConfigLoadError, ConfigLocation, load_config};
-use dot::schema::Config;
-use dot::validation::{ConfigValidationErrorKind, ConfigValidationJob, validate_config};
+use dot_core::config::ConfigParseError;
+use dot_core::interpolation::InterpolationError;
+use dot_core::schema::Config;
+use dot_core::validation::{ConfigValidationErrorKind, ConfigValidationJob, validate_config};
 use support::fixture;
 
 #[test]
 fn rejects_a_static_expression_error_in_an_unselected_target() {
-    let path = fixture::path("validation/invalid-unselected-expression.toml");
+    let error = Config::parse(&fixture::read(
+        "validation/invalid-unselected-expression.toml",
+    ))
+    .expect_err("the complete config must be validated");
 
-    let error = load_config(ConfigLocation::Path(path.clone()))
-        .expect_err("the complete config must be validated");
-
-    let ConfigLoadError::Validation {
-        path: error_path,
-        source,
-    } = &error
-    else {
+    let ConfigParseError::Validation { source } = &error else {
         panic!("expected a validation error, got {error:?}");
     };
-    assert_eq!(error_path, &path);
     assert_eq!(source.target.as_str(), "unselected");
     assert_eq!(source.profile, None);
     assert_eq!(
@@ -40,18 +35,17 @@ fn rejects_a_static_expression_error_in_an_unselected_target() {
             name
         }) if name == "unknown"
     ));
-    assert!(error.to_string().contains(path.to_string_lossy().as_ref()));
     assert!(error.source().is_some());
     assert!(source.source().is_some());
 }
 
 #[test]
 fn rejects_a_fetch_source_expression_error_in_an_unselected_target() {
-    let path = fixture::path("validation/invalid-unselected-fetch-expression.toml");
-
-    let error = load_config(ConfigLocation::Path(path.clone()))
-        .expect_err("the complete config must be validated");
-    let ConfigLoadError::Validation { source, .. } = error else {
+    let error = Config::parse(&fixture::read(
+        "validation/invalid-unselected-fetch-expression.toml",
+    ))
+    .expect_err("the complete config must be validated");
+    let ConfigParseError::Validation { source } = error else {
         panic!("expected a validation error");
     };
 
@@ -108,30 +102,24 @@ target = "${env"
 
 #[test]
 fn defers_a_missing_runtime_value_in_an_unselected_job() {
-    let path = fixture::path("validation/valid-unselected-runtime-value.toml");
+    let config = Config::parse(&fixture::read(
+        "validation/valid-unselected-runtime-value.toml",
+    ))
+    .expect("static validation must not resolve runtime environment values");
 
-    let loaded = load_config(ConfigLocation::Path(path.clone()))
-        .expect("static validation must not resolve runtime environment values");
-
-    assert_eq!(loaded.config_dir(), path.parent().unwrap());
-    assert_eq!(loaded.config().targets.len(), 2);
+    assert_eq!(config.targets.len(), 2);
 }
 
 #[test]
 fn rejects_an_unknown_provider_in_one_effective_profile_atomically() {
-    let path = fixture::path("validation/invalid-unselected-provider-reference.toml");
+    let error = Config::parse(&fixture::read(
+        "validation/invalid-unselected-provider-reference.toml",
+    ))
+    .expect_err("every effective profile manifest must be valid");
 
-    let error = load_config(ConfigLocation::Path(path.clone()))
-        .expect_err("every effective profile manifest must be valid");
-
-    let ConfigLoadError::Validation {
-        path: error_path,
-        source,
-    } = &error
-    else {
+    let ConfigParseError::Validation { source } = &error else {
         panic!("expected a validation error, got {error:?}");
     };
-    assert_eq!(error_path, &path);
     assert_eq!(source.target.as_str(), "machine");
     assert_eq!(
         source.profile.as_ref().map(ToString::to_string).as_deref(),
@@ -149,7 +137,6 @@ fn rejects_an_unknown_provider_in_one_effective_profile_atomically() {
         ConfigValidationErrorKind::UnknownProvider { package, provider }
             if package.as_str() == "tool" && provider.as_str() == "missing"
     ));
-    assert!(error.to_string().contains(path.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -234,7 +221,7 @@ target = "/target"
 }
 
 #[test]
-fn validates_package_batch_structure_during_load() {
+fn validates_package_batch_structure_during_parse() {
     let cases = [
         (
             "dry-run/invalid-empty-package-batch.toml",
@@ -249,10 +236,9 @@ fn validates_package_batch_structure_during_load() {
     ];
 
     for (fixture_name, expected_package, expected_duplicate) in cases {
-        let path = fixture::path(fixture_name);
-        let error = load_config(ConfigLocation::Path(path.clone()))
-            .expect_err("invalid batches must fail during load");
-        let ConfigLoadError::Validation { source, .. } = error else {
+        let error = Config::parse(&fixture::read(fixture_name))
+            .expect_err("invalid batches must fail during parse");
+        let ConfigParseError::Validation { source } = error else {
             panic!("expected a validation error");
         };
 
@@ -314,7 +300,7 @@ app = { provider = "brew", provider_args = ["--cask"] }
 }
 
 #[test]
-fn requires_one_exact_provider_args_resolver_during_load() {
+fn requires_one_exact_provider_args_resolver_during_parse() {
     let cases = [
         ("invalid-provider-args-resolver.toml", 0),
         ("invalid-provider-args-resolver-twice.toml", 2),
@@ -322,11 +308,9 @@ fn requires_one_exact_provider_args_resolver_during_load() {
     ];
 
     for (fixture_name, expected_count) in cases {
-        let path = fixture::path(format!("dry-run/{fixture_name}"));
-
-        let error = load_config(ConfigLocation::Path(path.clone()))
+        let error = Config::parse(&fixture::read(format!("dry-run/{fixture_name}")))
             .expect_err("provider args must be consumed exactly once");
-        let ConfigLoadError::Validation { source, .. } = error else {
+        let ConfigParseError::Validation { source } = error else {
             panic!("expected a validation error");
         };
 

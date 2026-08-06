@@ -1,0 +1,21 @@
+[package]
+name = "dot-cli"
+version = "0.1.1"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "dot"
+path = "src/main.rs"
+
+[features]
+default = []
+dev-platform-override = ["dep:serde"]
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+directories = "6.0"
+dot-core = { path = ".." }
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = "2"
+toml = "1.1"

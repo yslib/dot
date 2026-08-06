@@ -1,6 +1,6 @@
 mod support;
 
-use dot::schema::{
+use dot_core::schema::{
     Action, Config, EnvironmentName, EnvironmentPatch, ExecAction, ExpressionParseError,
     FetchContentConflict, Identifier, LinkConflict, LinkMissingParent, ListType,
     LiteralStringSource, OneOrMany, Package, ParsedStringForm, ParsedTemplatePart,

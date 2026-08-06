@@ -29,13 +29,19 @@ jobs:
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(
+          package_versions="$(
             cargo metadata --locked --no-deps --format-version 1 |
-              python3 -c 'import json, sys; data = json.load(sys.stdin); print(next(package["version"] for package in data["packages"] if package["name"] == "dot"))'
+              python3 -c 'import json, sys; data = json.load(sys.stdin); versions = {package["name"]: package["version"] for package in data["packages"]}; print(versions["dot-core"], versions["dot-cli"])'
           )"
+          read -r core_version cli_version <<< "${package_versions}"
 
-          if [[ "${tag_version}" != "${package_version}" ]]; then
-            echo "tag ${GITHUB_REF_NAME} does not match Cargo package version ${package_version}" >&2
+          if [[ "${core_version}" != "${cli_version}" ]]; then
+            echo "dot-core ${core_version} does not match dot-cli ${cli_version}" >&2
+            exit 1
+          fi
+
+          if [[ "${tag_version}" != "${core_version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match workspace package version ${core_version}" >&2
             exit 1
           fi
 
@@ -43,10 +49,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --locked --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
 
   build:
     name: Build ${{ matrix.platform }}
@@ -85,10 +91,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Run target tests
-        run: cargo test --locked --all-targets --all-features --target ${{ matrix.target }}
+        run: cargo test --locked --workspace --all-targets --all-features --target ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --locked --release --bin dot --target ${{ matrix.target }}
+        run: cargo build --locked --release -p dot-cli --bin dot --target ${{ matrix.target }}
 
       - name: Stage binary
         if: runner.os != 'Windows'

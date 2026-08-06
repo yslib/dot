@@ -7,15 +7,17 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dot::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
-use dot::job::{JobId, JobSelection, JobSelector};
-use dot::manifest::EffectiveManifest;
-use dot::native::job_execution::{ActionOutcome, BlockReason, JobOutcome, JobRunner, JobState};
-use dot::native::link::{LinkOutcome, LinkPhaseError};
-use dot::native::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
-use dot::native::provider::ProviderInstallOutcome;
-use dot::platform::PlatformInfo;
-use dot::schema::{Config, Identifier, SelectorIdentifier};
+use dot_core::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
+use dot_core::job::{JobId, JobSelection, JobSelector};
+use dot_core::manifest::EffectiveManifest;
+use dot_core::native::job_execution::{
+    ActionOutcome, BlockReason, JobOutcome, JobRunner, JobState,
+};
+use dot_core::native::link::{LinkOutcome, LinkPhaseError};
+use dot_core::native::plan::{ExecutionPlan, ExecutionPlanner, PlannedJob};
+use dot_core::native::provider::ProviderInstallOutcome;
+use dot_core::platform::PlatformInfo;
+use dot_core::schema::{Config, Identifier, SelectorIdentifier};
 use support::fixture;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);

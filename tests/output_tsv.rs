@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::io::{self, Write};
 
-use dot::output::{TsvRecord, TsvRenderer};
+use dot_core::output::{TsvRecord, TsvRenderer};
 
 struct ExampleRow {
     selector: String,
