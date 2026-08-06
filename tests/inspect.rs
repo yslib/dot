@@ -25,7 +25,7 @@ fn render<R: TsvRecord>(records: &[R]) -> String {
 }
 
 #[test]
-fn target_tsv_includes_declared_targets_with_compatibility_and_order() {
+fn target_tsv_includes_declared_targets_and_compatibility_labels() {
     let records = {
         let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
         Inspector::new(&config, &platform()).targets(true)
@@ -43,7 +43,7 @@ fn target_tsv_includes_declared_targets_with_compatibility_and_order() {
 }
 
 #[test]
-fn incompatible_target_profile_tsv_preserves_root_and_preorder() {
+fn incompatible_target_profile_tsv_includes_root_and_nested_profiles() {
     let records = {
         let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
         let target = SelectorIdentifier::new("never").expect("target should parse");
@@ -65,7 +65,7 @@ fn incompatible_target_profile_tsv_preserves_root_and_preorder() {
 }
 
 #[test]
-fn root_and_named_profile_jobs_preserve_merge_order_expressions_and_fetch_rows() {
+fn root_and_named_profile_jobs_include_effective_records_and_details() {
     let config = dot::schema::Config::parse(SOURCE).expect("configuration should parse");
     let target = SelectorIdentifier::new("never").expect("target should parse");
     let root_scope = ScopeSelection {

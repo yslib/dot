@@ -204,8 +204,10 @@ provider package:
 - The referenced provider must exist in the final effective provider map.
 - Each provider package declaration is exactly one execution and report unit.
   Single declarations invoke provider install with one name. Batch
-  declarations invoke it once with the complete names list. dot does not
-  implicitly regroup separate declarations by provider or provider_args.
+  declarations invoke it once with the complete names list. dot never coalesces
+  separate declarations into one install invocation or report unit, even when
+  provider and provider_args match. Provider-backed units are grouped by
+  provider only to determine execution order.
 - Profile inheritance replaces the complete single or batch record by its
   stable table key. Batch names are replaced as one list, never merged or
   appended across profile levels.
@@ -253,13 +255,13 @@ resolved only from the final effective provider map.
 
 A profile may add or completely replace a provider. This allows a specialized
 profile to introduce a capability without making it part of sibling profiles.
-Every selected provider is eagerly activated, probed, and ensured before any
-selected provider-package install unit is executed. Complete job selection uses
-JobSelection::All and includes every effective provider, including providers
-with no packages. Exact job selection uses JobSelection::Only and includes a
-provider only when it is required by a selected provider-backed package.
-Providers cannot be selected directly. Provider install is never called with
-an empty names list.
+Every selected provider completes activation, probing, and any ensure lifecycle
+before any selected manual or provider-backed package is executed. Complete job
+selection uses JobSelection::All and includes every effective provider,
+including providers with no packages. Exact job selection uses
+JobSelection::Only and includes a provider only when it is required by a
+selected provider-backed package. Providers cannot be selected directly.
+Provider install is never called with an empty names list.
 
 
 ### provider lifecycle
@@ -357,11 +359,11 @@ and objects that mix the two field sets are rejected. Manual-package install
 accepts Command Action only.
 
 Both global variants occupy the same stable action phase and are ordered by
-action id. A failure is isolated to that action: later actions still run, and
-the deferred link phase still runs after the complete action phase. Every
-failure or blocked result contributes to the aggregate non-zero apply status.
-Actions have no dependency graph or semantic ordering beyond this stable
-serial order and must not rely on another action running first.
+final effective action declaration position. A failure is isolated to that
+action: later actions still run, and the deferred link phase still runs after
+the complete action phase. Every failure or blocked result contributes to the
+aggregate non-zero apply status. Actions have no dependency graph or
+topological scheduling beyond this guaranteed serial declaration order.
 
 
 ### command action lifecycle
@@ -635,7 +637,8 @@ resolution. JobSelection::All includes every effective provider, package,
 action, and link. JobSelection::Only includes the exact selected
 package/action/link identities and the minimum provider closure required by
 selected provider-backed packages. Providers are internal requirements and
-cannot be selected directly.
+cannot be selected directly. The BTreeSet inside JobSelection::Only is a
+membership structure only; its iteration order is not a scheduling source.
 
 The planner resolves only that closure and returns one owned ExecutionPlan.
 There is no post-plan selection view and no second selected-plan type. Its sole
@@ -644,19 +647,26 @@ and Link jobs. Phase-specific accessors are projections over that sequence, not
 parallel aggregate storage. Provider-backed package jobs preserve the
 single-versus-batch distinction.
 
-The exact stable phase and subphase order is:
+The effective manifest applies the target, then lexical profile ancestors from
+outermost to innermost, then the selected profile. A same-id whole-record
+replacement removes the ancestor position and takes the deeper declaration's
+position. Those final effective declaration positions define the exact stable
+phase and subphase order:
 
 ```
-providers by provider id
-provider-backed packages by package id
-manual packages by package id
-actions by action id
-links by link id
+providers by final effective provider declaration order
+manual packages by final effective package declaration order
+provider-backed packages grouped by final effective provider declaration order,
+    then by final effective package declaration order within each group
+actions by final effective action declaration order
+links by final effective link declaration order
 ```
 
-Entries<T> and SelectableEntries<T> are BTreeMap-backed. Exact selection
-filters the canonical sequence without reordering it; selector occurrence
-order and TOML declaration order are not execution order.
+Entries<T> and SelectableEntries<T> preserve keyed-table declaration order.
+Exact selection filters the final sequence without reordering it; selector
+occurrence order does not schedule work. Every selected provider completes its
+readiness lifecycle before the manual-package subphase begins, and each ensure
+list retains its list order.
 
 ExecutionPlan is an internal Rust data model, not a serialized configuration
 format or public compatibility boundary. Runtime observations such as probe or
@@ -846,12 +856,15 @@ Their shared configuration load still canonicalizes the selected entry before
 reading it.
 
 `list targets` returns only compatible targets by default; `--all` returns
-every target with a compatibility label. `list profiles` returns `@root`
-followed by the target's profile tree in stable sibling-id preorder.
-`list jobs` returns the effective merged packages, actions, and links in
-canonical job order and never returns provider rows. An explicit incompatible
+every target with a compatibility label. `list profiles` returns `@root` and
+the target's profile tree. `list jobs` returns the effective merged packages,
+actions, and links and never returns provider rows. An explicit incompatible
 target is permitted only for structural `list profiles` and `list jobs`;
 execution and provider check reject it.
+
+Structural inspection has no stable row-order contract. List rows may naturally
+reflect current containers or traversal, but callers must not infer execution
+order or depend on target-ID, sibling-ID, or job row order.
 
 Every list command writes UTF-8, headerless TSV with one record per line and a
 fixed number of columns:
@@ -876,7 +889,6 @@ The target columns have these stable meanings:
   platform constraints. A One value is emitted directly, a Many value is
   comma-joined in its configured order, and an absent optional constraint is
   an empty field. OS is required by the schema and is therefore never absent.
-  Rows use stable target-ID order.
 
 The profile columns have these stable meanings:
 
@@ -885,8 +897,7 @@ The profile columns have these stable meanings:
 - PATH is `<root>` for the target root or the slash-joined typed profile IDs
   from the target root to that profile.
 - DEPTH is numeric: `0` for the root and otherwise the number of profile IDs in
-  PATH. The root row comes first; declared profiles then use stable sibling-ID
-  preorder, so each parent precedes its descendants.
+  PATH.
 
 The job columns have these stable meanings:
 
@@ -951,10 +962,12 @@ and DETAIL columns followed by aggregate counts. It colors status cells only
 when stdout is a terminal. Child commands using inherited I/O may write before
 the final apply table.
 
-JobExecutionReport stores outcomes in a typed JobId-to-JobState map and does not
+JobExecutionReport stores outcomes in a `BTreeMap<JobId, JobState>` and does not
 store a second copy of execution or report order. Apply constructs CommandReport
-by traversing the selected jobs in their stable source-plan order and looking up
-each typed result.
+by traversing the selected jobs in final plan order and looking up each typed
+result. The result BTreeMap provides typed lookup semantics; its key order is
+not a second report-order source. The current table renderer may reflect report
+item traversal, but it does not guarantee a stable row order.
 
 Configuration loading, selection, compatibility, and planning failures happen
 before a CommandReport can be constructed. They are written directly to stderr
@@ -964,7 +977,8 @@ PLANNED and SUCCESS exit zero, while FAILED exits non-zero.
 CommandReport separates result content from presentation so another renderer
 can be added later. Version 0.1.0 has no `--json` option, and neither the Rust
 report shape nor human table text is a stable public data contract. The
-separate list-command TSV format is the stable machine-facing catalog contract.
+separate list-command TSV schema is the machine-facing catalog contract, but
+its row order is not guaranteed.
 
 
 ### apply pipeline
@@ -977,16 +991,17 @@ separate list-command TSV format is the stable machine-facing catalog contract.
 2. Detect the platform, select one compatible target and zero or one profile,
    and reject ambiguity or incompatibility.
 3. Overlay target and profile declarations from root to the selected node,
-   replacing whole records by id to produce an unresolved EffectiveManifest.
+   replacing whole records by id at the deeper declaration's position to
+   produce an unresolved EffectiveManifest.
 4. Validate the complete JobSelection and compute its provider closure before
    reading any selected runtime resolver value.
 5. Resolve only the selected providers and user jobs into one owned, stable,
    typed ExecutionPlan.
 6. Pass `&ExecutionPlan` directly to JobRunner for strictly synchronous serial
-   execution in provider, provider-package, manual-package, action, and link
-   order.
+   execution in provider, manual-package, provider-grouped-package, action, and
+   link order.
 7. Project the typed JobExecutionReport into CommandReport by traversing the
-   plan jobs in their canonical order.
+   jobs in final plan order.
 8. Render the complete CommandReport. Persist no package, action, or link
    state.
 

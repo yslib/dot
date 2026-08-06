@@ -523,7 +523,7 @@ fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
 }
 
 #[test]
-fn multiple_unknown_selectors_report_the_first_in_btree_order() {
+fn multiple_unknown_selectors_are_rejected_before_planning() {
     let input = fixture::read("dry-run/valid-human-readable-plan.toml");
     let config: Config = toml::from_str(&input).expect("test config should deserialize");
     let platform = platform();
