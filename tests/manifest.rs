@@ -387,6 +387,61 @@ fn selects_a_nested_profile_by_name_and_merges_its_ancestor_chain() {
 }
 
 #[test]
+fn profile_replacements_take_the_deeper_declaration_position() {
+    let config = parse_fixture("manifest/valid-declaration-order-profile.toml");
+    let machine = selector_id("machine");
+    let desktop = selector_id("desktop");
+
+    let manifest = EffectiveManifest::select_for_execution(
+        &config,
+        &platform("linux"),
+        Some(&machine),
+        Some(&desktop),
+    )
+    .expect("the desktop profile should be selected");
+    let expected = [
+        "root-first",
+        "root-last",
+        "profile-before",
+        "shared",
+        "profile-after",
+    ];
+
+    assert_eq!(
+        manifest
+            .providers()
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        manifest
+            .packages()
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        manifest
+            .actions()
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        manifest
+            .links()
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
 fn selecting_no_profile_uses_only_the_target_root() {
     let config = parse_fixture("manifest/valid-profile-tree.toml");
     let machine = selector_id("machine");

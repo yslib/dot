@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::hash::Hash;
+
+use indexmap::IndexMap;
 
 use crate::platform::PlatformInfo;
 use crate::schema::{
@@ -68,6 +71,17 @@ pub struct EffectiveManifest {
     packages: SelectableEntries<Package>,
     links: SelectableEntries<Link>,
     actions: SelectableEntries<Action>,
+}
+
+fn extend_with_reposition<K, V>(effective: &mut IndexMap<K, V>, declared: &IndexMap<K, V>)
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    for (id, value) in declared {
+        let _ = effective.shift_remove(id);
+        effective.insert(id.clone(), value.clone());
+    }
 }
 
 impl EffectiveManifest {
@@ -174,10 +188,10 @@ impl EffectiveManifest {
         let mut actions = target.actions.clone();
 
         for profile in chain {
-            providers.extend(profile.providers.clone());
-            packages.extend(profile.packages.clone());
-            links.extend(profile.links.clone());
-            actions.extend(profile.actions.clone());
+            extend_with_reposition(&mut providers, &profile.providers);
+            extend_with_reposition(&mut packages, &profile.packages);
+            extend_with_reposition(&mut links, &profile.links);
+            extend_with_reposition(&mut actions, &profile.actions);
         }
 
         Self {
