@@ -1,0 +1,42 @@
+[targets.machine]
+platform = { os = "linux" }
+
+[targets.machine.providers]
+root-first = { probe = { program = "root-first-probe" }, install = { program = "root-first-install" } }
+shared = { probe = { program = "root-shared-probe" }, install = { program = "root-shared-install" } }
+root-last = { probe = { program = "root-last-probe" }, install = { program = "root-last-install" } }
+
+[targets.machine.packages]
+root-first = { install = { exec = { program = "root-first-package" } } }
+shared = { install = { exec = { program = "root-shared-package" } } }
+root-last = { install = { exec = { program = "root-last-package" } } }
+
+[targets.machine.actions]
+root-first = { exec = { program = "root-first-action" } }
+shared = { exec = { program = "root-shared-action" } }
+root-last = { exec = { program = "root-last-action" } }
+
+[targets.machine.links]
+root-first = { source = "root-first-source", target = "root-first-target" }
+shared = { source = "root-shared-source", target = "root-shared-target" }
+root-last = { source = "root-last-source", target = "root-last-target" }
+
+[targets.machine.profiles.desktop.providers]
+profile-before = { probe = { program = "profile-before-probe" }, install = { program = "profile-before-install" } }
+shared = { probe = { program = "profile-shared-probe" }, install = { program = "profile-shared-install" } }
+profile-after = { probe = { program = "profile-after-probe" }, install = { program = "profile-after-install" } }
+
+[targets.machine.profiles.desktop.packages]
+profile-before = { install = { exec = { program = "profile-before-package" } } }
+shared = { install = { exec = { program = "profile-shared-package" } } }
+profile-after = { install = { exec = { program = "profile-after-package" } } }
+
+[targets.machine.profiles.desktop.actions]
+profile-before = { exec = { program = "profile-before-action" } }
+shared = { exec = { program = "profile-shared-action" } }
+profile-after = { exec = { program = "profile-after-action" } }
+
+[targets.machine.profiles.desktop.links]
+profile-before = { source = "profile-before-source", target = "profile-before-target" }
+shared = { source = "profile-shared-source", target = "profile-shared-target" }
+profile-after = { source = "profile-after-source", target = "profile-after-target" }
