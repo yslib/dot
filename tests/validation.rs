@@ -3,7 +3,7 @@ mod support;
 use std::error::Error;
 
 use dot::interpolation::InterpolationError;
-use dot::native::{ConfigFile, ConfigFileError, ConfigLocation};
+use dot::native::{ConfigLoadError, ConfigLocation, load_config};
 use dot::schema::Config;
 use dot::validation::{ConfigValidationErrorKind, ConfigValidationJob, validate_config};
 use support::fixture;
@@ -12,10 +12,10 @@ use support::fixture;
 fn rejects_a_static_expression_error_in_an_unselected_target() {
     let path = fixture::path("validation/invalid-unselected-expression.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let error = load_config(ConfigLocation::Path(path.clone()))
         .expect_err("the complete config must be validated");
 
-    let ConfigFileError::Validation {
+    let ConfigLoadError::Validation {
         path: error_path,
         source,
     } = &error
@@ -49,9 +49,9 @@ fn rejects_a_static_expression_error_in_an_unselected_target() {
 fn rejects_a_fetch_source_expression_error_in_an_unselected_target() {
     let path = fixture::path("validation/invalid-unselected-fetch-expression.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let error = load_config(ConfigLocation::Path(path.clone()))
         .expect_err("the complete config must be validated");
-    let ConfigFileError::Validation { source, .. } = error else {
+    let ConfigLoadError::Validation { source, .. } = error else {
         panic!("expected a validation error");
     };
 
@@ -110,10 +110,10 @@ target = "${env"
 fn defers_a_missing_runtime_value_in_an_unselected_job() {
     let path = fixture::path("validation/valid-unselected-runtime-value.toml");
 
-    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let loaded = load_config(ConfigLocation::Path(path.clone()))
         .expect("static validation must not resolve runtime environment values");
 
-    assert_eq!(loaded.path(), path);
+    assert_eq!(loaded.config_dir(), path.parent().unwrap());
     assert_eq!(loaded.config().targets.len(), 2);
 }
 
@@ -121,10 +121,10 @@ fn defers_a_missing_runtime_value_in_an_unselected_job() {
 fn rejects_an_unknown_provider_in_one_effective_profile_atomically() {
     let path = fixture::path("validation/invalid-unselected-provider-reference.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let error = load_config(ConfigLocation::Path(path.clone()))
         .expect_err("every effective profile manifest must be valid");
 
-    let ConfigFileError::Validation {
+    let ConfigLoadError::Validation {
         path: error_path,
         source,
     } = &error
@@ -250,9 +250,9 @@ fn validates_package_batch_structure_during_load() {
 
     for (fixture_name, expected_package, expected_duplicate) in cases {
         let path = fixture::path(fixture_name);
-        let error = ConfigFile::load(ConfigLocation::Path(path.clone()))
+        let error = load_config(ConfigLocation::Path(path.clone()))
             .expect_err("invalid batches must fail during load");
-        let ConfigFileError::Validation { source, .. } = error else {
+        let ConfigLoadError::Validation { source, .. } = error else {
             panic!("expected a validation error");
         };
 
@@ -324,9 +324,9 @@ fn requires_one_exact_provider_args_resolver_during_load() {
     for (fixture_name, expected_count) in cases {
         let path = fixture::path(format!("dry-run/{fixture_name}"));
 
-        let error = ConfigFile::load(ConfigLocation::Path(path.clone()))
+        let error = load_config(ConfigLocation::Path(path.clone()))
             .expect_err("provider args must be consumed exactly once");
-        let ConfigFileError::Validation { source, .. } = error else {
+        let ConfigLoadError::Validation { source, .. } = error else {
             panic!("expected a validation error");
         };
 

@@ -259,9 +259,7 @@ package:provider_args       -> [!string]
 The accepted string-valued calls in v0.1.0 are:
 
 - `${env:NAME}`;
-- `${dot:config}`;
 - `${dot:config_dir}`;
-- `${dot:real_config}`;
 - `${dot:real_config_dir}`;
 - `${dot:cwd}`;
 - `${xdg:home}`;
@@ -287,20 +285,18 @@ interpolation, resolver argument lists, defaults, and expressions are invalid.
 Before TOML deserialization, the selected configuration entry is converted to
 an absolute entry path without following symbolic links. Loading then eagerly
 calls `std::fs::canonicalize` on that entry and reads the resulting canonical
-filesystem entity path. The loader retains both pairs of path facts:
-
-- entry path and entry directory for `dot:config` and `dot:config_dir`;
-- canonical entity path and entity directory for `dot:real_config` and
-  `dot:real_config_dir`.
+filesystem entity path. The loader retains the entry directory for
+`dot:config_dir` and the canonical entity directory for
+`dot:real_config_dir`. The configuration protocol carries only those
+directories and the captured invocation directory, not either file path.
 
 Canonicalization failure, including a dangling or otherwise unresolvable
-entry, fails configuration loading even when no `real_config` resolver appears
-in the configuration. Canonical paths are retained exactly as returned by the
-host Rust/OS filesystem API; the schema does not normalize away a Windows
-verbatim `\\?\` prefix. The path facts themselves remain native paths. Every
-path-to-string resolver, including `dot` and `xdg`, projects through
-`Path::to_str()` without lossy replacement and fails runtime resolution when
-the path is not Unicode-representable.
+entry, always fails configuration loading. The canonical directory retains the
+spelling inherited from the host Rust/OS filesystem API; the schema does not
+normalize away a Windows verbatim `\\?\` prefix. The directory facts remain
+native paths. Every path-to-string resolver, including `dot` and `xdg`,
+projects through `Path::to_str()` without lossy replacement and fails runtime
+resolution when the path is not Unicode-representable.
 
 Identifiers, environment names, fixed enums, and object shapes remain strict
 during TOML deserialization. All object shapes reject unknown fields. A

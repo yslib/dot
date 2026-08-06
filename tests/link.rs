@@ -81,14 +81,7 @@ fn plan_fixture(
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::from_variables(env::vars_os());
     let xdg = XdgPaths::detect();
-    let config_path = workspace.path().join("dot.toml");
-    let dot_paths = DotPaths::new(
-        &config_path,
-        workspace.path(),
-        &config_path,
-        workspace.path(),
-        workspace.path(),
-    );
+    let dot_paths = DotPaths::new(workspace.path(), workspace.path(), workspace.path());
 
     ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
         .plan(&manifest, &JobSelection::All)

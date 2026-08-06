@@ -1,5 +1,6 @@
 //! Provider readiness inspection and report projection.
 
+use crate::ConfigFile;
 use crate::interpolation::{
     DotPaths, ExecutionEnvironment, InterpolationError, ResolveContext, XdgPaths,
     resolve_environment_patch, resolve_exec_action,
@@ -13,7 +14,6 @@ use crate::report::{
 use crate::schema::{Entries, OneOrMany, Provider};
 use crate::selection::ScopeSelection;
 
-use super::config_file::ConfigFile;
 use super::process::{
     CommandPreparationError, ExecutionError, ExecutionResult, IoMode, PreparedCommand,
     ProcessExecutor, apply_environment_patch,
@@ -40,7 +40,6 @@ pub fn check_providers(
     let checks = checker.check(manifest.providers());
 
     Ok(build_report(
-        config.path(),
         manifest.target(),
         manifest.profile(),
         compatibility_platform,
@@ -106,7 +105,6 @@ impl ProviderCheckReport {
 }
 
 pub fn build_report(
-    config: &std::path::Path,
     target: &str,
     profile: Option<&str>,
     platform: &PlatformInfo,
@@ -139,7 +137,6 @@ pub fn build_report(
     CommandReport {
         command: ReportCommand::CheckProviders,
         context: ReportContext {
-            config: config.to_owned(),
             target: target.to_owned(),
             profile: profile.map(str::to_owned),
             platform: platform.clone(),

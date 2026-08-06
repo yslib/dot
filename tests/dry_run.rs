@@ -10,7 +10,7 @@ use dot::native::dry_run;
 use dot::native::plan::{
     ExecutionPlanError, ExecutionPlanner, PlannedActionKind, PlannedProviderInstall, PlanningError,
 };
-use dot::native::{ConfigFile, ConfigLocation, NativeRuntime};
+use dot::native::{ConfigLocation, NativeRuntime, load_config};
 use dot::platform::PlatformInfo;
 use dot::report::{
     ActionInfo, ItemStatus, PackageSource, ProviderPackageSource, ReportCommand, ReportStatus,
@@ -23,10 +23,6 @@ use dot::schema::{
 use dot::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
 use support::fixture;
 
-#[cfg(not(windows))]
-const TEST_CONFIG: &str = "/repo/dot.toml";
-#[cfg(windows)]
-const TEST_CONFIG: &str = r"C:\repo\dot.toml";
 #[cfg(not(windows))]
 const TEST_CONFIG_DIR: &str = "/repo";
 #[cfg(windows)]
@@ -64,9 +60,7 @@ fn environment() -> ExecutionEnvironment {
 
 fn dot_paths() -> DotPaths<'static> {
     DotPaths::new(
-        Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
-        Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
         Path::new(TEST_CWD),
     )
@@ -134,7 +128,7 @@ fn execution_plan_exposes_one_ordered_typed_job_sequence() {
 fn report_projects_only_the_jobs_selected_before_runtime_resolution() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let config =
-        ConfigFile::load(ConfigLocation::Path(path)).expect("the complete config should validate");
+        load_config(ConfigLocation::Path(path)).expect("the complete config should validate");
     let runtime = NativeRuntime::detect();
     let platform = platform();
     let selection = ExecutionSelection {
@@ -185,7 +179,7 @@ fn selected_fetch_content_action_is_planned_and_projected_without_io() {
     assert_eq!(fetch.target(), fetch_target);
     assert_eq!(fetch.on_conflict(), FetchContentConflict::Replace);
 
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+    let report = dry_run::build_report(&plan);
 
     assert_eq!(report.status, ReportStatus::Planned);
     assert_eq!(report.items.len(), 1);
@@ -426,18 +420,10 @@ target = "configs/app.toml"
 
 #[cfg(unix)]
 #[test]
-fn fetch_targets_keep_entry_real_and_absolute_path_semantics_through_execution_planning() {
-    use std::os::unix::fs::symlink;
-
+fn fetch_targets_keep_lexical_canonical_and_absolute_directory_semantics() {
     let workspace = tempfile::tempdir().expect("temporary workspace should be created");
     let entry_dir = workspace.path().join("entry");
     let real_dir = workspace.path().join("real");
-    std::fs::create_dir_all(&entry_dir).expect("entry directory should be created");
-    std::fs::create_dir_all(&real_dir).expect("real directory should be created");
-    let real_config = real_dir.join("dot.toml");
-    std::fs::write(&real_config, "").expect("real config should be written");
-    let entry_config = entry_dir.join("dot.toml");
-    symlink(&real_config, &entry_config).expect("config entry symlink should be created");
     let absolute = workspace.path().join("absolute/config.toml");
     let input = format!(
         r#"
@@ -465,13 +451,7 @@ target = "${{dot:real_config_dir}}/configs/real.toml"
         .expect("test manifest should select");
     let environment = environment();
     let xdg = XdgPaths::detect();
-    let dot_paths = DotPaths::new(
-        &entry_config,
-        &entry_dir,
-        &real_config,
-        &real_dir,
-        workspace.path(),
-    );
+    let dot_paths = DotPaths::new(&entry_dir, &real_dir, workspace.path());
 
     let plan = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform)
         .plan(&manifest, &JobSelection::All)
@@ -647,7 +627,7 @@ fn rejects_selected_expression_errors_at_their_existing_consumers() {
 #[test]
 fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let path = fixture::path("selection/valid-selected-provider-runtime-errors.toml");
-    let loaded = dot::native::ConfigFile::load(dot::native::ConfigLocation::Path(path.clone()))
+    let loaded = dot::native::load_config(dot::native::ConfigLocation::Path(path.clone()))
         .expect("the complete config should validate");
     let platform = platform();
     let target = selector_id("machine");
@@ -659,7 +639,7 @@ fn selected_provider_package_runtime_errors_identify_the_exact_install_field() {
     let config_dir = path.parent().expect("fixture path should have a parent");
     let planner = ExecutionPlanner::new(
         &environment,
-        DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD)),
+        DotPaths::new(config_dir, config_dir, Path::new(TEST_CWD)),
         &xdg,
         &platform,
     );
@@ -811,7 +791,7 @@ fn projects_one_dry_run_item_per_provider_install_unit() {
     let plan = planner
         .plan(&manifest, &JobSelection::All)
         .expect("execution should plan");
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+    let report = dry_run::build_report(&plan);
 
     assert_eq!(report.items.len(), 4);
     assert_eq!(report.items[1].id, "alpha");
@@ -970,7 +950,7 @@ fn projects_a_resolved_plan_to_one_report_item_per_logical_object() {
     let plan = planner
         .plan(&manifest, &JobSelection::All)
         .expect("execution should plan");
-    let report = dry_run::build_report(Path::new(TEST_CONFIG), &plan);
+    let report = dry_run::build_report(&plan);
 
     assert_eq!(report.command, ReportCommand::DryRun);
     assert_eq!(report.status, ReportStatus::Planned);

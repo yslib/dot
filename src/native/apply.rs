@@ -1,11 +1,9 @@
-use std::path::Path;
-
+use crate::ConfigFile;
 use crate::interpolation::DotPaths;
 use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::native::command_action::{
     ActionStage, CommandActionOutcome, CommandActionRunError, FetchContentOutcome,
 };
-use crate::native::config_file::ConfigFile;
 use crate::native::diagnostic::lookup;
 use crate::native::job_execution::{
     ActionOutcome, BlockReason, JobExecutionReport, JobOutcome, JobRunner, JobState,
@@ -50,7 +48,7 @@ pub fn apply(
     let plan = planner.plan(&manifest, &selection.jobs)?;
     let execution = JobRunner::new(runtime.environment()).run(&plan);
 
-    Ok(build_report(config.path(), &plan, &execution))
+    Ok(build_report(&plan, &execution))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,11 +60,7 @@ pub enum ApplyError {
     Plan(#[from] crate::native::plan::ExecutionPlanError),
 }
 
-fn build_report(
-    config: &Path,
-    plan: &ExecutionPlan,
-    execution: &JobExecutionReport,
-) -> CommandReport {
+fn build_report(plan: &ExecutionPlan, execution: &JobExecutionReport) -> CommandReport {
     let items = plan
         .jobs()
         .iter()
@@ -90,7 +84,6 @@ fn build_report(
     CommandReport {
         command: ReportCommand::Apply,
         context: ReportContext {
-            config: config.to_owned(),
             target: plan.target().to_owned(),
             profile: plan.profile().map(str::to_owned),
             platform: plan.platform().clone(),
@@ -482,8 +475,9 @@ mod tests {
     static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
     fn run(path: &Path, selection: &ExecutionSelection) -> Result<CommandReport, ApplyError> {
-        let config = ConfigFile::load(crate::native::ConfigLocation::Path(path.to_owned()))
-            .expect("test config should load");
+        let config =
+            crate::native::load_config(crate::native::ConfigLocation::Path(path.to_owned()))
+                .expect("test config should load");
         let runtime = NativeRuntime::detect();
         apply(&config, &runtime, selection)
     }

@@ -1,11 +1,9 @@
-use std::path::Path;
-
+use crate::ConfigFile;
 use crate::interpolation::DotPaths;
 use crate::manifest::{EffectiveManifest, ManifestError};
 use crate::platform::PlatformInfo;
 use crate::selection::ExecutionSelection;
 
-use super::config_file::ConfigFile;
 use super::plan::{
     ExecutionPlan, ExecutionPlanError, ExecutionPlanner, PlannedAction, PlannedActionKind,
     PlannedJob, PlannedLink, PlannedManualPackage, PlannedPackage, PlannedProvider,
@@ -38,7 +36,7 @@ pub fn dry_run(
     );
     let plan = planner.plan(&manifest, &selection.jobs)?;
 
-    Ok(build_report(config.path(), &plan))
+    Ok(build_report(&plan))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +48,7 @@ pub enum DryRunError {
     Plan(#[from] ExecutionPlanError),
 }
 
-pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
+pub fn build_report(plan: &ExecutionPlan) -> CommandReport {
     let items = plan
         .jobs()
         .iter()
@@ -68,7 +66,6 @@ pub fn build_report(config: &Path, plan: &ExecutionPlan) -> CommandReport {
     CommandReport {
         command: ReportCommand::DryRun,
         context: ReportContext {
-            config: config.to_owned(),
             target: plan.target().to_owned(),
             profile: plan.profile().map(str::to_owned),
             platform: plan.platform().clone(),

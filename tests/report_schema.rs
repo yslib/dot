@@ -47,7 +47,6 @@ fn command_info_distinguishes_source_spelling_from_resolved_values() {
 
 fn context() -> ReportContext {
     ReportContext {
-        config: PathBuf::from("/repo/dot.toml"),
         target: "arch".to_owned(),
         profile: Some("laptop".to_owned()),
         platform: PlatformInfo {

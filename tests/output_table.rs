@@ -29,7 +29,6 @@ fn report() -> CommandReport {
     CommandReport {
         command: ReportCommand::Apply,
         context: ReportContext {
-            config: PathBuf::from("/repo/dot.toml"),
             target: "arch".to_owned(),
             profile: Some("laptop".to_owned()),
             platform: PlatformInfo {

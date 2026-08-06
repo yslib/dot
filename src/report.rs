@@ -32,7 +32,6 @@ pub enum ReportCommand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportContext {
-    pub config: PathBuf,
     pub target: String,
     pub profile: Option<String>,
     pub platform: PlatformInfo,

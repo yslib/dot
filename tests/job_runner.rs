@@ -104,11 +104,8 @@ fn plan_fixture(
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::empty();
     let xdg = XdgPaths::detect();
-    let config_path = workspace.path("dot.toml");
     let dot_paths = DotPaths::new(
-        &config_path,
         &workspace.directory,
-        &config_path,
         &workspace.directory,
         &workspace.directory,
     );

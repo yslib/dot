@@ -8,6 +8,7 @@ pub use environment::ExecutionEnvironment;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::ConfigFile;
 use crate::schema::{
     EnvironmentPatch, ExecAction, ExpressionParseError, FlatListPart, ListType, LiteralString,
     LiteralStringSource, OneOrMany, ParsedStringForm, ParsedTemplate as ParsedStringTemplate,
@@ -21,25 +22,15 @@ use resolver::{ResolverEntry, ResolverKind, lookup_resolver};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DotPaths<'a> {
-    config: &'a Path,
     config_dir: &'a Path,
-    real_config: &'a Path,
     real_config_dir: &'a Path,
     cwd: &'a Path,
 }
 
 impl<'a> DotPaths<'a> {
-    pub const fn new(
-        config: &'a Path,
-        config_dir: &'a Path,
-        real_config: &'a Path,
-        real_config_dir: &'a Path,
-        cwd: &'a Path,
-    ) -> Self {
+    pub const fn new(config_dir: &'a Path, real_config_dir: &'a Path, cwd: &'a Path) -> Self {
         Self {
-            config,
             config_dir,
-            real_config,
             real_config_dir,
             cwd,
         }
@@ -52,9 +43,7 @@ impl<'a> DotPaths<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DotPath {
-    Config,
     ConfigDir,
-    RealConfig,
     RealConfigDir,
     Cwd,
 }
@@ -62,9 +51,7 @@ enum DotPath {
 impl DotPath {
     fn from_payload(payload: &str) -> Option<Self> {
         match payload {
-            "config" => Some(Self::Config),
             "config_dir" => Some(Self::ConfigDir),
-            "real_config" => Some(Self::RealConfig),
             "real_config_dir" => Some(Self::RealConfigDir),
             "cwd" => Some(Self::Cwd),
             _ => None,
@@ -75,12 +62,16 @@ impl DotPath {
 impl DotPaths<'_> {
     fn get(&self, path: DotPath) -> &Path {
         match path {
-            DotPath::Config => self.config,
             DotPath::ConfigDir => self.config_dir,
-            DotPath::RealConfig => self.real_config,
             DotPath::RealConfigDir => self.real_config_dir,
             DotPath::Cwd => self.cwd,
         }
+    }
+}
+
+impl<'a> From<&'a ConfigFile> for DotPaths<'a> {
+    fn from(config: &'a ConfigFile) -> Self {
+        Self::new(config.config_dir(), config.real_config_dir(), config.cwd())
     }
 }
 
@@ -733,7 +724,7 @@ mod tests {
 
     use directories::{BaseDirs, UserDirs};
 
-    use crate::native::{ConfigFile, ConfigLocation, NativeRuntime};
+    use crate::native::{ConfigLocation, NativeRuntime, load_config};
     use crate::schema::{
         EnvironmentName, EnvironmentPatch, ExecAction, FlatListPart, ListType, LiteralStringSource,
         OneOrMany, ParsedStringForm, ProviderInstallArgSource, ResolvedString, StringExpression,
@@ -754,9 +745,7 @@ mod tests {
 
     fn dot_paths() -> DotPaths<'static> {
         DotPaths::new(
-            Path::new("/repo/dot.toml"),
             Path::new("/repo"),
-            Path::new("/canonical/repo/dot.toml"),
             Path::new("/canonical/repo"),
             Path::new("/work"),
         )
@@ -960,45 +949,53 @@ mod tests {
     }
 
     #[test]
-    fn dot_resolver_produces_entry_entity_and_invocation_paths() {
+    fn dot_resolver_produces_configuration_directories_and_invocation_path() {
         let environment = environment(&[]);
         let xdg = xdg_paths(&[]);
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
-        let template = StringExpressionSource::from(
-            "${dot:config}|${dot:config_dir}|${dot:real_config}|${dot:real_config_dir}|${dot:cwd}",
-        );
+        let template =
+            StringExpressionSource::from("${dot:config_dir}|${dot:real_config_dir}|${dot:cwd}");
 
         assert_eq!(
             resolve_string_expression(&template, &context)
                 .expect("template should resolve")
                 .value(),
-            "/repo/dot.toml|/repo|/canonical/repo/dot.toml|/canonical/repo|/work"
+            "/repo|/canonical/repo|/work"
         );
     }
 
     #[test]
-    fn dot_paths_from_loaded_config_exposes_canonical_paths() {
+    fn removed_dot_file_path_payloads_are_rejected() {
+        for payload in ["config", "real_config"] {
+            assert_eq!(
+                promote_string_expression(&StringExpressionSource::from(format!(
+                    "${{dot:{payload}}}"
+                ))),
+                Err(InterpolationError::InvalidResolverPayload {
+                    resolver: "dot".into(),
+                    payload: payload.into(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn dot_paths_from_loaded_config_exposes_the_canonical_directory() {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dot.toml");
-        let config = ConfigFile::load(ConfigLocation::Path(fixture)).expect("fixture should load");
+        let config = load_config(ConfigLocation::Path(fixture)).expect("fixture should load");
         let runtime = NativeRuntime::detect();
         let xdg = xdg_paths(&[]);
         let context = ResolveContext::new(runtime.environment(), DotPaths::from(&config), &xdg);
 
-        let real_config = resolve_string_expression(
-            &StringExpressionSource::from("${dot:real_config}"),
-            &context,
-        )
-        .expect("real config path should resolve");
         let real_config_dir = resolve_string_expression(
             &StringExpressionSource::from("${dot:real_config_dir}"),
             &context,
         )
         .expect("real config directory should resolve");
 
-        assert_eq!(PathBuf::from(real_config.value()), config.real_path());
         assert_eq!(
             PathBuf::from(real_config_dir.value()),
-            config.real_directory()
+            config.real_config_dir()
         );
     }
 
@@ -1008,9 +1005,7 @@ mod tests {
         let environment = environment(&[]);
         let xdg = xdg_paths(&[]);
         let dot = DotPaths::new(
-            Path::new(r"C:\entry\.dot.toml"),
             Path::new(r"C:\entry"),
-            Path::new(r"\\?\C:\repo\.dot.toml"),
             Path::new(r"\\?\C:\repo"),
             Path::new(r"C:\work"),
         );
@@ -1068,7 +1063,10 @@ mod tests {
         let context = ResolveContext::new(&environment, dot_paths(), &xdg);
         let action = ExecAction {
             program: "${env:PROBE}".into(),
-            args: vec!["--config=${dot:config}".into(), "${xdg:documents}".into()],
+            args: vec![
+                "--config-dir=${dot:config_dir}".into(),
+                "${xdg:documents}".into(),
+            ],
             cwd: Some("${dot:cwd}".into()),
             env: Some(EnvironmentPatch {
                 path_prepend: None,
@@ -1089,7 +1087,7 @@ mod tests {
                 .iter()
                 .map(ResolvedString::value)
                 .collect::<Vec<_>>(),
-            vec!["--config=/repo/dot.toml", "/home/tester/Documents"]
+            vec!["--config-dir=/repo", "/home/tester/Documents"]
         );
         assert_eq!(resolved.cwd.as_ref().unwrap().value(), "/work");
         assert_eq!(
@@ -1246,7 +1244,7 @@ mod tests {
             args: vec![
                 "install".into(),
                 "${package:provider_args}".into(),
-                "--config=${dot:config}".into(),
+                "--config-dir=${dot:config_dir}".into(),
                 "${package:names}".into(),
             ],
             cwd: Some("${dot:cwd}".into()),
@@ -1267,7 +1265,7 @@ mod tests {
                 "install",
                 "--cask",
                 "--force",
-                "--config=/repo/dot.toml",
+                "--config-dir=/repo",
                 "font-one",
                 "font-two",
             ]

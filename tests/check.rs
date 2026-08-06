@@ -8,7 +8,7 @@ use dot::interpolation::{DotPaths, ExecutionEnvironment, InterpolationError, Xdg
 use dot::native::provider_check::{
     ProviderChecker, ProviderProbeError, ProviderReadiness, build_report,
 };
-use dot::native::{ConfigFile, ConfigLocation, NativeRuntime};
+use dot::native::{ConfigLocation, NativeRuntime, load_config};
 use dot::platform::PlatformInfo;
 use dot::report::{EvidenceStage, ItemStatus, ReportCommand, ReportStatus};
 use dot::schema::{
@@ -72,13 +72,7 @@ fn base_environment() -> ExecutionEnvironment {
 }
 
 fn dot_paths() -> DotPaths<'static> {
-    DotPaths::new(
-        Path::new("/repo/dot.toml"),
-        Path::new("/repo"),
-        Path::new("/repo/dot.toml"),
-        Path::new("/repo"),
-        Path::new("/work"),
-    )
+    DotPaths::new(Path::new("/repo"), Path::new("/repo"), Path::new("/work"))
 }
 
 fn platform() -> PlatformInfo {
@@ -103,7 +97,7 @@ fn high_level_provider_check_projects_an_empty_selected_manifest() {
         ),
     )
     .expect("test configuration should be written");
-    let config = ConfigFile::load(ConfigLocation::Path(path)).expect("config should load");
+    let config = load_config(ConfigLocation::Path(path)).expect("config should load");
     let runtime = NativeRuntime::detect();
     let scope = ScopeSelection {
         target: Some("machine".try_into().expect("target should be valid")),
@@ -171,14 +165,7 @@ fn projects_readiness_and_captured_output_to_structured_evidence() {
     let checker = ProviderChecker::new(&environment, dot_paths(), &xdg);
 
     let checks = checker.check(&providers);
-    let report = build_report(
-        Path::new("/repo/dot.toml"),
-        "machine",
-        None,
-        &platform(),
-        &providers,
-        &checks,
-    );
+    let report = build_report("machine", None, &platform(), &providers, &checks);
 
     assert_eq!(report.command, ReportCommand::CheckProviders);
     assert_eq!(report.status, ReportStatus::Failed);

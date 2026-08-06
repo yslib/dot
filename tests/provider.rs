@@ -163,13 +163,12 @@ fn plan_for(providers: Vec<(&str, Provider)>) -> ExecutionPlan {
         .expect("test manifest should select");
     let environment = ExecutionEnvironment::empty();
     let xdg = XdgPaths::detect();
-    let config_path = Path::new("/tmp/dot-provider-test/dot.toml");
     let config_dir = Path::new("/tmp/dot-provider-test");
     let cwd = Path::new("/tmp");
 
     ExecutionPlanner::new(
         &environment,
-        DotPaths::new(config_path, config_dir, config_path, config_dir, cwd),
+        DotPaths::new(config_dir, config_dir, cwd),
         &xdg,
         &platform,
     )

@@ -4,12 +4,13 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
+use dot::ConfigFileError;
 use dot::interpolation::InterpolationError;
 use dot::job::{JobSelector, JobSelectorParseError};
 use dot::manifest::ManifestError;
-use dot::native::ConfigFileError;
+use dot::native::ConfigLoadError;
 use dot::native::command_action::{ActionStage, CommandActionRunError};
-use dot::native::config_file::ConfigDiscoveryError;
+use dot::native::config_loader::ConfigDiscoveryError;
 use dot::native::diagnostic::Operation;
 use dot::native::link::{LinkError, LinkPhaseError};
 use dot::native::plan::{JobSelectionError, PlanningError};
@@ -161,32 +162,27 @@ fn provider_check_errors_expose_their_wrapper_errors() {
 }
 
 #[test]
-fn config_discovery_errors_expose_io_errors() {
-    let errors = [
-        ConfigDiscoveryError::CurrentDirectory { source: io_error() },
-        ConfigDiscoveryError::Inspect {
-            path: PathBuf::from("candidate"),
-            source: io_error(),
-        },
-    ];
+fn config_discovery_inspect_error_exposes_its_io_error() {
+    let error = ConfigDiscoveryError::Inspect {
+        path: PathBuf::from("candidate"),
+        source: io_error(),
+    };
 
-    for error in &errors {
-        assert_source_is::<io::Error>(error);
-    }
+    assert_source_is::<io::Error>(&error);
 }
 
 #[test]
 fn config_load_errors_expose_their_immediate_errors() {
-    let current_directory = ConfigFileError::CurrentDirectory { source: io_error() };
-    let canonicalize = ConfigFileError::Canonicalize {
+    let current_directory = ConfigLoadError::CurrentDirectory { source: io_error() };
+    let canonicalize = ConfigLoadError::Canonicalize {
         path: PathBuf::from("dot.toml"),
         source: io_error(),
     };
-    let read = ConfigFileError::Read {
+    let read = ConfigLoadError::Read {
         path: PathBuf::from("dot.toml"),
         source: io_error(),
     };
-    let parse = ConfigFileError::Parse {
+    let parse = ConfigLoadError::Parse {
         path: PathBuf::from("dot.toml"),
         source: toml_error(),
     };
@@ -199,7 +195,7 @@ fn config_load_errors_expose_their_immediate_errors() {
 
 #[test]
 fn config_load_validation_preserves_all_three_immediate_source_layers() {
-    let error = ConfigFileError::Validation {
+    let error = ConfigLoadError::Validation {
         path: PathBuf::from("dot.toml"),
         source: validation_error(ConfigValidationErrorKind::Expression(interpolation_error())),
     };
@@ -207,6 +203,15 @@ fn config_load_validation_preserves_all_three_immediate_source_layers() {
     let validation = assert_source_is::<ConfigValidationError>(&error);
     let kind = assert_source_is::<ConfigValidationErrorKind>(validation);
     assert_source_is::<InterpolationError>(kind);
+}
+
+#[test]
+fn config_load_errors_expose_protocol_construction_errors() {
+    let error = ConfigLoadError::ConfigFile(ConfigFileError::RelativeCwd {
+        path: PathBuf::from("relative"),
+    });
+
+    assert_source_is::<ConfigFileError>(&error);
 }
 
 #[test]

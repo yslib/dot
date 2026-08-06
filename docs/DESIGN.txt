@@ -43,23 +43,23 @@ general-purpose configuration or execution DSL.
 
 Configuration discovery or `--config` selects one filesystem entry. dot first
 converts that selection to an absolute path without following symbolic links;
-this retained entry path is the source of `${dot:config}`, and its parent is
+its parent becomes the lexical configuration directory exposed by
 `${dot:config_dir}`.
 
 Loading then eagerly calls `std::fs::canonicalize` on the entry path before
-reading the file. The canonical result is the filesystem entity path exposed
-as `${dot:real_config}`, and its parent is `${dot:real_config_dir}`. A broken,
-dangling, or otherwise unresolvable entry fails loading for every command,
-whether or not the configuration uses either real-path resolver. Reading and
-subsequent parse or validation diagnostics continue to identify the selected
-entry path.
+reading the file. The canonical result's parent becomes the canonical
+configuration directory exposed by `${dot:real_config_dir}`. A broken,
+dangling, or otherwise unresolvable entry fails loading for every command.
+Reading and subsequent parse or validation diagnostics continue to identify
+the selected entry path.
 
-Canonical entity paths retain the exact spelling returned by Rust and the host
-operating system. In particular, Windows canonicalization may return a
-verbatim `\\?\` path; dot does not strip or normalize that prefix.
-These retained facts are native paths. Like every path-to-string resolver, a
-`dot` path resolver uses `Path::to_str()` without lossy replacement and fails
-at resolution time if that exact path is not Unicode-representable.
+The canonical configuration directory retains the spelling inherited from the
+path returned by Rust and the host operating system. In particular, Windows
+canonicalization may return a verbatim `\\?\` path; dot does not strip or
+normalize that prefix. The retained directories are native paths. Like every
+path-to-string resolver, a `dot` path resolver uses `Path::to_str()` without
+lossy replacement and fails at resolution time if that exact path is not
+Unicode-representable.
 
 
 ### target
@@ -548,11 +548,7 @@ v0.1.0 statically defines only these resolver calls:
 - ${package:names}: the complete package-name list for the current provider
   install unit;
 - ${package:provider_args}: the provider argument list for that install unit;
-- ${dot:config}: absolute selected configuration entry path, retaining a
-  selected symlink path;
 - ${dot:config_dir}: parent directory of that entry path;
-- ${dot:real_config}: string form of the canonical filesystem entity path
-  retained exactly as returned by Rust/OS canonicalization;
 - ${dot:real_config_dir}: string form of that canonical entity path's parent
   directory;
 - ${dot:cwd}: working directory from which dot was started;
@@ -580,8 +576,9 @@ Resolver availability is contextual:
   package:provider_args.
 
 Resolution receives an explicit context containing the current effective
-child environment, dot invocation entry and canonical entity paths, a snapshot
-of standard user directories, and an optional provider-package install unit.
+child environment, lexical and canonical configuration directories, captured
+invocation directory, a snapshot of standard user directories, and an optional
+provider-package install unit.
 Environment patches are resolved against the effective environment that exists
 immediately before that patch is applied. Later stages therefore observe
 successful provider activation changes without introducing implicit global
@@ -938,8 +935,7 @@ Every successfully constructed command result is represented in memory by one
 CommandReport before presentation. It contains:
 
 - the command kind: dry-run, apply, or check providers;
-- context: absolute configuration entry path, target, optional profile, and
-  PlatformInfo;
+- context: target, optional profile, and PlatformInfo;
 - overall status: PLANNED, SUCCESS, or FAILED;
 - one logical item per provider or user job in the selected execution closure,
   or one item per effective provider for provider check;
@@ -986,8 +982,8 @@ its row order is not guaranteed.
 1. Make the selected configuration entry absolute, canonicalize it eagerly,
    read the canonical entity, parse all TOML records structurally, promote
    every source expression, and validate provider rules against every
-   effective target-root/profile merge. Diagnostics and later report metadata
-   retain the entry path.
+   effective target-root/profile merge. Loading diagnostics retain the entry
+   path.
 2. Detect the platform, select one compatible target and zero or one profile,
    and reject ambiguity or incompatibility.
 3. Overlay target and profile declarations from root to the selected node,

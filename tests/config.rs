@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use dot::config::ConfigParseError;
 use dot::manifest::ManifestError;
-use dot::native::{ConfigFile, ConfigFileError, ConfigLocation, NativeRuntime};
+use dot::native::{ConfigLoadError, ConfigLocation, NativeRuntime, load_config};
 use dot::platform::PlatformInfo;
 use dot::schema::Config;
 use dot::validation::{ConfigValidationError, ConfigValidationErrorKind};
@@ -166,8 +166,8 @@ fn memory_parsing_matches_path_loading_for_the_same_fixture() {
     let source = fs::read_to_string(&fixture_path).expect("fixture should be readable");
 
     let parsed = Config::parse(&source).expect("fixture should parse from memory");
-    let loaded = ConfigFile::load(ConfigLocation::Path(fixture_path))
-        .expect("fixture should load from path");
+    let loaded =
+        load_config(ConfigLocation::Path(fixture_path)).expect("fixture should load from path");
 
     assert_eq!(&parsed, loaded.config());
 }
@@ -177,23 +177,20 @@ fn loads_a_relative_manifest_with_its_path_context() {
     let invocation_cwd = env::current_dir().expect("test should have a current directory");
     let (relative_path, expected_path) = relative_fixture("dot.toml");
 
-    let loaded =
-        ConfigFile::load(ConfigLocation::Path(relative_path)).expect("fixture should load");
+    let loaded = load_config(ConfigLocation::Path(relative_path)).expect("fixture should load");
 
     assert_eq!(loaded.config().targets.len(), 6);
-    assert_eq!(loaded.path(), expected_path);
-    assert!(loaded.path().is_absolute());
-    assert_eq!(loaded.directory(), expected_path.parent().unwrap());
+    assert_eq!(loaded.config_dir(), expected_path.parent().unwrap());
+    assert!(loaded.config_dir().is_absolute());
     let expected_real_path =
         fs::canonicalize(&expected_path).expect("fixture path should canonicalize");
-    assert_eq!(loaded.real_path(), expected_real_path);
     assert_eq!(
-        loaded.real_directory(),
+        loaded.real_config_dir(),
         expected_real_path
             .parent()
             .expect("canonical fixture should have a parent")
     );
-    assert_eq!(loaded.invocation_cwd(), invocation_cwd);
+    assert_eq!(loaded.cwd(), invocation_cwd);
 }
 
 #[test]
@@ -207,11 +204,11 @@ fn detects_native_runtime_independently_from_config_loading() {
 fn reports_the_entry_path_when_a_manifest_cannot_be_canonicalized() {
     let (relative_path, expected_path) = relative_fixture("config/does-not-exist.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(relative_path))
-        .expect_err("missing fixture should fail");
+    let error =
+        load_config(ConfigLocation::Path(relative_path)).expect_err("missing fixture should fail");
 
     match &error {
-        ConfigFileError::Canonicalize { path, source } => {
+        ConfigLoadError::Canonicalize { path, source } => {
             assert_eq!(path, &expected_path);
             assert_eq!(source.kind(), ErrorKind::NotFound);
         }
@@ -229,11 +226,11 @@ fn reports_the_entry_path_when_a_manifest_cannot_be_canonicalized() {
 fn reports_the_manifest_path_when_toml_is_invalid() {
     let (relative_path, expected_path) = relative_fixture("config/invalid-syntax.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(relative_path))
-        .expect_err("invalid fixture should fail");
+    let error =
+        load_config(ConfigLocation::Path(relative_path)).expect_err("invalid fixture should fail");
 
     match &error {
-        ConfigFileError::Parse { path, .. } => assert_eq!(path, &expected_path),
+        ConfigLoadError::Parse { path, .. } => assert_eq!(path, &expected_path),
         other => panic!("expected a parse error, got {other:?}"),
     }
     assert!(
@@ -249,11 +246,11 @@ fn reports_the_absolute_path_when_the_complete_manifest_is_invalid() {
     let (relative_path, expected_path) =
         relative_fixture("manifest/invalid-duplicate-profile-name.toml");
 
-    let error = ConfigFile::load(ConfigLocation::Path(relative_path))
+    let error = load_config(ConfigLocation::Path(relative_path))
         .expect_err("duplicate profiles must fail validation");
 
     match &error {
-        ConfigFileError::Validation { path, source } => {
+        ConfigLoadError::Validation { path, source } => {
             assert_eq!(path, &expected_path);
             assert!(matches!(
                 &source.kind,

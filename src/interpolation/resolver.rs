@@ -43,10 +43,7 @@ impl ResolverEntry {
     pub(super) fn validate_payload(&self, payload: &str) -> bool {
         match self.kind {
             ResolverKind::Environment => EnvironmentName::new(payload).is_ok(),
-            ResolverKind::DotPath => matches!(
-                payload,
-                "config" | "config_dir" | "real_config" | "real_config_dir" | "cwd"
-            ),
+            ResolverKind::DotPath => matches!(payload, "config_dir" | "real_config_dir" | "cwd"),
             ResolverKind::XdgPath => matches!(
                 payload,
                 "home"
@@ -154,7 +151,11 @@ mod tests {
 
         assert!(registry["env"].validate_payload("HOME"));
         assert!(!registry["env"].validate_payload(""));
-        assert!(registry["dot"].validate_payload("real_config_dir"));
+        for payload in ["config_dir", "real_config_dir", "cwd"] {
+            assert!(registry["dot"].validate_payload(payload));
+        }
+        assert!(!registry["dot"].validate_payload("config"));
+        assert!(!registry["dot"].validate_payload("real_config"));
         assert!(!registry["dot"].validate_payload("home"));
         assert!(registry["xdg"].validate_payload("executable"));
         assert!(!registry["xdg"].validate_payload("repository"));

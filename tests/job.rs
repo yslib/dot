@@ -11,15 +11,11 @@ use dot::native::plan::{
     ExecutionPlan, ExecutionPlanError, ExecutionPlanner, JobSelectionError, PlannedJob,
     PlanningError,
 };
-use dot::native::{ConfigFile, ConfigLocation};
+use dot::native::{ConfigLocation, load_config};
 use dot::platform::PlatformInfo;
 use dot::schema::{Config, Identifier, SelectorIdentifier, SelectorIdentifierError};
 use support::fixture;
 
-#[cfg(not(windows))]
-const TEST_CONFIG: &str = "/repo/dot.toml";
-#[cfg(windows)]
-const TEST_CONFIG: &str = r"C:\repo\dot.toml";
 #[cfg(not(windows))]
 const TEST_CONFIG_DIR: &str = "/repo";
 #[cfg(windows)]
@@ -73,9 +69,7 @@ fn plan_named_fixture(name: &str, selection: &JobSelection) -> ExecutionPlan {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let dot_paths = DotPaths::new(
-        Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
-        Path::new(TEST_CONFIG),
         Path::new(TEST_CONFIG_DIR),
         Path::new(TEST_CWD),
     );
@@ -211,7 +205,7 @@ fn job_selection_errors_use_canonical_job_selectors() {
 #[test]
 fn selected_link_does_not_resolve_an_unselected_action() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let loaded = load_config(ConfigLocation::Path(path.clone()))
         .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
@@ -221,7 +215,7 @@ fn selected_link_does_not_resolve_an_unselected_action() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(config_dir, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
 
     let plan = planner
@@ -375,9 +369,7 @@ fn unknown_typed_selector_fails_before_planning() {
     let planner = ExecutionPlanner::new(
         &environment,
         DotPaths::new(
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),
         ),
@@ -415,7 +407,7 @@ fn execution_plan_error_exposes_its_contained_error_as_the_immediate_source() {
 #[test]
 fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let loaded = load_config(ConfigLocation::Path(path.clone()))
         .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
@@ -425,7 +417,7 @@ fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(config_dir, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
     let selection = JobSelection::Only(BTreeSet::from([
         JobSelector::Action(selector_id("setup-editor")),
@@ -458,9 +450,7 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
     let planner = ExecutionPlanner::new(
         &environment,
         DotPaths::new(
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),
         ),
@@ -487,7 +477,7 @@ fn selected_provider_package_reports_a_missing_provider_before_promotion() {
 #[test]
 fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
-    let loaded = ConfigFile::load(ConfigLocation::Path(path.clone()))
+    let loaded = load_config(ConfigLocation::Path(path.clone()))
         .expect("the complete config should validate statically");
     let platform = platform();
     let target = selector_id("machine");
@@ -497,7 +487,7 @@ fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
     let environment = environment();
     let xdg = XdgPaths::detect();
     let config_dir = path.parent().expect("fixture path should have a parent");
-    let dot_paths = DotPaths::new(&path, config_dir, &path, config_dir, Path::new(TEST_CWD));
+    let dot_paths = DotPaths::new(config_dir, config_dir, Path::new(TEST_CWD));
     let planner = ExecutionPlanner::new(&environment, dot_paths, &xdg, &platform);
 
     let selection = JobSelection::Only(BTreeSet::from([
@@ -535,9 +525,7 @@ fn multiple_unknown_selectors_are_rejected_before_planning() {
     let planner = ExecutionPlanner::new(
         &environment,
         DotPaths::new(
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
-            Path::new(TEST_CONFIG),
             Path::new(TEST_CONFIG_DIR),
             Path::new(TEST_CWD),
         ),

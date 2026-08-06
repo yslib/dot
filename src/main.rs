@@ -9,7 +9,7 @@ use clap::{Args, CommandFactory, Error, Parser, Subcommand};
 use dot::inspect::{InspectError, Inspector};
 use dot::job::{JobSelection, JobSelector};
 use dot::native::{
-    ConfigFile, ConfigLocation, NativeRuntime, TerminalRenderer, apply, check_providers, dry_run,
+    ConfigLocation, NativeRuntime, TerminalRenderer, apply, check_providers, dry_run, load_config,
 };
 use dot::output::{TsvRecord, TsvRenderer};
 use dot::platform::PlatformInfo;
@@ -59,7 +59,7 @@ impl Cli {
         let location = self
             .config
             .map_or(ConfigLocation::Discover, ConfigLocation::Path);
-        let config = match ConfigFile::load(location) {
+        let config = match load_config(location) {
             Ok(config) => config,
             Err(error) => return command_error(error),
         };

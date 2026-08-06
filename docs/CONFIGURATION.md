@@ -26,11 +26,13 @@ After selection, `dot` makes the selected path absolute without following
 symbolic links. This is the **entry path**: when a symlink was selected, it is
 the absolute symlink path. Loading then eagerly calls
 `std::fs::canonicalize`, reads the resulting **canonical entity path**, and
-retains both paths and their parent directories. A dangling or otherwise
-unresolvable entry therefore fails every command during loading, even when the
-configuration never uses a `real_config` resolver. Canonical path spelling is
-kept exactly as the host Rust/OS filesystem API returns it. Read, parse, and
-validation diagnostics continue to identify the entry path.
+retains the entry path's parent as `${dot:config_dir}` and the canonical path's
+parent as `${dot:real_config_dir}`. The configuration protocol also retains the
+captured invocation directory as `${dot:cwd}`; it retains neither file path. A
+dangling or otherwise unresolvable entry therefore fails every command during
+loading. Canonical directory spelling is inherited exactly from the host
+Rust/OS filesystem API. Read, parse, and validation diagnostics continue to
+identify the entry path.
 
 ## Type index
 
@@ -1026,9 +1028,7 @@ package:provider_args   -> list<string>
 | Resolver form | Resolved value |
 | --- | --- |
 | `${env:NAME}` | `NAME` from the current effective child environment |
-| `${dot:config}` | absolute selected configuration entry path; remains the symlink path when that entry is a symlink |
 | `${dot:config_dir}` | parent directory of the selected entry path |
-| `${dot:real_config}` | string form of the canonical filesystem entity path retained exactly as returned by Rust/OS canonicalization |
 | `${dot:real_config_dir}` | string form of the canonical entity path's parent directory |
 | `${dot:cwd}` | working directory from which dot was started |
 | `${xdg:home}` | current user's home directory |
@@ -1043,11 +1043,11 @@ package:provider_args   -> list<string>
 | `${xdg:documents}` | current user's Documents directory, when available |
 
 The `dot` values describe the current invocation. Configuration loading always
-computes both entry and canonical entity paths before any resolver evaluation;
-using `${dot:real_config}` is not what triggers canonicalization. On Windows,
-the real path values can contain the verbatim `\\?\` prefix returned by the
-host API. All five `dot` path calls share the same string-valued availability
-shown below. Like every path-to-string resolver, `dot` and `xdg` use Rust's
+computes the lexical entry directory and canonical entity directory before any
+resolver evaluation. On Windows, the real directory can contain the verbatim
+`\\?\` prefix returned by the host API. All three `dot` path calls share the
+same string-valued availability shown below. Like every path-to-string
+resolver, `dot` and `xdg` use Rust's
 `Path::to_str()` boundary without lossy replacement; resolution fails when a
 path is not Unicode-representable. The `xdg` vocabulary follows XDG directories
 on Linux and platform-standard equivalents on Windows and macOS. A missing
