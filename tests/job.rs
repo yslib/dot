@@ -302,10 +302,62 @@ fn all_includes_every_effective_provider_and_job() {
         plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
         [
             JobId::Provider(provider_id("system")),
-            JobId::Package(selector_id("alpha")),
             JobId::Package(selector_id("manual")),
+            JobId::Package(selector_id("alpha")),
             JobId::Action(selector_id("configure")),
             JobId::Link(selector_id("gitconfig")),
+        ]
+    );
+}
+
+#[test]
+fn complete_plan_uses_declaration_order_with_provider_grouped_packages() {
+    let plan = plan_named_fixture("jobs/valid-declaration-order.toml", &JobSelection::All);
+
+    assert_eq!(
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
+        [
+            JobId::Provider(provider_id("zulu")),
+            JobId::Provider(provider_id("alpha")),
+            JobId::Package(selector_id("manual-zulu")),
+            JobId::Package(selector_id("manual-alpha")),
+            JobId::Package(selector_id("zulu-first")),
+            JobId::Package(selector_id("zulu-second")),
+            JobId::Package(selector_id("alpha-first")),
+            JobId::Package(selector_id("alpha-second")),
+            JobId::Action(selector_id("zulu")),
+            JobId::Action(selector_id("alpha")),
+            JobId::Link(selector_id("zulu")),
+            JobId::Link(selector_id("alpha")),
+        ]
+    );
+}
+
+#[test]
+fn exact_selection_filters_without_reordering_declarations() {
+    let selection = JobSelection::Only(BTreeSet::from([
+        JobSelector::Link(selector_id("alpha")),
+        JobSelector::Action(selector_id("alpha")),
+        JobSelector::Package(selector_id("alpha-first")),
+        JobSelector::Package(selector_id("manual-alpha")),
+        JobSelector::Action(selector_id("zulu")),
+        JobSelector::Package(selector_id("zulu-second")),
+        JobSelector::Link(selector_id("zulu")),
+    ]));
+    let plan = plan_named_fixture("jobs/valid-declaration-order.toml", &selection);
+
+    assert_eq!(
+        plan.jobs().iter().map(PlannedJob::id).collect::<Vec<_>>(),
+        [
+            JobId::Provider(provider_id("zulu")),
+            JobId::Provider(provider_id("alpha")),
+            JobId::Package(selector_id("manual-alpha")),
+            JobId::Package(selector_id("zulu-second")),
+            JobId::Package(selector_id("alpha-first")),
+            JobId::Action(selector_id("zulu")),
+            JobId::Action(selector_id("alpha")),
+            JobId::Link(selector_id("zulu")),
+            JobId::Link(selector_id("alpha")),
         ]
     );
 }

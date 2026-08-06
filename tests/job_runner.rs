@@ -149,14 +149,14 @@ fn runs_all_selected_jobs_in_stable_serial_order() {
     assert!(report.all_succeeded());
     assert_eq!(
         workspace.recorded_events(),
-        ["probe", "provider-install", "manual-install", "action"]
+        ["probe", "manual-install", "provider-install", "action"]
     );
     assert_eq!(
         selected_ids,
         [
             JobId::Provider(provider_id("ready")),
-            JobId::Package(selector_id("provider-tool")),
             JobId::Package(selector_id("manual-tool")),
+            JobId::Package(selector_id("provider-tool")),
             JobId::Action(selector_id("configure")),
             JobId::Link(selector_id("config")),
         ]
@@ -281,11 +281,11 @@ fn provider_package_failure_does_not_block_the_next_package_for_that_provider() 
     assert_eq!(report.len(), 3);
     assert!(!report.all_succeeded());
     assert!(matches!(
-        report.get(&JobId::Package(selector_id("first-tool"))),
+        report.get(&JobId::Package(selector_id("zulu-tool"))),
         Some(JobState::Completed(JobOutcome::ProviderPackage(Err(_))))
     ));
     assert!(matches!(
-        report.get(&JobId::Package(selector_id("second-tool"))),
+        report.get(&JobId::Package(selector_id("alpha-tool"))),
         Some(JobState::Completed(JobOutcome::ProviderPackage(Ok(
             ProviderInstallOutcome::Executed { .. }
         ))))

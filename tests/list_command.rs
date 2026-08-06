@@ -257,9 +257,9 @@ fn list_jobs_merges_a_nested_profile_in_canonical_job_order() {
             "package:desktop\tpackage\tdesktop\tsystem\tdesktop\n",
             "package:manual\tpackage\tmanual\tmanual\tmanual\\\\runner\\tphase\n",
             "action:configure\taction\tconfigure\texec\tconfigure\\nrunner\n",
-            "action:laptop\taction\tlaptop\texec\tlaptop-runner\n",
             "action:remote-config\taction\tremote-config\tfetch\t",
             "https://example.com/config.toml -> configs/app.toml\n",
+            "action:laptop\taction\tlaptop\texec\tlaptop-runner\n",
             "link:config\tlink\tconfig\tbuiltin\thome\\\\config -> ",
             "${env:HOME}/.config/tool\n",
         )

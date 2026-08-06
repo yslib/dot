@@ -460,24 +460,24 @@ impl<'a> ExecutionPlanner<'a> {
     ) -> Result<ExecutionPlan, ExecutionPlanError> {
         let selection = NormalizedJobSelection::new(manifest, selection)?;
         let (providers, provider_environments) = self.plan_providers(manifest, &selection)?;
+        let manual_packages = self.plan_manual_packages(manifest, &selection)?;
         let provider_installs =
             self.plan_provider_installs(manifest, &provider_environments, &selection)?;
-        let manual_packages = self.plan_manual_packages(manifest, &selection)?;
         let actions = self.plan_actions(manifest, &selection)?;
         let links = self.plan_links(manifest, &selection)?;
 
         let mut jobs = Vec::new();
         jobs.extend(providers.into_iter().map(PlannedJob::Provider));
         jobs.extend(
-            provider_installs
-                .into_iter()
-                .map(PlannedPackage::Provider)
-                .map(PlannedJob::Package),
-        );
-        jobs.extend(
             manual_packages
                 .into_iter()
                 .map(PlannedPackage::Manual)
+                .map(PlannedJob::Package),
+        );
+        jobs.extend(
+            provider_installs
+                .into_iter()
+                .map(PlannedPackage::Provider)
                 .map(PlannedJob::Package),
         );
         jobs.extend(actions.into_iter().map(PlannedJob::Action));
@@ -550,113 +550,139 @@ impl<'a> ExecutionPlanner<'a> {
         environments: &BTreeMap<String, ExecutionEnvironment>,
         selection: &NormalizedJobSelection,
     ) -> Result<Vec<PlannedProviderInstall>, PlanningError> {
-        manifest
-            .packages()
-            .iter()
-            .filter_map(|(package_id, package)| {
+        for (package_id, package) in manifest.packages() {
+            if !selection.includes_package(package_id) {
+                continue;
+            }
+            let Package::Provider(package) = package else {
+                continue;
+            };
+            let provider_id = package.provider();
+            if !manifest.providers().contains_key(provider_id.as_str()) {
+                return Err(PlanningError::UnknownProvider {
+                    package: package_id.to_string(),
+                    provider: provider_id.to_string(),
+                });
+            }
+        }
+
+        let mut plans = Vec::new();
+        for (provider_id, provider) in manifest.providers() {
+            if !selection.includes_provider(provider_id) {
+                continue;
+            }
+            let environment = &environments[provider_id.as_str()];
+            for (package_id, package) in manifest.packages() {
                 if !selection.includes_package(package_id) {
-                    return None;
+                    continue;
                 }
                 let Package::Provider(package) = package else {
-                    return None;
+                    continue;
                 };
+                if package.provider() != provider_id {
+                    continue;
+                }
+                plans.push(self.plan_provider_install(
+                    package_id,
+                    package,
+                    provider,
+                    environment,
+                )?);
+            }
+        }
 
-                Some((|| {
-                    let job_id = JobId::Package(package_id.clone());
-                    let provider_id = package.provider();
-                    let provider =
-                        manifest
-                            .providers()
-                            .get(provider_id.as_str())
-                            .ok_or_else(|| PlanningError::UnknownProvider {
-                                package: package_id.to_string(),
-                                provider: provider_id.to_string(),
-                            })?;
-                    let environment = &environments[provider_id.as_str()];
-                    let provider_args = package
-                        .provider_args()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(resolve_literal_string)
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|source| PlanningError::Interpolation {
-                            context: selected_field_context(&job_id, "provider_args"),
-                            source,
-                        })?;
-                    let names = match package {
-                        ProviderPackage::Single(_) => vec![package_id.to_string()],
-                        ProviderPackage::Batch(package) => {
-                            if package.names.is_empty() {
-                                return Err(PlanningError::EmptyPackageBatch {
-                                    package: package_id.to_string(),
-                                });
-                            }
-                            let mut seen = BTreeSet::new();
-                            let mut names = Vec::with_capacity(package.names.len());
-                            for name in &package.names {
-                                if !seen.insert(name.as_str()) {
-                                    return Err(PlanningError::DuplicatePackageBatchName {
-                                        package: package_id.to_string(),
-                                        name: name.to_string(),
-                                    });
-                                }
-                                names.push(name.to_string());
-                            }
-                            names
-                        }
-                    };
-                    let install_args = promote_provider_install_args(&provider.install.args)
-                        .map_err(|source| PlanningError::Interpolation {
-                            context: selected_field_context(&job_id, "provider.install.args"),
-                            source,
-                        })?;
-                    if !provider_args.is_empty() {
-                        let resolver_count = provider_args_resolver_count(&install_args);
-                        if resolver_count != 1 {
-                            return Err(PlanningError::ProviderArgsResolverCount {
-                                package: package_id.to_string(),
-                                provider: provider_id.to_string(),
-                                actual: resolver_count,
-                            });
-                        }
+        Ok(plans)
+    }
+
+    fn plan_provider_install(
+        &self,
+        package_id: &SelectorIdentifier,
+        package: &ProviderPackage,
+        provider: &Provider,
+        environment: &ExecutionEnvironment,
+    ) -> Result<PlannedProviderInstall, PlanningError> {
+        let job_id = JobId::Package(package_id.clone());
+        let provider_id = package.provider();
+        let provider_args = package
+            .provider_args()
+            .unwrap_or_default()
+            .iter()
+            .map(resolve_literal_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| PlanningError::Interpolation {
+                context: selected_field_context(&job_id, "provider_args"),
+                source,
+            })?;
+        let names = match package {
+            ProviderPackage::Single(_) => vec![package_id.to_string()],
+            ProviderPackage::Batch(package) => {
+                if package.names.is_empty() {
+                    return Err(PlanningError::EmptyPackageBatch {
+                        package: package_id.to_string(),
+                    });
+                }
+                let mut seen = BTreeSet::new();
+                let mut names = Vec::with_capacity(package.names.len());
+                for name in &package.names {
+                    if !seen.insert(name.as_str()) {
+                        return Err(PlanningError::DuplicatePackageBatchName {
+                            package: package_id.to_string(),
+                            name: name.to_string(),
+                        });
                     }
-                    let provider_args = provider_args
-                        .into_iter()
-                        .map(|argument| argument.value().to_owned())
-                        .collect::<Vec<_>>();
-                    let package_context = PackageContext::new(&names, &provider_args);
-                    let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
-                        .with_package(package_context);
-                    let install = resolve_provider_install_action_with_args(
-                        &provider.install,
-                        &install_args,
-                        &context,
-                    )
-                    .map_err(|error| exec_action_field_error(error, "provider.install"))
-                    .map_err(|error| selected_interpolation_error(&job_id, error))?;
+                    names.push(name.to_string());
+                }
+                names
+            }
+        };
+        let install_args =
+            promote_provider_install_args(&provider.install.args).map_err(|source| {
+                PlanningError::Interpolation {
+                    context: selected_field_context(&job_id, "provider.install.args"),
+                    source,
+                }
+            })?;
+        if !provider_args.is_empty() {
+            let resolver_count = provider_args_resolver_count(&install_args);
+            if resolver_count != 1 {
+                return Err(PlanningError::ProviderArgsResolverCount {
+                    package: package_id.to_string(),
+                    provider: provider_id.to_string(),
+                    actual: resolver_count,
+                });
+            }
+        }
+        let provider_args = provider_args
+            .into_iter()
+            .map(|argument| argument.value().to_owned())
+            .collect::<Vec<_>>();
+        let package_context = PackageContext::new(&names, &provider_args);
+        let context = ResolveContext::new(environment, self.dot_paths, self.xdg_paths)
+            .with_package(package_context);
+        let install =
+            resolve_provider_install_action_with_args(&provider.install, &install_args, &context)
+                .map_err(|error| exec_action_field_error(error, "provider.install"))
+                .map_err(|error| selected_interpolation_error(&job_id, error))?;
 
-                    Ok(match package {
-                        ProviderPackage::Single(_) => {
-                            PlannedProviderInstall::Single(PlannedSingleProviderPackage {
-                                id: package_id.clone(),
-                                provider: provider_id.clone(),
-                                provider_args,
-                                install,
-                            })
-                        }
-                        ProviderPackage::Batch(_) => {
-                            PlannedProviderInstall::Batch(PlannedProviderPackageBatch {
-                                id: package_id.clone(),
-                                provider: provider_id.clone(),
-                                provider_args,
-                                names,
-                                install,
-                            })
-                        }
-                    })
-                })())
-            })
-            .collect()
+        Ok(match package {
+            ProviderPackage::Single(_) => {
+                PlannedProviderInstall::Single(PlannedSingleProviderPackage {
+                    id: package_id.clone(),
+                    provider: provider_id.clone(),
+                    provider_args,
+                    install,
+                })
+            }
+            ProviderPackage::Batch(_) => {
+                PlannedProviderInstall::Batch(PlannedProviderPackageBatch {
+                    id: package_id.clone(),
+                    provider: provider_id.clone(),
+                    provider_args,
+                    names,
+                    install,
+                })
+            }
+        })
     }
 
     fn plan_manual_packages(
