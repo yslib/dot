@@ -347,7 +347,7 @@ fn deserializes_strings_into_their_declared_schema_roles() {
     let input = fixture::read("schema/valid-string-roles.toml");
     let config: Config = toml::from_str(&input).expect("schema roles should deserialize");
 
-    let (target_id, target) = config.targets.first_key_value().expect("target exists");
+    let (target_id, target) = config.targets.first().expect("target exists");
     let _: &SelectorIdentifier = target_id;
     assert_eq!(target_id.as_str(), "machine");
 

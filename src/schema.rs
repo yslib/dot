@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, de};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -97,8 +98,8 @@ impl From<&str> for ResolvedString {
     }
 }
 
-pub type Entries<T> = BTreeMap<Identifier, T>;
-pub type SelectableEntries<T> = BTreeMap<SelectorIdentifier, T>;
+pub type Entries<T> = IndexMap<Identifier, T>;
+pub type SelectableEntries<T> = IndexMap<SelectorIdentifier, T>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Identifier(String);
