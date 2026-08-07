@@ -64,6 +64,15 @@ impl Drop for TempWorkspace {
     }
 }
 
+fn normalized_path_output(value: &str) -> String {
+    value
+        .replace(r"\\?\", "")
+        .replace('\\', "/")
+        .chars()
+        .filter(|character| !character.is_whitespace() && !matches!(character, '│' | '┆'))
+        .collect()
+}
+
 #[test]
 fn relative_config_paths_produce_absolute_protocol_directories() {
     let workspace = TempWorkspace::new();
@@ -73,6 +82,7 @@ fn relative_config_paths_produce_absolute_protocol_directories() {
 
     let output = workspace.run(Path::new("config").join(".dot.toml"));
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let normalized = normalized_path_output(&stdout);
 
     assert!(
         output.status.success(),
@@ -80,11 +90,15 @@ fn relative_config_paths_produce_absolute_protocol_directories() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains(config_dir.join("entry.txt").to_string_lossy().as_ref()),
+        normalized.contains(&normalized_path_output(
+            config_dir.join("entry.txt").to_string_lossy().as_ref()
+        )),
         "{stdout}"
     );
     assert!(
-        stdout.contains(config_dir.join("real.txt").to_string_lossy().as_ref()),
+        normalized.contains(&normalized_path_output(
+            config_dir.join("real.txt").to_string_lossy().as_ref()
+        )),
         "{stdout}"
     );
 }
@@ -102,6 +116,7 @@ fn symlinked_config_keeps_entry_and_real_directories_distinct() {
 
     let output = workspace.run(Path::new("entry").join(".dot.toml"));
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let normalized = normalized_path_output(&stdout);
 
     assert!(
         output.status.success(),
@@ -109,11 +124,15 @@ fn symlinked_config_keeps_entry_and_real_directories_distinct() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains(entry_dir.join("entry.txt").to_string_lossy().as_ref()),
+        normalized.contains(&normalized_path_output(
+            entry_dir.join("entry.txt").to_string_lossy().as_ref()
+        )),
         "{stdout}"
     );
     assert!(
-        stdout.contains(real_dir.join("real.txt").to_string_lossy().as_ref()),
+        normalized.contains(&normalized_path_output(
+            real_dir.join("real.txt").to_string_lossy().as_ref()
+        )),
         "{stdout}"
     );
 }
@@ -126,6 +145,7 @@ fn missing_config_error_names_the_requested_absolute_path() {
 
     let output = workspace.run(&relative);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let normalized = normalized_path_output(&stderr);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -134,7 +154,7 @@ fn missing_config_error_names_the_requested_absolute_path() {
         "{stderr}"
     );
     assert!(
-        stderr.contains(expected.to_string_lossy().as_ref()),
+        normalized.contains(&normalized_path_output(expected.to_string_lossy().as_ref())),
         "{stderr}"
     );
 }
