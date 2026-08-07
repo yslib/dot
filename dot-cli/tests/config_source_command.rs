@@ -28,7 +28,16 @@ impl TempRepositories {
         ));
         let cwd = root.join("cwd");
         fs::create_dir_all(&cwd).expect("temporary working directory should be created");
+        #[cfg(not(windows))]
         let root = fs::canonicalize(root).expect("temporary root should canonicalize");
+        #[cfg(windows)]
+        let root = {
+            assert!(root.is_absolute(), "temporary root should be absolute");
+            // Git for Windows cannot read GIT_CONFIG_GLOBAL through the verbatim
+            // `\\?\` path returned by std::fs::canonicalize. Keep the already
+            // absolute temporary path in the spelling used by Git diagnostics.
+            root
+        };
         let cwd = root.join("cwd");
         Self { root, cwd }
     }
