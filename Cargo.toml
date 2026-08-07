@@ -28,3 +28,10 @@ comfy-table = { version = "7.2", optional = true }
 tempfile = { version = "3.27", optional = true }
 ureq = { version = "3.3", default-features = false, features = ["rustls"], optional = true }
 url = { version = "2.5", optional = true }
+
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
