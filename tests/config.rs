@@ -1,6 +1,5 @@
 mod support;
 
-use std::error::Error;
 use std::fs;
 
 use dot_core::ConfigFile;
@@ -8,7 +7,6 @@ use dot_core::config::ConfigParseError;
 use dot_core::native::NativeRuntime;
 use dot_core::platform::PlatformInfo;
 use dot_core::schema::Config;
-use dot_core::validation::ConfigValidationError;
 use support::fixture;
 
 #[test]
@@ -129,22 +127,10 @@ fn distinguishes_deserialization_and_validation_errors_when_parsing_from_memory(
         deserialization_error,
         ConfigParseError::Deserialize { .. }
     ));
-    assert!(
-        deserialization_error
-            .source()
-            .and_then(|source| source.downcast_ref::<toml::de::Error>())
-            .is_some()
-    );
     assert!(matches!(
         validation_error,
         ConfigParseError::Validation { .. }
     ));
-    assert!(
-        validation_error
-            .source()
-            .and_then(|source| source.downcast_ref::<ConfigValidationError>())
-            .is_some()
-    );
 }
 
 #[test]

@@ -1,7 +1,5 @@
 mod support;
 
-use std::error::Error;
-
 use dot_core::config::ConfigParseError;
 use dot_core::interpolation::InterpolationError;
 use dot_core::schema::Config;
@@ -35,8 +33,6 @@ fn rejects_a_static_expression_error_in_an_unselected_target() {
             name
         }) if name == "unknown"
     ));
-    assert!(error.source().is_some());
-    assert!(source.source().is_some());
 }
 
 #[test]

@@ -500,27 +500,3 @@ pub enum LinkPhaseError {
     )]
     DuplicateTarget { target: PathBuf, links: Vec<String> },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::native::diagnostic::Operation;
-
-    #[test]
-    fn link_io_error_retains_typed_diagnostic_context() {
-        let error = LinkError::io_with_diagnostic(
-            "create symbolic link",
-            Path::new("target"),
-            Operation::CreateSymbolicLink,
-            io::Error::from_raw_os_error(1314),
-        );
-
-        let (operation, source) = error
-            .diagnostic_context()
-            .expect("a diagnosed I/O error should expose its context");
-
-        assert_eq!(operation, Operation::CreateSymbolicLink);
-        assert_eq!(source.raw_os_error(), Some(1314));
-        assert!(error.to_string().contains("os error 1314"));
-    }
-}

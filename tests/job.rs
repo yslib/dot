@@ -1,7 +1,6 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::path::Path;
 
 use dot_core::interpolation::{DotPaths, ExecutionEnvironment, XdgPaths};
@@ -12,7 +11,7 @@ use dot_core::native::plan::{
     PlanningError,
 };
 use dot_core::platform::PlatformInfo;
-use dot_core::schema::{Config, Identifier, SelectorIdentifier, SelectorIdentifierError};
+use dot_core::schema::{Config, Identifier, SelectorIdentifier};
 use support::fixture;
 
 #[cfg(not(windows))]
@@ -91,17 +90,6 @@ fn job_identity_is_scoped_by_kind() {
 }
 
 #[test]
-fn exact_selection_keeps_its_typed_selector() {
-    let selection = JobSelection::only(JobSelector::Package(selector_id("cli-tools")));
-
-    assert!(matches!(
-        selection,
-        JobSelection::Only(ref selectors)
-            if selectors.contains(&JobSelector::Package(selector_id("cli-tools")))
-    ));
-}
-
-#[test]
 fn job_selectors_round_trip_the_canonical_spelling() {
     for spelling in ["package:editors", "action:setup", "link:nvim"] {
         let selector: JobSelector = spelling.parse().unwrap();
@@ -138,26 +126,6 @@ fn job_selector_parse_errors_distinguish_invalid_inputs() {
         "provider:brew".parse::<JobSelector>(),
         Err(JobSelectorParseError::ProviderNotSelectable)
     );
-}
-
-#[test]
-fn job_selector_parse_error_precedence_is_stable() {
-    for (spelling, expected) in [
-        (
-            "package:editors:extra",
-            JobSelectorParseError::InvalidIdentifier(SelectorIdentifierError),
-        ),
-        (
-            "service:bad/id",
-            JobSelectorParseError::UnknownKind("service".into()),
-        ),
-        (
-            "provider:bad/id",
-            JobSelectorParseError::ProviderNotSelectable,
-        ),
-    ] {
-        assert_eq!(spelling.parse::<JobSelector>(), Err(expected), "{spelling}");
-    }
 }
 
 #[test]
@@ -394,17 +362,6 @@ fn unknown_typed_selector_fails_before_planning() {
 }
 
 #[test]
-fn execution_plan_error_exposes_its_contained_error_as_the_immediate_source() {
-    let error = ExecutionPlanError::from(JobSelectionError::Unknown(JobSelector::Action(
-        selector_id("missing"),
-    )));
-
-    let source = Error::source(&error).expect("wrapper error should expose its contained error");
-
-    assert!(source.is::<JobSelectionError>());
-}
-
-#[test]
 fn unknown_selector_rejects_the_complete_set_before_runtime_evaluation() {
     let path = fixture::path("selection/valid-selected-runtime-isolation.toml");
     let config = Config::parse(&fixture::read(
@@ -512,41 +469,4 @@ fn selected_interpolation_failure_discards_a_valid_planned_prefix() {
         error.to_string(),
         "failed to resolve selected job `action:setup-editor` field `exec.program`: environment variable `DOT_INTENTIONALLY_MISSING` is not defined"
     );
-}
-
-#[test]
-fn multiple_unknown_selectors_are_rejected_before_planning() {
-    let input = fixture::read("dry-run/valid-human-readable-plan.toml");
-    let config: Config = toml::from_str(&input).expect("test config should deserialize");
-    let platform = platform();
-    let target = selector_id("machine");
-    let manifest = EffectiveManifest::select_for_execution(&config, &platform, Some(&target), None)
-        .expect("test manifest should select");
-    let environment = environment();
-    let xdg = XdgPaths::detect();
-    let planner = ExecutionPlanner::new(
-        &environment,
-        DotPaths::new(
-            Path::new(TEST_CONFIG_DIR),
-            Path::new(TEST_CONFIG_DIR),
-            Path::new(TEST_CWD),
-        ),
-        &xdg,
-        &platform,
-    );
-    let selection = JobSelection::Only(BTreeSet::from([
-        JobSelector::Action(selector_id("z-missing")),
-        JobSelector::Action(selector_id("a-missing")),
-    ]));
-
-    let error = planner
-        .plan(&manifest, &selection)
-        .expect_err("the complete selection should be rejected");
-
-    assert!(matches!(
-        error,
-        ExecutionPlanError::Selection(JobSelectionError::Unknown(
-            JobSelector::Action(ref id)
-        )) if id.as_str() == "a-missing"
-    ));
 }

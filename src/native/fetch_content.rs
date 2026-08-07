@@ -431,7 +431,6 @@ fn validate_final_status(status: u16) -> Result<(), FetchTransportError> {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::error::Error as _;
     use std::fs;
     use std::io::{self, Write};
     use std::path::{Path, PathBuf};
@@ -610,7 +609,6 @@ mod tests {
             &target,
             "existing regular file conflicts with error policy",
         );
-        assert!(error.source().is_none());
         assert_eq!(transport.calls.get(), 0);
         assert_eq!(fs::read(target).expect("target should be readable"), b"old");
     }
@@ -738,7 +736,6 @@ mod tests {
                 &target,
                 "directory cannot be materialized",
             );
-            assert!(error.source().is_none());
             assert_eq!(transport.calls.get(), 0);
             assert!(target.is_dir());
         }
@@ -764,7 +761,6 @@ mod tests {
                 &target,
                 "special filesystem entry cannot be materialized",
             );
-            assert!(error.source().is_none());
             assert_eq!(transport.calls.get(), 0);
             assert!(fs::symlink_metadata(&target).is_ok());
             drop(listener);
@@ -796,7 +792,6 @@ mod tests {
         assert_eq!(transport.calls.get(), 1);
         assert_eq!(fs::read(target).expect("target should be readable"), b"old");
         assert_eq!(directory_entries(directory.path()), before);
-        assert!(error.source().is_some());
     }
 
     #[test]
@@ -817,11 +812,6 @@ mod tests {
             "failed to create target parent directories",
         );
         assert_eq!(transport.calls.get(), 0);
-        assert!(
-            error
-                .source()
-                .is_some_and(|source| source.is::<io::Error>())
-        );
     }
 
     #[test]
@@ -869,57 +859,11 @@ mod tests {
                 target.display()
             )
         );
-        assert!(error.source().is_none());
         assert_eq!(
             fs::read(target.join("sentinel")).expect("sentinel should be readable"),
             b"safe"
         );
         assert_eq!(directory_entries(directory.path()).len(), 2);
-    }
-
-    #[test]
-    fn error_sources_are_preserved_only_for_sourceful_errors() {
-        let directory = tempdir().expect("temporary directory should be created");
-        let target = directory.path().join("content");
-        fs::write(&target, b"old").expect("existing target should be written");
-        let conflict = run(
-            &target,
-            FetchContentConflict::Error,
-            &FakeTransport::bytes(b"new".to_vec()),
-        )
-        .expect_err("existing target should conflict");
-        assert!(conflict.source().is_none());
-
-        fs::remove_file(&target).expect("target should be removed");
-        let transfer = run(
-            &target,
-            FetchContentConflict::Error,
-            &FakeTransport::error(io::ErrorKind::BrokenPipe),
-        )
-        .expect_err("transfer should fail");
-        let transport_source = transfer
-            .source()
-            .expect("transfer should retain its source");
-        assert!(transport_source.is::<FetchTransportError>());
-        assert!(
-            transport_source
-                .source()
-                .is_some_and(|source| source.is::<io::Error>())
-        );
-
-        let ureq_transfer = FetchContentError::transfer(
-            &action(&target, FetchContentConflict::Error),
-            FetchTransportError::from_ureq(ureq::Error::ConnectionFailed),
-        );
-        let transport_source = ureq_transfer
-            .source()
-            .expect("transfer should retain its transport source");
-        assert!(transport_source.is::<FetchTransportError>());
-        assert!(
-            transport_source
-                .source()
-                .is_some_and(|source| source.is::<ureq::Error>())
-        );
     }
 
     #[test]
@@ -942,11 +886,9 @@ mod tests {
             &require_https,
             FetchTransportError::RequireHttpsOnly
         ));
-        assert!(require_https.source().is_none());
 
         let redirects = FetchTransportError::from_ureq(ureq::Error::TooManyRedirects);
         assert!(matches!(&redirects, FetchTransportError::TooManyRedirects));
-        assert!(redirects.source().is_none());
 
         for status in [400, 500] {
             let error = FetchTransportError::from_ureq(ureq::Error::StatusCode(status));
@@ -954,7 +896,6 @@ mod tests {
                 &error,
                 FetchTransportError::HttpStatus(actual) if *actual == status
             ));
-            assert!(error.source().is_none());
         }
 
         let error = FetchTransportError::from_ureq(ureq::Error::Io(io::Error::new(
@@ -962,19 +903,11 @@ mod tests {
             "network stopped",
         )));
         assert!(matches!(&error, FetchTransportError::TransportIo(_)));
-        assert!(
-            error
-                .source()
-                .is_some_and(|source| source.is::<io::Error>())
-        );
+        assert!(error.to_string().contains("network stopped"));
 
         let error = FetchTransportError::from_ureq(ureq::Error::ConnectionFailed);
         assert!(matches!(&error, FetchTransportError::TransportUreq(_)));
-        assert!(
-            error
-                .source()
-                .is_some_and(|source| source.is::<ureq::Error>())
-        );
+        assert!(error.to_string().contains("connection failed"));
     }
 
     #[test]

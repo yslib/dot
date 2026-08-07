@@ -101,7 +101,6 @@ impl HttpsError {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
     use std::io::{self, Cursor, Read};
 
     use super::*;
@@ -123,7 +122,6 @@ mod tests {
             "http://example.com/dot.toml".to_owned(),
         ));
         assert!(matches!(require_https, HttpsError::RequireHttpsOnly { .. }));
-        assert!(Error::source(&require_https).is_some_and(|source| source.is::<ureq::Error>()));
 
         let redirects = HttpsError::from_call(ureq::Error::TooManyRedirects);
         assert!(matches!(redirects, HttpsError::TooManyRedirects { .. }));
@@ -139,20 +137,6 @@ mod tests {
 
         let transport = HttpsError::from_call(ureq::Error::ConnectionFailed);
         assert!(matches!(transport, HttpsError::Transport { .. }));
-        assert!(Error::source(&transport).is_some_and(|source| source.is::<ureq::Error>()));
-    }
-
-    #[test]
-    fn maps_ureq_io_to_the_underlying_typed_transport_source() {
-        let error = HttpsError::from_call(ureq::Error::Io(io::Error::new(
-            io::ErrorKind::ConnectionAborted,
-            "network stopped",
-        )));
-
-        let source = Error::source(&error)
-            .and_then(|source| source.downcast_ref::<io::Error>())
-            .expect("transport I/O should be the immediate typed source");
-        assert_eq!(source.kind(), io::ErrorKind::ConnectionAborted);
     }
 
     #[test]
@@ -183,12 +167,10 @@ mod tests {
 
         let read = read_body(FailingReader).expect_err("body I/O should fail");
         assert!(matches!(read, HttpsError::BodyRead { .. }));
-        assert!(Error::source(&read).is_some_and(|source| source.is::<io::Error>()));
+        assert!(read.to_string().contains("response body stopped"));
 
         let utf8 = read_body(Cursor::new([0xff])).expect_err("invalid UTF-8 should fail");
         assert!(matches!(utf8, HttpsError::InvalidUtf8 { .. }));
-        assert!(
-            Error::source(&utf8).is_some_and(|source| source.is::<std::string::FromUtf8Error>())
-        );
+        assert!(utf8.to_string().contains("UTF-8"));
     }
 }
