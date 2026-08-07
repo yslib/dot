@@ -3,6 +3,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Error, Parser, Subcommand};
 
@@ -15,7 +16,7 @@ use dot_core::report::{CommandReport, ReportStatus};
 use dot_core::schema::SelectorIdentifier;
 use dot_core::selection::{ExecutionSelection, ProfileSelection, ScopeSelection};
 
-use config::{ConfigLocation, load_config};
+use config::{ConfigRequest, ConfigSource, load_config};
 
 mod config;
 #[cfg(feature = "dev-platform-override")]
@@ -30,9 +31,29 @@ mod platform_override;
     subcommand_required = true
 )]
 struct Cli {
-    /// Path to the TOML manifest; defaults to ./.dot.toml, then the user fallback
-    #[arg(short, long, global = true, value_name = "PATH")]
-    config: Option<PathBuf>,
+    /// Path or HTTPS URL to the TOML manifest; defaults to ./.dot.toml, then the user fallback
+    #[arg(
+        short,
+        long,
+        global = true,
+        value_name = "SOURCE",
+        value_parser = OsStringValueParser::new().try_map(ConfigSource::from_os_string)
+    )]
+    config: Option<ConfigSource>,
+
+    /// Git repository containing a root .dot.toml
+    #[arg(
+        long,
+        global = true,
+        value_name = "REPOSITORY",
+        requires = "git_worktree",
+        conflicts_with = "config"
+    )]
+    git: Option<String>,
+
+    /// Persistent worktree path for --git
+    #[arg(long, global = true, value_name = "PATH", requires = "git")]
+    git_worktree: Option<PathBuf>,
 
     /// Inject PlatformInfo for development-time compatibility selection; host environment, XDG
     /// paths, commands, and filesystem state remain unchanged
@@ -60,10 +81,16 @@ impl Cli {
         #[cfg(not(feature = "dev-platform-override"))]
         let platform_override: Option<PlatformInfo> = None;
 
-        let location = self
-            .config
-            .map_or(ConfigLocation::Discover, ConfigLocation::Path);
-        let config = match load_config(location) {
+        let request = match (self.config, self.git, self.git_worktree) {
+            (Some(source), None, None) => ConfigRequest::Source(source),
+            (None, Some(repository), Some(worktree)) => ConfigRequest::Git {
+                repository,
+                worktree,
+            },
+            (None, None, None) => ConfigRequest::Discover,
+            _ => unreachable!("clap validated the configuration source arguments"),
+        };
+        let config = match load_config(request) {
             Ok(config) => config,
             Err(error) => return command_error(error),
         };
@@ -343,9 +370,39 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
     use std::io;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
+    use std::path::PathBuf;
+
+    #[cfg(unix)]
+    use clap::Parser;
 
     use super::normalize_list_output;
+    #[cfg(unix)]
+    use super::{Cli, ConfigSource};
+
+    #[cfg(unix)]
+    #[test]
+    fn config_argument_preserves_non_utf8_native_paths() {
+        let source = OsString::from_vec(b"config-\xff.toml".to_vec());
+        let parsed = Cli::try_parse_from([
+            OsString::from("dot"),
+            OsString::from("--config"),
+            source.clone(),
+            OsString::from("list"),
+            OsString::from("targets"),
+        ])
+        .expect("non-UTF-8 native path should parse");
+
+        assert_eq!(
+            parsed.config,
+            Some(ConfigSource::Path(PathBuf::from(source)))
+        );
+    }
 
     #[test]
     fn list_output_ignores_only_broken_pipe() {

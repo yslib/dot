@@ -6,33 +6,82 @@ configuration. This document is the human-facing explanation of that schema;
 boundaries. When they differ, update `SCHEMA.txt` first and then synchronize
 this reference.
 
-## Configuration discovery
+## Configuration source acquisition
 
-`dot` chooses one configuration using this exact precedence:
+`dot` acquires exactly one manifest. Acquisition does not import or merge other
+manifests and does not change the TOML schema.
 
-1. the path from an explicit `--config PATH`, when supplied;
-2. `.dot.toml` in the current working directory;
-3. `~/.config/dot/.dot.toml` on Linux and macOS, or
+The CLI accepts these source forms before any command dispatch:
+
+```text
+dot [--config SOURCE] <COMMAND>
+dot --git REPOSITORY --git-worktree PATH <COMMAND>
+```
+
+`--config` accepts a local path or HTTPS URL and conflicts with `--git`.
+`--git` and `--git-worktree` must be supplied together. Source acquisition and
+complete parse and static validation happen before any list, check, dry-run,
+or apply operation is dispatched. `--target TARGET` is separate: it selects a
+configured target inside the one acquired manifest.
+
+### Local filesystem
+
+With no explicit source, `dot` uses this exact discovery order:
+
+1. `.dot.toml` in the absolute invocation working directory;
+2. `~/.config/dot/.dot.toml` on Linux and macOS, or
    `%APPDATA%\dot\.dot.toml` on Windows.
 
-An explicit path is selected as given, may have any filename, and bypasses the
-remaining discovery candidates. Among the automatic candidates, the first
-whose filesystem entry exists is chosen. Read, parse, or validation failures
-for the chosen path are reported immediately; `dot` does not fall back to
-another candidate. It does not search parent directories recursively, merge
-configuration files, or recognize `dot.toml` as a legacy default.
+The first candidate whose filesystem entry exists is selected. Read, parse,
+or validation failures for that path do not fall through to the next
+candidate. Discovery does not search parent directories recursively or
+recognize `dot.toml` as a legacy default. An explicit local path bypasses
+discovery, is selected as given, and may have any filename.
 
-After selection, `dot` makes the selected path absolute without following
-symbolic links. This is the **entry path**: when a symlink was selected, it is
-the absolute symlink path. Loading then eagerly calls
-`std::fs::canonicalize`, reads the resulting **canonical entity path**, and
-retains the entry path's parent as `${dot:config_dir}` and the canonical path's
-parent as `${dot:real_config_dir}`. The configuration protocol also retains the
-captured invocation directory as `${dot:cwd}`; it retains neither file path. A
-dangling or otherwise unresolvable entry therefore fails every command during
-loading. Canonical directory spelling is inherited exactly from the host
-Rust/OS filesystem API. Read, parse, and validation diagnostics continue to
-identify the entry path.
+For a discovered or explicit local path, `dot` makes the selected path
+absolute without following symbolic links. This is the **entry path**: when a
+symlink was selected, it is the absolute symlink path. Loading then eagerly
+calls `std::fs::canonicalize`, reads the resulting **canonical entity path**,
+and retains the entry path's parent as `${dot:config_dir}` and the canonical
+path's parent as `${dot:real_config_dir}`. The configuration protocol also
+retains the captured invocation directory as `${dot:cwd}`; it retains neither
+file path. A dangling or otherwise unresolvable entry therefore fails every
+command during loading. Canonical directory spelling is inherited exactly
+from the host Rust/OS filesystem API. Read, parse, and validation diagnostics
+continue to identify the entry path.
+
+### HTTPS
+
+An HTTPS source is fetched exactly once per invocation and retained only in
+memory. Only HTTPS URLs are accepted; requests and redirects must remain
+HTTPS, the redirect limit is 10, and only a final 2xx response succeeds. The
+complete body must be strict UTF-8. There is no cache, temporary file,
+conditional request, or retry. Because a remote manifest has no local entry or
+canonical entity, `${dot:config_dir}`, `${dot:real_config_dir}`, and
+`${dot:cwd}` all retain the absolute invocation directory.
+
+### Git worktree
+
+Git acquisition invokes external `git` directly with argv and never through a
+shell. If `--git-worktree PATH` does not exist, `dot` runs a normal clone with
+the remote name forced to `origin`; normal Git configuration, credential
+helpers, and transport behavior remain available to that clone. If the
+worktree exists, `dot` reuses it read-only after confirming that the entry is a
+directory, is a Git worktree root, and has exactly one repository-local
+`remote.origin.url` whose raw value exactly matches the supplied `REPOSITORY`.
+Origin identity is read specifically from repository-local config, not an
+overriding higher-level configuration source.
+
+The worktree path is made absolute against the invocation directory. Every
+resulting worktree, including a new clone, undergoes the root and origin checks
+before `dot` loads only its root `.dot.toml` using the same entry-path and
+canonical-entity semantics as any local source. This is not a general Git
+manager: `dot` does not fetch, pull, checkout, select a ref, set a clone depth,
+inspect or repair dirty state, repair an invalid worktree, or clean up after
+clone or validation failure. Git may rewrite a relative local repository
+spelling when it stores `origin`; because validation is literal, that rewrite
+can produce a mismatch. Mismatch diagnostics show both the actual stored value
+and expected argument.
 
 ## Type index
 
@@ -797,10 +846,10 @@ a native local-disk target. Source URL userinfo is rejected, and a target URL
 is not supported.
 
 Runtime resolution is selected-only and occurs during pure planning. An
-absolute target stays absolute. A relative target is relative to the directory
-containing the selected configuration entry, equivalent to the path context
-represented by `${dot:config_dir}`. It is not relative to the canonical entity
-directory unless the value explicitly uses `${dot:real_config_dir}`.
+absolute target stays absolute. A relative target uses the path context
+represented by `${dot:config_dir}`: the selected entry directory for a local
+or Git source, or the invocation directory for HTTPS. It does not use
+`${dot:real_config_dir}` unless the value explicitly names that resolver.
 
 Dry-run resolves the source and target, and its human table displays that
 resolved pair without network access or target inspection. On apply, every
@@ -856,9 +905,9 @@ on_conflict = "replace-link"
 on_missing_parent = "create"
 ```
 
-This Unix/macOS example deliberately asks for a source located under the
-canonical configuration entity's directory. On Windows, use a TOML literal
-string and a backslash suffix:
+For a local or Git manifest, this Unix/macOS example deliberately asks for a
+source located under the canonical configuration entity's directory. On
+Windows, use a TOML literal string and a backslash suffix:
 
 ```toml
 [targets.windows.links.editor]
@@ -866,16 +915,18 @@ source = '${dot:real_config_dir}\home\AppData\Local\nvim'
 target = '${xdg:config_local}\nvim'
 ```
 
-`std::fs::canonicalize` on Windows may return a verbatim path beginning with
-`\\?\`, and dot preserves it. Appending `/home/...` textually to that form
-does not add Windows path separators; the literal-string example above both
-uses backslashes and avoids TOML basic-string escape processing.
+For a local or Git manifest, `std::fs::canonicalize` on Windows may return a
+verbatim path beginning with `\\?\`, and dot preserves it. Appending
+`/home/...` textually to that form does not add Windows path separators; the
+literal-string example above both uses backslashes and avoids TOML basic-string
+escape processing.
 
 An unqualified relative source such as `source = "home/editor"` is resolved
-from the selected configuration **entry directory**, not from
-`${dot:real_config_dir}`. Symlinked configurations therefore do not silently
-change the relative-source base to their repository or entity directory.
-Users who want that base must request it explicitly as above. Target must
+from `${dot:config_dir}`. That is the selected entry directory for a local or
+Git manifest and the absolute invocation directory for HTTPS. Symlinked local
+or Git configurations therefore do not silently change the relative-source
+base to their repository or canonical entity directory; users who want that
+base must request `${dot:real_config_dir}` explicitly as above. Target must
 resolve to an absolute path. Apply requires source to exist as a regular file
 or directory and creates a native symbolic link. A matching link is satisfied.
 All effective link paths resolve before mutation, and duplicate resolved
@@ -956,10 +1007,11 @@ but that presentation is not a scheduling rule or stable ordering interface.
 
 Validation and evaluation have four distinct boundaries:
 
-Configuration entry selection, absolute-path construction, eager
-canonicalization, and reading happen before these expression boundaries.
-Consequently every command, including dry-run and structural list commands,
-requires a resolvable selected configuration entry.
+Configuration source acquisition and parsing happen before these expression
+boundaries. Local and Git manifests additionally require absolute-path
+construction, eager canonicalization, and reading; HTTPS manifests are fetched
+into memory. Consequently every command, including dry-run and structural list
+commands, requires a successfully acquired source.
 
 1. **Parsing and deserialization** check TOML structure, field types, required
    fields, broad and selector identifier rules, environment-name rules, and
@@ -988,10 +1040,11 @@ requires a resolvable selected configuration entry.
 4. **Execution** probes providers, runs processes, transfers Fetch Content, and
    reconciles links only after planning succeeds. Dry-run stops before this
    boundary: it performs no Fetch Content network request or target inspection
-   and does not inspect or canonicalize link sources, although loading has
-   already canonicalized the selected configuration entry. Structural list
-   commands stop after complete validation and unresolved target/profile
-   selection; they do not evaluate runtime resolver values.
+   and does not inspect or canonicalize link sources. Source acquisition has
+   nevertheless already completed, including entry canonicalization for a
+   local or Git manifest. Structural list commands stop after complete
+   validation and unresolved target/profile selection; they do not evaluate
+   runtime resolver values.
 
 Omitted provider, package, link, action, and profile maps deserialize as empty
 maps. Omitted ExecAction `args` and EnvironmentPatch `variables` deserialize as
@@ -1028,9 +1081,9 @@ package:provider_args   -> list<string>
 | Resolver form | Resolved value |
 | --- | --- |
 | `${env:NAME}` | `NAME` from the current effective child environment |
-| `${dot:config_dir}` | parent directory of the selected entry path |
-| `${dot:real_config_dir}` | string form of the canonical entity path's parent directory |
-| `${dot:cwd}` | working directory from which dot was started |
+| `${dot:config_dir}` | local/Git entry directory; absolute invocation directory for HTTPS |
+| `${dot:real_config_dir}` | local/Git canonical entity directory; absolute invocation directory for HTTPS |
+| `${dot:cwd}` | absolute invocation directory |
 | `${xdg:home}` | current user's home directory |
 | `${xdg:config}` | standard user configuration directory |
 | `${xdg:config_local}` | local/non-roaming configuration directory |
@@ -1042,12 +1095,14 @@ package:provider_args   -> list<string>
 | `${xdg:executable}` | standard per-user executable directory, when defined |
 | `${xdg:documents}` | current user's Documents directory, when available |
 
-The `dot` values describe the current invocation. Configuration loading always
-computes the lexical entry directory and canonical entity directory before any
-resolver evaluation. On Windows, the real directory can contain the verbatim
-`\\?\` prefix returned by the host API. All three `dot` path calls share the
-same string-valued availability shown below. Like every path-to-string
-resolver, `dot` and `xdg` use Rust's
+The `dot` values describe the current invocation. For a local or Git source,
+configuration loading computes the lexical entry directory and canonical
+entity directory before any resolver evaluation. HTTPS has no entry or
+canonical entity; both configuration-directory values equal the absolute
+invocation directory, as does `${dot:cwd}`. On Windows, a local or Git real
+directory can contain the verbatim `\\?\` prefix returned by the host API. All
+three `dot` path calls share the same string-valued availability shown below.
+Like every path-to-string resolver, `dot` and `xdg` use Rust's
 `Path::to_str()` boundary without lossy replacement; resolution fails when a
 path is not Unicode-representable. The `xdg` vocabulary follows XDG directories
 on Linux and platform-standard equivalents on Windows and macOS. A missing

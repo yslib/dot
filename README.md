@@ -9,8 +9,7 @@ actions, and symbolic links. The manifest remains a readable inventory of the
 environment it describes.
 
 The Rust workspace separates the reusable `dot-core` library from `dot-cli`,
-the package that owns local configuration discovery and produces the `dot`
-executable.
+the package that produces the `dot` executable.
 
 > [yslib/dotfiles](https://github.com/yslib/dotfiles) is the complete
 > application example used to develop `dot`. It describes an Arch Linux
@@ -83,34 +82,63 @@ Apply the environment:
 dot apply --target workstation
 ```
 
-Without `--config`, `dot` checks `./.dot.toml` first, then
+Without an explicit source, `dot` checks `./.dot.toml` first, then
 `~/.config/dot/.dot.toml` on Linux and macOS or
 `%APPDATA%\dot\.dot.toml` on Windows. The first candidate whose filesystem
 entry exists is selected; load, parse, or validation errors for that path do
-not fall through to another candidate. An explicit `--config PATH` bypasses
-discovery and may use any filename. `--target` may be omitted when exactly one
-configured target is compatible with the current platform.
+not fall through to another candidate. An explicit local path bypasses
+discovery and may use any filename. See the
+[local filesystem details](docs/CONFIGURATION.md#local-filesystem).
+
+Load a manifest directly from HTTPS:
+
+```console
+dot --config https://example.com/dot.toml dry-run --target workstation
+```
+
+Use the root `.dot.toml` from a persistent Git worktree:
+
+```console
+dot --git https://example.com/dotfiles.git \
+  --git-worktree .dot-worktree \
+  dry-run --target workstation
+```
+
+`--config SOURCE` accepts a local path or HTTPS URL and bypasses discovery. Git
+clones a missing worktree and reuses an existing matching worktree without
+updating it. See the [HTTPS](docs/CONFIGURATION.md#https) and
+[Git worktree](docs/CONFIGURATION.md#git-worktree) guarantees for the complete
+acquisition contract.
 
 ## Command line
 
-The command is always explicit:
+The command is always explicit; its configuration source may be discovered or
+selected with one of these forms:
 
 ```text
-dot [--config PATH] apply
+dot [--config SOURCE] <COMMAND>
+dot --git REPOSITORY --git-worktree PATH <COMMAND>
+```
+
+`--config` conflicts with `--git`; `--git` and `--git-worktree` must be supplied
+together. `<COMMAND>` is one of:
+
+```text
+apply
     [--target TARGET] [--profile PROFILE] [--job KIND:ID]...
 
-dot [--config PATH] dry-run
+dry-run
     [--target TARGET] [--profile PROFILE] [--job KIND:ID]...
 
-dot [--config PATH] check providers
+check providers
     [--target TARGET] [--profile PROFILE]
 
-dot [--config PATH] list targets [--all]
+list targets [--all]
 
-dot [--config PATH] list profiles
+list profiles
     [--target TARGET]
 
-dot [--config PATH] list jobs
+list jobs
     [--target TARGET] [--profile PROFILE]
 ```
 
