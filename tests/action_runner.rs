@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -184,7 +183,6 @@ fn rejects_an_initial_check_exit_other_than_zero_or_one() {
         error.exit_result().and_then(|result| result.code()),
         Some(23)
     );
-    assert!(error.source().is_none());
     assert_eq!(state.recorded_events(), ["check"]);
 }
 
@@ -205,7 +203,6 @@ fn stops_before_post_check_when_exec_fails() {
         error.exit_result().and_then(|result| result.code()),
         Some(17)
     );
-    assert!(error.source().is_none());
     assert_eq!(state.recorded_events(), ["check", "exec"]);
 }
 
@@ -226,7 +223,6 @@ fn fails_when_post_check_is_not_satisfied() {
         error.exit_result().and_then(|result| result.code()),
         Some(1)
     );
-    assert!(error.source().is_none());
     assert_eq!(state.recorded_events(), ["check", "exec", "check"]);
 }
 

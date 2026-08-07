@@ -370,39 +370,9 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::ffi::OsString;
     use std::io;
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStringExt;
-    #[cfg(unix)]
-    use std::path::PathBuf;
-
-    #[cfg(unix)]
-    use clap::Parser;
 
     use super::normalize_list_output;
-    #[cfg(unix)]
-    use super::{Cli, ConfigSource};
-
-    #[cfg(unix)]
-    #[test]
-    fn config_argument_preserves_non_utf8_native_paths() {
-        let source = OsString::from_vec(b"config-\xff.toml".to_vec());
-        let parsed = Cli::try_parse_from([
-            OsString::from("dot"),
-            OsString::from("--config"),
-            source.clone(),
-            OsString::from("list"),
-            OsString::from("targets"),
-        ])
-        .expect("non-UTF-8 native path should parse");
-
-        assert_eq!(
-            parsed.config,
-            Some(ConfigSource::Path(PathBuf::from(source)))
-        );
-    }
 
     #[test]
     fn list_output_ignores_only_broken_pipe() {

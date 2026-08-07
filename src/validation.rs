@@ -1,6 +1,6 @@
 #![expect(
     clippy::result_large_err,
-    reason = "direct typed error sources preserve Error::source downcasts"
+    reason = "typed validation errors preserve precise context without boxing"
 )]
 
 use std::collections::BTreeSet;

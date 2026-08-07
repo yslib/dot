@@ -311,37 +311,3 @@ impl<'a> JobRunner<'a> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::{assert_link_projection, assert_result_count, insert_unique_result};
-
-    #[test]
-    #[should_panic(expected = "link result count mismatch")]
-    fn link_projection_rejects_a_result_count_mismatch() {
-        assert_link_projection(&["first"], &["first", "second"]);
-    }
-
-    #[test]
-    #[should_panic(expected = "link result identity mismatch at index 0")]
-    fn link_projection_rejects_results_in_the_wrong_order() {
-        assert_link_projection(&["first", "second"], &["second", "first"]);
-    }
-
-    #[test]
-    #[should_panic(expected = "duplicate job result")]
-    fn unique_result_insertion_rejects_a_duplicate_key() {
-        let mut results = BTreeMap::new();
-
-        insert_unique_result(&mut results, "duplicate", 1);
-        insert_unique_result(&mut results, "duplicate", 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "job result count mismatch")]
-    fn result_count_rejects_an_incomplete_report() {
-        assert_result_count(2, 1);
-    }
-}

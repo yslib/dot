@@ -1,6 +1,6 @@
 #![expect(
     clippy::result_large_err,
-    reason = "direct typed error sources preserve Error::source downcasts"
+    reason = "typed configuration errors preserve precise context without boxing"
 )]
 
 use crate::schema::Config;
