@@ -22,9 +22,7 @@ compare versions, implement installers, or keep an installed-state database.
 Those responsibilities remain with declared commands such as `pacman`, `brew`,
 `scoop`, `npm`, and `cargo`.
 
-![macos](/Users/ysl/Code/dot/assets/macos.gif)
-
-![windows](/Users/ysl/Code/dot/assets/windows.gif)
+![macos](./assets/macos.gif)
 
 ## Installation
 
